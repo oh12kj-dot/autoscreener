@@ -1,0 +1,7 @@
+# 30.7.3:保有銘柄の四半期モニタリング閾値(元文書 第12節)。
+# **閾値は売却条件ではない**。点灯したら「価格に関係なく判断をやり直す」
+# ための合図であり、機械的な売りシグナルとして使ってはならない(第11節 売却規律)。
+revenue_growth_deceleration_quarters: 2
+gross_margin_decline_quarters: 2
+share_count_annual_growth_ceiling: 0.15
+cash_runway_floor_months: 12

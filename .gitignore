@@ -1,0 +1,14 @@
+.claude/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.env
+.env.bak*
+.env.*.bak
+node_modules/
+*.egg-info/
+.coverage
+htmlcov/
+logs/
+backups/

@@ -1,0 +1,104 @@
+# データ収集バッチの並列度・リトライ・サーキットブレーカー設定
+# (要件定義書 8.1・8.3・14.9・18.1・18.4・18.7)
+
+# 並列ワーカー数(8.1・14.9:速度よりYahoo側のブロック回避=完走率を優先)
+# 実データ検証(2026-08-23):並列8・ジッタ0.5〜2.0秒の設定で800銘柄の収集を
+# 試みたところ、約5分・478銘柄処理時点でtransient_failureが急増し
+# (144/478=30.1%)サーキットブレーカーが作動した(19章)。Yahoo側のレート制限が
+# 実際にこの負荷水準で発動することを確認したため、並列度を下げジッタを広げた。
+# (24.7:旧min_workersは実装のどこからも参照されない死んだ設定値だったため撤去。
+# 常にmax_workers固定で動作する)
+max_workers: 5
+
+# リクエスト間のジッタ(秒)。固定間隔だと逆にパターン検知されやすいため範囲を持たせる
+request_jitter_min_seconds: 1.0
+request_jitter_max_seconds: 3.0
+
+# 2026-08-30:Yahooへの秒あたり上限(全ワーカー合計)。ジッタは「送信間隔を
+# 揺らす」ためのもので上限にはならない——Yahooが速く返すほど実効レートが
+# 上がってしまうため、天井をここで別に決める。
+yfinance_requests_per_second: 2.0
+
+retry:
+  # TransientFailureのみ対象。PermanentFailure/ParseFailureはリトライしない(18.1)
+  max_attempts: 3
+  backoff_base_seconds: 2.0
+  backoff_max_seconds: 30.0
+
+circuit_breaker:
+  # この件数を処理するまでは失敗率で判定しない(統計的なノイズを避ける)
+  min_sample_size: 50
+  # 18.7:警告30%超で運用アラート相当。バッチ自体もこの閾値で自己中断する
+  failure_rate_threshold: 0.30
+
+quarantine:
+  # 同一銘柄が連続でこの回数失敗したら隔離リストへ(18.1)
+  consecutive_failure_threshold: 5
+  # 隔離後の再挑戦間隔(日次ではなく週次に格下げ)
+  retry_interval_days: 7
+
+# 30.3:SEC EDGAR。`user_agent` は .env の EDGAR_USER_AGENT から読む
+# (連絡先メールアドレスを含むためgit管理下に置かない)。
+edgar:
+  enabled: true
+  # 2026-08-30:8.0 から下げた。SECの公表上限は約10 req/s だが、これは
+  # **IP単位**の制限であり、このプロセスだけが送信元とは限らない
+  # (ブラウザ・同時に走る別のバッチやテストスイートも同じIPから出ていく)。
+  # 上限の8割を1プロセスで使い切る設定には余裕が無く、実際に制限に触れた。
+  # 個人利用のバッチで数分の差は問題にならないので、半分にして余裕を取る。
+  requests_per_second: 5.0
+  timeout_seconds: 30.0
+  # 本文取得(going concern等の検出)を行うか。1銘柄あたり数MBの転送になるため、
+  # 追跡対象銘柄(30.3.4)に限って実行する。
+  document_fetch_enabled: true
+  # 日次で提出一覧を取りに行く銘柄数の上限。ユニバース全体(数千件)を毎日
+  # 舐めるのはSECにもこちらにも過大なので、追跡対象だけに絞る。
+  max_tracked_tickers: 300
+  # 429/503(Retry-After指定なし)・403(遮断)を受けたときに、SEC向け
+  # リクエスト全体を止める秒数。残りの銘柄が遮断中のSECを叩き続けて
+  # 遮断が長引くのを防ぐ。
+  throttle_cooldown_seconds: 60.0
+  retry:
+    max_attempts: 3
+    backoff_base_seconds: 1.0
+    backoff_max_seconds: 30.0
+
+# 30.8:FRED(マクロ系列)。`api_key` は .env の FRED_API_KEY から読む。
+# キー未設定ならフェーズ7全体を無効として扱う(APIは200 + 未設定状態を返す)。
+fred:
+  enabled: true
+  series_ids:
+    - DGS10          # 米10年債利回り
+    - DFII10         # 米10年実質金利
+    - BAMLH0A0HYM2   # ハイイールドOAS
+
+# K-9:Claude API(定性分析)。`api_key` は .env の ANTHROPIC_API_KEY から読む。
+# キー未設定ならLLM機能全体を無効として扱う(FREDと同じ方針)。
+#
+# **ここで作る出力はゲートにもスコアにも入らない**(config.py の LlmConfig
+# docstring 参照)。表示・ノート起草・人間の下読み専用であり、`llm_analyses`
+# 表に隔離してある。
+llm:
+  enabled: true
+  # K-9(ui_llm_provider_selection_2026-08-30.md):どのAPIに投げるか。
+  #   anthropic     = Claude native(既定)。要約・定性評価・レポートすべて対応。
+  #   openai_compat = OpenAI互換 /v1/chat/completions。ChatGPT / NVIDIA NIM /
+  #                   Ollama / vLLM / LM Studio / LiteLLM。.env の OPENAI_API_KEY と
+  #                   下の base_url で接続先を決める。Batch API は無いので
+  #                   score-qualitative は逐次呼び出しにフォールバックする(半額にならない)。
+  provider: anthropic
+  # openai_compat のエンドポイント。空/未設定なら api.openai.com。
+  #   例: http://localhost:11434/v1(Ollama)、https://integrate.api.nvidia.com/v1(NIM)
+  base_url: null
+  # openai_compat で effort を reasoning_effort として送るか。既定は送らない
+  # ——互換サーバの多くは未知パラメータを 400 で弾くため。推論モデルのときだけ true。
+  send_effort: false
+  model: claude-opus-5
+  effort: high          # low | medium | high | xhigh | max
+  max_output_tokens: 8000
+  # 1回の呼び出しに入れる本文の上限(文字数)。超過は切り詰めではなく失敗にする。
+  max_input_chars: 120000
+  # 1回の実行で扱う銘柄数の上限。**課金**が効く上限なので意図的に小さい。
+  max_tickers_per_run: 25
+  batch_poll_interval_seconds: 30.0
+  batch_timeout_seconds: 86400.0

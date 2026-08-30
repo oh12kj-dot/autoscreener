@@ -1,0 +1,1923 @@
+:root {
+  color-scheme: light dark;
+
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --surface-hover: #f9fafc;
+  --border: #e5e7ef;
+  --text: #14151a;
+  --text-muted: #6b7280;
+  --text-faint: #9ca3af;
+
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-soft-text: #4338ca;
+
+  --score-high-bg: #dcfce7;
+  --score-high-text: #15803d;
+  --score-mid-bg: #fef3c7;
+  --score-mid-text: #92400e;
+  --score-low-bg: #f1f2f6;
+  --score-low-text: #4b5563;
+
+  --danger: #dc2626;
+  --up: #16a34a;
+
+  --shadow-sm: 0 1px 2px rgba(20, 21, 26, 0.04);
+  --shadow-md: 0 4px 16px rgba(20, 21, 26, 0.06);
+  --radius: 10px;
+  --radius-lg: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --surface: #171921;
+    --surface-hover: #1d202b;
+    --border: #2a2d38;
+    --text: #f1f2f6;
+    --text-muted: #9aa0ae;
+    --text-faint: #6b7280;
+
+    --accent: #818cf8;
+    --accent-hover: #a5b4fc;
+    --accent-soft: #1e1f36;
+    --accent-soft-text: #c7d2fe;
+
+    --score-high-bg: #0f2e1c;
+    --score-high-text: #4ade80;
+    --score-mid-bg: #332405;
+    --score-mid-text: #fbbf24;
+    --score-low-bg: #23252f;
+    --score-low-text: #9aa0ae;
+
+    --danger: #f87171;
+    --up: #4ade80;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: var(--accent);
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2.5rem;
+  padding: 0.85rem 1.75rem;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.brand-name {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.app-header nav {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.app-header nav a {
+  text-decoration: none;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 550;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.app-header nav a:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.app-header nav a.active {
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+}
+
+.app-main {
+  flex: 1;
+  padding: 2rem 1.75rem 3rem;
+  max-width: 1140px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.app-main h2 {
+  font-size: 1.4rem;
+  font-weight: 750;
+  margin: 0 0 0.25rem;
+}
+
+.app-main h3 {
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0 0 0.75rem;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin: 1.25rem 0 1.5rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  gap: 0.35rem;
+}
+
+.filters select {
+  padding: 0.45rem 0.65rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+}
+
+.filters input {
+  padding: 0.45rem 0.65rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.filters input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* 30.2.1:取扱可否フィルタのようなON/OFFトグル。既存の.filters labelの縦積み
+   ではなく横並びにする(チェックボックス+ラベルの慣習的な配置)。 */
+.checkbox-filter {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem !important;
+}
+
+.checkbox-filter input {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* 30.2.1:取扱可否バッジ。"unknown" を「不可」と誤読させないよう、
+   はっきり異なる見た目(枠線のみ)にする。 */
+.tradability-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  margin-right: 0.3rem;
+}
+
+.tradability-tradable {
+  background: var(--score-high-bg);
+  color: var(--score-high-text);
+}
+
+.tradability-not-listed {
+  background: var(--score-low-bg);
+  color: var(--text-muted);
+}
+
+.tradability-unknown {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  cursor: help;
+}
+
+/* 30.4.4:レッドフラグ件数バッジ。行を隠さず、目立つ形で件数だけ見せる。 */
+.red-flag-badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.red-flag-blocking {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
+.red-flag-warning {
+  background: var(--score-mid-bg);
+  color: var(--score-mid-text);
+}
+
+.table-scroll {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow-x: auto;
+  /* 表が横に入りきらないとき、右(左)にまだ列が続くことを示す影。
+     「見切れている」という報告への対応:overflow-x:auto はスクロールできる
+     だけで、その事実を示す見た目の手がかりが無いと切れて見える。
+     コンテンツと一緒に動く覆い(local)がスクロール端に固定された影(scroll)を
+     隠す/現すことで、端まで来ると自動的に影が消える(JS不要)。 */
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(to right, var(--surface) 30%, transparent),
+    linear-gradient(to left, var(--surface) 30%, transparent),
+    linear-gradient(to right, color-mix(in srgb, var(--text) 22%, transparent), transparent),
+    linear-gradient(to left, color-mix(in srgb, var(--text) 22%, transparent), transparent);
+  background-repeat: no-repeat;
+  background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%;
+  background-position: left, right, left, right;
+  background-attachment: local, local, scroll, scroll;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 0.65rem 1rem;
+  white-space: nowrap;
+}
+
+.data-table th {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s ease;
+}
+
+.data-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.data-table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.rank-cell {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ランキング表は列数が多く横スクロールが前提になる。銘柄列だけは左端に
+   固定し、生存確率・警告など右側の列を見るためにスクロールしても
+   「どの銘柄の行か」を見失わないようにする。 */
+.ranking-table td:nth-child(2),
+.ranking-table th:nth-child(2) {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: 6px 0 6px -6px rgba(0, 0, 0, 0.12);
+}
+
+.ranking-table tbody tr:hover td:nth-child(2) {
+  background: var(--surface-hover);
+}
+
+.ticker-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  text-decoration: none;
+  line-height: 1.3;
+}
+
+.ticker-symbol {
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.ticker-link:hover .ticker-symbol {
+  color: var(--accent);
+}
+
+.company-name-cell {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.score-pill {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+
+.score-tier-high {
+  background: var(--score-high-bg);
+  color: var(--score-high-text);
+}
+
+.score-tier-mid {
+  background: var(--score-mid-bg);
+  color: var(--score-mid-text);
+}
+
+.score-tier-low {
+  background: var(--score-low-bg);
+  color: var(--score-low-text);
+}
+
+.reason-tag {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  margin: 0.1rem 0.3rem 0.1rem 0;
+  border-radius: 6px;
+  background: var(--score-low-bg);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+/* C-4(model_audit_v4_2026-08-26.md):警告バッジ。amberの「注意」トーンを
+   exclusion-banner等と共有する(独自の色トークンを増やさない)。 */
+.warning-badge-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.warning-tag {
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border-radius: 6px;
+  background: var(--score-mid-bg);
+  color: var(--score-mid-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* 30.9.2:デューデリの各セクション(取扱可否・レッドフラグ・希薄化・突合)。
+   既存の.warning-panelほど強調しない、通常セクションとしての区切り。 */
+.dd-section {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.dd-section h3 {
+  margin-top: 0;
+}
+
+/* J-5:デューデリ・チェックリスト。 */
+.dd-checklist {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+}
+.dd-checklist-item {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border-left: 3px solid var(--border);
+  margin-bottom: 0.3rem;
+}
+.dd-checklist-item.dd-state-auto {
+  border-left-color: #16a34a;
+}
+.dd-checklist-item.dd-state-recorded {
+  border-left-color: #2563eb;
+}
+.dd-checklist-item.dd-state-todo {
+  border-left-color: #9ca3af;
+  background: var(--surface-alt, #f8fafc);
+}
+.dd-checklist-item.dd-warn {
+  border-left-color: #dc2626;
+}
+.dd-check-mark {
+  flex: 0 0 auto;
+}
+.dd-check-state {
+  color: var(--text-muted, #64748b);
+  font-size: 0.85em;
+}
+
+/* 30.9.3 / J-5:全画面フッターの免責。 */
+.app-disclaimer {
+  margin-top: 2rem;
+  padding: 0.9rem 1.1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: var(--text-muted, #64748b);
+}
+.app-disclaimer p {
+  margin: 0;
+  max-width: 70ch;
+}
+
+/* J-4:実現倍率の分位点バー(P10 — P50 — P90 と目標ライン)。 */
+.moic-range-track {
+  position: relative;
+  height: 22px;
+  margin: 0.6rem 0;
+  background: var(--surface-alt, #f1f5f9);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.moic-range-fill {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  background: var(--accent, #2563eb);
+  opacity: 0.35;
+  border-radius: 3px;
+}
+.moic-range-tick,
+.moic-range-target {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+.moic-range-tick {
+  background: var(--accent, #2563eb);
+}
+.moic-range-target {
+  background: #dc2626;
+}
+
+/* J-1:事業概要の「全文」トグル。テキストリンク風のボタン。 */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.warning-panel {
+  margin: 1rem 0;
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius);
+  background: var(--score-mid-bg);
+}
+
+.warning-panel h4 {
+  margin: 0 0 0.5rem;
+  color: var(--score-mid-text);
+}
+
+.warning-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.warning-list li p {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.pagination button {
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.4rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.pagination button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+}
+
+.pagination button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.score-date {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin: 0 0 0.5rem;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.company-name {
+  font-size: 1.1rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-left: 0.5rem;
+}
+
+.ticker-meta {
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.exclusion-banner {
+  background: var(--score-mid-bg);
+  color: var(--score-mid-text);
+  padding: 0.85rem 1.1rem;
+  border-radius: var(--radius);
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+/* ErrorBoundary(2026-08-26)。既存の警告色トークンを増やさず、danger色の
+   ボーダー+通常の面色で「エラーだが画面としては壊れていない」ことを示す。 */
+.error-boundary {
+  background: var(--surface);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin: 1rem 0;
+}
+
+.error-boundary strong {
+  display: block;
+  color: var(--danger);
+  margin-bottom: 0.4rem;
+}
+
+.error-boundary-detail {
+  margin-top: 0.6rem;
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.exclusion-banner strong {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.score-summary {
+  display: flex;
+  align-items: center;
+  gap: 1.75rem;
+  margin: 1.25rem 0;
+  padding: 1.25rem 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.overall-score {
+  font-size: 2.75rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.score-summary p {
+  margin: 0.15rem 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.score-history {
+  margin-top: 1.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.change-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.change-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.change-meta {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.rank-up {
+  color: var(--up);
+  font-weight: 700;
+}
+
+section + section {
+  margin-top: 2rem;
+}
+
+.metric-formula {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+  line-height: 1.5;
+}
+
+.direction-badge {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.direction-low {
+  background: var(--score-mid-bg);
+  color: var(--score-mid-text);
+}
+
+/* --- 監視リスト(Tier 2、15.5) --- */
+/* 配色はハードコードせず、ライト/ダーク両対応のテーマ変数だけを使う
+   (最初に #fff / #f1f5f9 を直接指定したところ、ダークテーマで
+   非アクティブタブと説明文が白背景+明るい文字になり判読不能だった)。 */
+
+/* ============================================================================
+   27章:実現倍率モデルのUI要素
+   ============================================================================ */
+
+/* 14.2「上位デシルでも大半は外れる前提をUI上にも明示すること」の告知バナー。
+   目立ちすぎず、しかしランキングより先に目に入る位置に置く。 */
+.model-notice {
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.9rem 1.1rem;
+  margin: 1rem 0 1.5rem;
+  font-size: 0.9rem;
+  line-height: 1.65;
+}
+
+.model-notice a {
+  color: inherit;
+  font-weight: 600;
+}
+
+/* 収集進捗バナー(E-6、defect_audit_2026-08-27.md)。独自の色トークンは
+   増やさず、model-notice と同じ accent 系を使う。 */
+.collection-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.7rem 1rem;
+  margin: 0 0 1rem;
+  font-size: 0.88rem;
+}
+
+.collection-status-dot {
+  flex: none;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: collection-status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes collection-status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.factor-breakdown {
+  margin-top: 1.75rem;
+}
+
+.factor-intro {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  margin-bottom: 1rem;
+}
+
+/* --- 因子の内訳カード ------------------------------------------------------ */
+
+.factor-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.factor-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.15rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.factor-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.6rem;
+}
+
+.factor-card-header h4 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.factor-contribution {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  font-size: 1.05rem;
+}
+
+.factor-contribution.positive {
+  color: var(--up);
+}
+
+.factor-contribution.negative {
+  color: var(--danger);
+}
+
+/* 中立(×1.00)を中央に置き、対数スケールで左右に伸びるバー。
+   加点の棒グラフではなく「掛け算のどちら向きか」を示すのが目的。 */
+.factor-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--score-low-bg);
+  overflow: hidden;
+  margin-bottom: 0.6rem;
+}
+
+.factor-bar::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.factor-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.factor-bar-fill.positive {
+  background: var(--up);
+}
+
+.factor-bar-fill.negative {
+  background: var(--danger);
+  margin-left: auto;
+}
+
+.factor-explanation {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.7;
+}
+
+/* --- 数式ブロック ---------------------------------------------------------- */
+
+.formula-block,
+.formula-inline {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1.1rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.8;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.formula-inline {
+  padding: 0.5rem 0.75rem;
+  margin: 0 0 0.7rem;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+
+/* --- モデル検証ページ ------------------------------------------------------ */
+
+.kpi-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.kpi-badge.pass {
+  background: var(--score-high-bg);
+  color: var(--score-high-text);
+}
+
+.kpi-badge.fail {
+  background: var(--score-mid-bg);
+  color: var(--score-mid-text);
+}
+
+.kpi-badge.unknown {
+  background: var(--score-low-bg);
+  color: var(--score-low-text);
+}
+
+.kpi-note {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  max-width: 32rem;
+}
+
+.caveat-list {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.8;
+  padding-left: 1.2rem;
+}
+
+.caveat-list li {
+  margin-bottom: 0.4rem;
+}
+
+.diagnostics {
+  margin-top: 1.75rem;
+}
+
+.diagnostics .data-table td:last-child {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-weight: 600;
+}
+
+td.positive {
+  color: var(--up);
+}
+
+td.negative {
+  color: var(--danger);
+}
+
+/* --- 監視リスト(Tier 2、15.5) ---
+   配色はハードコードせず、ライト/ダーク両対応のテーマ変数だけを使う
+   (#fff や #f1f5f9 を直接指定すると、ダークテーマで非アクティブタブと
+   説明文が白背景+明るい文字になり判読不能になる)。 */
+.tier2-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 1.25rem 0 1rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.tier2-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.95rem;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.tier2-tab:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.tier2-tab-active,
+.tier2-tab-active:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.tier2-tab-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.tier2-tab-active .tier2-tab-count {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.tier2-help {
+  margin: 0 0 1.25rem;
+  padding: 0.8rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 0.86rem;
+  line-height: 1.65;
+}
+
+/* ============================================================================
+   27.24:目標(何年で何倍)の選択
+   ============================================================================ */
+
+.target-selector {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.target-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.target-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* 必要年率は目標選択の結論なので、いちばん目立たせる */
+.target-cagr {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.target-cagr strong {
+  font-size: 1.15rem;
+  margin: 0 0.15rem;
+}
+
+.target-cagr.tone-hard strong { color: var(--danger); }
+.target-cagr.tone-mid strong { color: var(--score-mid-text); }
+.target-cagr.tone-easy strong { color: var(--up); }
+
+.target-difficulty {
+  margin-left: 0.5rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  background: var(--score-low-bg);
+  color: var(--score-low-text);
+  font-size: 0.75rem;
+}
+
+.target-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+
+.target-preset {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.target-preset:hover {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.target-preset.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+}
+
+.preset-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.preset-cagr {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.target-preset.active .preset-cagr {
+  color: inherit;
+  opacity: 0.75;
+}
+
+.target-custom {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 0.75rem;
+}
+
+.target-custom label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.target-custom input {
+  width: 5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.target-custom .unit { color: var(--text-faint); }
+
+.target-note {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* 29章:その目標で有効なユニバースの上限。目標を切り替えたときに
+   「対象が入れ替わった理由」がその場で分かるよう、目標セレクタの中に置く。 */
+.target-universe {
+  margin: 0 0 0.6rem;
+  font-size: 0.82rem;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.target-universe strong { color: var(--text); }
+
+.target-universe-note { color: var(--text-faint); }
+
+.target-universe-capped {
+  color: var(--score-mid-text);
+  font-weight: 600;
+}
+
+.ranking-target {
+  margin-left: 0.6rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.detail-cagr {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+/* 28.12:ポートフォリオとしての見通し。
+   銘柄ごとの確率を並べただけでは「N銘柄買えば1つは当たる」という独立性の
+   錯覚を招くため、共通因子を織り込んだ数字を独立仮定の数字と並べて見せる。 */
+.portfolio-outlook {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.2rem;
+  margin: 0 0 1.5rem;
+  background: var(--surface);
+}
+
+.portfolio-outlook h3 {
+  margin: 0 0 0.85rem;
+  font-size: 0.95rem;
+}
+
+.portfolio-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2rem;
+  margin-bottom: 0.9rem;
+}
+
+.portfolio-figures > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.portfolio-figures strong {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.portfolio-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.portfolio-note {
+  margin: 0;
+  font-size: 0.83rem;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* 28.8:実測で較正済みの列であることを示すバッジ。
+   較正された数字とモデルの仮定だけに依存する数字を、同じ見た目で並べない。 */
+.th-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+/* 28.8:較正済みの数字は視覚的にも別枠にする。 */
+.calibrated-line {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+/* ============================================================
+   用語ツールチップ(28.18)
+   hover だけに頼らない——タッチ端末とキーボード操作では hover が
+   存在せず、説明が完全に消えてしまうため、クリック/フォーカスでも開く。
+   ============================================================ */
+.term-wrapper {
+  position: relative;
+  display: inline;
+  white-space: nowrap;
+}
+
+.term-trigger {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: help;
+  border-bottom: 1px dotted currentColor;
+  /* 下線と文字が詰まって読みにくくならないように少しだけ隙間を空ける */
+  padding-bottom: 1px;
+}
+
+.term-trigger:hover,
+.term-trigger:focus-visible {
+  color: var(--accent);
+  border-bottom-style: solid;
+  outline: none;
+}
+
+.term-tooltip {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 6px);
+  left: 0;
+  /* 下の ::before と合わせて、トリガーとの6pxの隙間を渡れるようにする */
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  width: max-content;
+  max-width: min(20rem, 70vw);
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  white-space: normal;
+  text-align: left;
+  font-weight: 400;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+/* 右端の列で画面外へはみ出さないように、表の右半分では左へ寄せる */
+.data-table th:nth-last-child(-n + 3) .term-tooltip,
+.data-table td:nth-last-child(-n + 3) .term-tooltip {
+  left: auto;
+  right: 0;
+}
+
+/* 28.19:トリガーとツールチップの間の視覚的な隙間(6px)を、透明な当たり判定で
+   埋める。これが無いと、隙間を横切った瞬間にポインタがどちらの要素からも外れ、
+   mouseleave が発火してツールチップが消える——中の「くわしく →」リンクへ
+   マウスで到達できない。疑似要素は要素の一部として当たり判定に参加する。 */
+.term-tooltip::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: 0;
+  right: 0;
+  height: 7px;
+}
+
+.term-tooltip-title {
+  font-weight: 600;
+}
+
+.term-tooltip-body {
+  color: var(--text-muted);
+}
+
+.term-tooltip-link {
+  align-self: flex-start;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.term-tooltip-link:hover {
+  text-decoration: underline;
+}
+
+/* ============================================================
+   用語集ページ
+   ============================================================ */
+.glossary-search {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.25rem 0;
+  flex-wrap: wrap;
+}
+
+.glossary-search label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.glossary-search input {
+  min-width: 18rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.glossary-count {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.glossary-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.75rem;
+}
+
+.glossary-toc a {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.glossary-toc a:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.glossary-category {
+  margin-bottom: 2.25rem;
+  scroll-margin-top: 1rem;
+}
+
+.glossary-entries {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.glossary-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 1rem 1.15rem;
+  scroll-margin-top: 1rem;
+  transition: border-color 0.4s ease, background 0.4s ease;
+}
+
+/* ツールチップの「くわしく →」で飛んできた項目を一瞬だけ光らせる。
+   長い一覧の中でどこへ着地したのかが分からないと、探し直しになる。 */
+.glossary-entry-flash {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.glossary-entry h4 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.glossary-aliases {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.glossary-short {
+  margin: 0 0 0.6rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent-soft-text);
+}
+
+.glossary-body {
+  margin: 0 0 0.55rem;
+  font-size: 0.87rem;
+  line-height: 1.8;
+  color: var(--text-muted);
+}
+
+.glossary-example {
+  margin: 0.75rem 0 0;
+  padding: 0.55rem 0.75rem;
+  border-left: 3px solid var(--border);
+  background: var(--surface-hover);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 0.84rem;
+  line-height: 1.7;
+  color: var(--text);
+}
+
+.glossary-example-label {
+  display: inline-block;
+  margin-right: 0.5rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.glossary-footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* 28.18:用語ツールチップの存在に気づいてもらうための導線。
+   ツールチップは「ある」と知らなければ使われないので、最初の画面で一度だけ告知する。 */
+.beginner-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 0.75rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  font-size: 0.84rem;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.beginner-strip-label {
+  flex-shrink: 0;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.beginner-strip a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 28.18:因子カードの下に置く用語チップ。本文を読まずに用語だけ引きたい人向け。 */
+.factor-terms {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.85rem;
+  margin: 0.75rem 0 0;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.82rem;
+}
+
+.factor-terms-label {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+
+/* ===== 日次ジョブ実行状況(§6.6、daily_job_status_screen_2026-08-30.md)=====
+   新しい配色は導入せず、既存トークンを役割に割り当てる:
+   score-high=正常 / score-mid=要注意 / danger=失敗 / score-low=対象外 /
+   accent=実行中。色だけに意味を載せない方針(§6.2)なので、記号と語を必ず
+   併記した上での補助として使う。 */
+
+.collection-status-banner--warn {
+  background: var(--score-mid-bg);
+  color: var(--score-mid-text);
+  border-left-color: var(--score-mid-text);
+  align-items: flex-start;
+}
+
+.collection-status-banner--warn a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.pipeline-summary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.15rem;
+  margin-bottom: 1.25rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.pipeline-status-succeeded {
+  border-left-color: var(--score-high-text);
+}
+.pipeline-status-degraded {
+  border-left-color: var(--score-mid-text);
+}
+.pipeline-status-failed {
+  border-left-color: var(--danger);
+}
+.pipeline-status-running {
+  border-left-color: var(--accent);
+}
+
+.pipeline-summary-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.pipeline-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.pipeline-status-succeeded .pipeline-status-symbol {
+  color: var(--score-high-text);
+}
+.pipeline-status-degraded .pipeline-status-symbol {
+  color: var(--score-mid-text);
+}
+.pipeline-status-failed .pipeline-status-symbol {
+  color: var(--danger);
+}
+.pipeline-status-running .pipeline-status-symbol {
+  color: var(--accent);
+}
+
+.pipeline-summary-time,
+.pipeline-summary-duration {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.pipeline-health-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.pipeline-health-item {
+  border-left: 3px solid var(--border);
+  padding: 0.4rem 0 0.4rem 0.7rem;
+}
+
+.pipeline-health-item p {
+  margin: 0.2rem 0 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.pipeline-severity-error {
+  border-left-color: var(--danger);
+}
+.pipeline-severity-warning {
+  border-left-color: var(--score-mid-text);
+}
+
+.pipeline-ok-note,
+.pipeline-running-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.pipeline-stale-note {
+  margin: 0.85rem 0 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+/* B. 成果タイル。デルタ(前回比)込みで初めて「0」が読める(§6.3)。 */
+.pipeline-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1.75rem;
+}
+
+.pipeline-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+}
+
+.pipeline-tile-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.pipeline-tile-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.15rem;
+}
+
+.pipeline-tile-delta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.1rem;
+}
+
+/* C. 工程リスト */
+.pipeline-stage-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 1.75rem;
+}
+
+.pipeline-stage-row + .pipeline-stage-row {
+  border-top: 1px solid var(--border);
+}
+
+.pipeline-stage-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.88rem;
+}
+
+.pipeline-stage-expandable {
+  cursor: pointer;
+}
+
+.pipeline-stage-expandable:hover {
+  background: var(--surface-hover);
+}
+
+.pipeline-stage-symbol {
+  flex: none;
+  width: 1.1rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.pipeline-stage-succeeded .pipeline-stage-symbol {
+  color: var(--score-high-text);
+}
+.pipeline-stage-failed .pipeline-stage-symbol {
+  color: var(--danger);
+}
+.pipeline-stage-running .pipeline-stage-symbol {
+  color: var(--accent);
+}
+/* 対象外(skipped)は失敗ではない。薄い灰色にして毎日8件が視界を埋めるのを防ぐ。 */
+.pipeline-stage-skipped {
+  color: var(--text-faint);
+}
+.pipeline-stage-skipped .pipeline-stage-symbol {
+  color: var(--text-faint);
+}
+/* 例外なく完了したが健全性所見が紐づく工程(§3.3のdegradedに対応)。 */
+.pipeline-stage-flagged .pipeline-stage-symbol {
+  color: var(--score-mid-text);
+}
+
+.pipeline-stage-sequence {
+  flex: none;
+  width: 1.6rem;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+}
+
+.pipeline-stage-label {
+  flex: none;
+  min-width: 11rem;
+  font-weight: 500;
+}
+
+.pipeline-stage-duration {
+  flex: none;
+  width: 4.5rem;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+}
+
+.pipeline-stage-summary {
+  flex: 1;
+  color: var(--text-muted);
+}
+
+.pipeline-stage-caret {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.pipeline-stage-traceback {
+  margin: 0;
+  padding: 0.8rem 0.9rem;
+  background: var(--score-low-bg);
+  color: var(--score-low-text);
+  border-top: 1px solid var(--border);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.pipeline-weekly-toggle {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-faint);
+  padding: 0.5rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.pipeline-weekly-toggle:hover {
+  background: var(--surface-hover);
+}
+
+.pipeline-history-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.pipeline-history-note {
+  color: var(--text-faint);
+  font-size: 0.82rem;
+  margin-top: 0.5rem;
+}
+
+/* K-9:生成AIによる定性分析。**警告色は使わない**——これは危険信号ではなく
+   参考情報であり、レッドフラグ(--danger)と同じ見た目にすると読み手が
+   重大度を取り違える。断り書きだけを地の文より目立たせる。 */
+.llm-disclaimer {
+  margin: 0.5rem 0 0.9rem;
+  padding: 0.55rem 0.8rem;
+  border-left: 3px solid var(--text-faint);
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.llm-markdown h4 {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.llm-markdown p,
+.llm-markdown li {
+  line-height: 1.7;
+}
+
+.llm-markdown ul {
+  margin: 0.35rem 0;
+  padding-left: 1.2rem;
+}
+
+.llm-qualitative h4 {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.llm-summary {
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+
+.llm-summary > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.llm-sources {
+  margin-top: 0.6rem;
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
