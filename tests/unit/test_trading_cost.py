@@ -1,4 +1,4 @@
-"""取引コスト推定のテスト(defect_and_edge_audit_2026-08-28.md D-5 / I-7)。純粋関数のみ。"""
+"""取引コスト推定のテスト(docs/defect_and_edge_audit_2026-08-28.md D-5 / I-7)。純粋関数のみ。"""
 
 import math
 

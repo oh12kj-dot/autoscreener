@@ -10,7 +10,7 @@
 古い観測に固定されたままになる。月曜に**スコアリングより先に**回すことで、
 その週のスコアは最新の観測で較正された確率を持つ。
 
-**2026-08-30(daily_job_status_screen_2026-08-30.md、14.15の運用監視):**
+**2026-08-30(docs/daily_job_status_screen_2026-08-30.md、14.15の運用監視):**
 `PipelineRecorder` で工程ごとの実行を `pipeline_runs` / `pipeline_stage_runs`
 に記録するようにした。**既存のtry/except構造(どの工程が全体を止め、
 どの工程が握り潰すか)は一切変えていない**——記録は副作用として追加した
@@ -28,6 +28,13 @@ from autoscreener.batch.backup import run_backup
 from autoscreener.batch.collect_filings import collect_filings
 from autoscreener.batch.collect_macro import collect_macro
 from autoscreener.batch.collect_xbrl_facts import collect_xbrl_facts
+from autoscreener.batch.collect_consensus import collect_consensus
+from autoscreener.batch.collect_investment_intelligence import collect_investment_intelligence
+from autoscreener.batch.collect_filing_sections import collect_filing_sections
+from autoscreener.batch.collect_guidance import collect_guidance
+from autoscreener.batch.collect_concentration import collect_concentration
+from autoscreener.batch.collect_dilution import collect_dilution
+from autoscreener.batch.collect_litigation import collect_litigation
 from autoscreener.batch.pipeline_recorder import PipelineRecorder
 from autoscreener.batch.refresh_cik_map import refresh_cik_map
 from autoscreener.batch.run_daily_collection import run_daily_collection, select_collectable_symbols
@@ -88,7 +95,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         except Exception:
             logger.exception("weekly XBRL facts collection failed (EDGAR_USER_AGENT not set?)")
 
-        # J-6(investment_decision_gap_2026-08-29.md):次回決算日の収集。yfinance の
+        # J-6(docs/investment_decision_gap_2026-08-29.md):次回決算日の収集。yfinance の
         # スナップショットしか取れずレート制限も食うので、追跡対象のみ・週次で足りる。
         # 失敗してもパイプラインは止めない。
         logger.info("weekly event calendar collection")
@@ -103,7 +110,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # J-7:需給(Form 4・空売り残)。原則3:ゲート・スコアには入れない。
         # 取得経路(EDGAR/FINRA)が未整備の間は 0 件で通る。
         #
-        # §3.5※(daily_job_status_screen_2026-08-30.md):以前は insider と
+        # §3.5※(docs/daily_job_status_screen_2026-08-30.md):以前は insider と
         # short_interest が単一の try を共有しており、collect_insider() が
         # 落ちると collect_short_interest() が実行されないのに、ログ上は
         # 両方が一括で失敗したようにしか見えなかった。工程単位で記録する以上、
@@ -160,6 +167,15 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         st.result = {**results["collection"], "quarantined": quarantined_count, "universe_size": universe_size}
     health.extend(check_collection_health(results["collection"]))  # 18.7
 
+    # TENX v2: append-only current consensus. This is a display/PIT-history
+    # layer and failures must not prevent the deterministic core score.
+    logger.info("collecting analyst consensus snapshots")
+    try:
+        with recorder.stage("consensus", 16) as st:
+            st.result = results["consensus"] = collect_consensus()
+    except Exception:
+        logger.exception("consensus collection failed")
+
     logger.info("applying gates")
     with recorder.stage("gates", 9) as st:
         st.result = results["gates"] = apply_gates(today)
@@ -199,6 +215,33 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     except Exception:
         logger.exception("collect_filings failed (EDGAR_USER_AGENT not set, or SEC unavailable?)")
 
+    logger.info("extracting source sections from new SEC filings")
+    try:
+        with recorder.stage("filing_sections", 14) as st:
+            st.result = results["filing_sections"] = collect_filing_sections()
+    except Exception:
+        logger.exception("filing section extraction failed")
+
+    disclosure_jobs = (
+        ("guidance", 15, collect_guidance),
+        ("customer_concentration", 16, collect_concentration),
+        ("dilution", 17, collect_dilution),
+        ("litigation", 18, collect_litigation),
+    )
+    for stage_name, sequence, job in disclosure_jobs:
+        try:
+            with recorder.stage(stage_name, sequence) as st:
+                st.result = results[stage_name] = job()
+        except Exception:
+            logger.exception("%s extraction failed", stage_name)
+
+    logger.info("extracting investment intelligence from stored filing sections")
+    try:
+        with recorder.stage("investment_intelligence", 19) as st:
+            st.result = results["investment_intelligence"] = collect_investment_intelligence()
+    except Exception:
+        logger.exception("investment intelligence extraction failed")
+
     # 隔離状態はcollection工程でのみ変わる(is_quarantinedを更新するのは
     # collect_oneのみ。以降のgates/scoring/forward_validation/filingsは読むだけ)。
     # 上のcollection工程で読んだ値をそのまま使い、同じ集計を2度読まない。
@@ -209,14 +252,14 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     # 当日のスコア計算・収集の成果を無駄にする理由にはならない(18.4と同じ扱い)。
     logger.info("running quarterly monitoring")
     try:
-        with recorder.stage("monitoring", 14) as st:
+        with recorder.stage("monitoring", 20) as st:
             st.result = results["monitoring"] = run_monitoring(today)
     except Exception:
         logger.exception("run_monitoring failed")
 
     logger.info("running backup")
     try:
-        with recorder.stage("backup", 15) as st:
+        with recorder.stage("backup", 21) as st:
             backup_path = run_backup()
             st.result = {"path": str(backup_path)}
     except Exception:

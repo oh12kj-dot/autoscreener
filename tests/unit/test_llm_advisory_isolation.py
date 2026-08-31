@@ -1,7 +1,7 @@
 """tests/unit/test_llm_advisory_isolation.py(K-9)。
 
 **このファイルが守っているのは設計上の約束そのものである。**
-`outside_tenx_implementation_plan_2026-08-28.md` 第618行の原則1——再現性が無く
+`docs/outside_tenx_implementation_plan_2026-08-28.md` 第618行の原則1——再現性が無く
 検証もできない判定をブロッキング条件にしてはならない——を、コメントではなく
 テストとして固定する。
 

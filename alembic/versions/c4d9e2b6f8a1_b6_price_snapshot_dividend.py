@@ -1,4 +1,4 @@
-"""B-6(defect_and_edge_audit_2026-08-28.md D-11):price_snapshots.dividend。
+"""B-6(docs/defect_and_edge_audit_2026-08-28.md D-11):price_snapshots.dividend。
 
 その取引日(ex-date)の1株あたり配当。`backtest.runner._realized_return` と
 `forward_validation` の実現リターンを価格リターンから総リターンへ変えるのに使う。

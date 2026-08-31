@@ -13,6 +13,7 @@ import { LlmAnalysisSection } from "../components/LlmAnalysisSection";
 import { ScoreHistoryChart } from "../components/ScoreHistoryChart";
 import { Term } from "../components/Term";
 import { WarningBadges } from "../components/WarningBadges";
+import { InvestmentIntelligenceSections } from "../components/InvestmentIntelligenceSections";
 import type { GlossaryId } from "../glossary";
 
 /** `factors` に入っている診断値の表示。内訳5因子とは別枠で並べる。
@@ -277,7 +278,7 @@ export function TickerDetailPage() {
               モデルバージョン: {detail.scoring_version ?? "—"} ・ 最終更新:{" "}
               {detail.last_updated ? new Date(detail.last_updated).toLocaleString("ja-JP") : "—"}
             </p>
-            {/* C-6(model_audit_v4_2026-08-26.md):買収シナリオはモデルの対象外 */}
+            {/* C-6(docs/model_audit_v4_2026-08-26.md):買収シナリオはモデルの対象外 */}
             <p className="detail-cagr">
               小型・割安な銘柄はTOB(買収)で株価が現金決済され、目標倍率に届く前に上場廃止に
               なることがあります。このモデルはそのシナリオを扱っていません。
@@ -288,6 +289,14 @@ export function TickerDetailPage() {
 
       <WarningBadges codes={detail.warnings} />
       <p className="detail-cagr">表示している倍率・確率は米ドル建て・税引前・取引コスト控除前です。税・為替・為替手数料はこのアプリでは計算しません。</p>
+
+      <InvestmentIntelligenceSections
+        ticker={detail.ticker}
+        horizonYears={detail.target?.horizon_years ?? 7}
+        expectedMoic={detail.expected_moic}
+        realizedVol={detail.price_risk?.realized_vol_1y ?? null}
+        evidenceGrade={detail.evidence_grade?.grade ?? null}
+      />
 
       {detail.evidence_grade && (
         <div className="dd-section"><h3>推定の足場: {detail.evidence_grade.grade}</h3>

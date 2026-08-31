@@ -101,7 +101,7 @@ def _with_single_observation_cap(config, value: float):
 
 
 def test_single_observation_growth_uses_a_more_conservative_ceiling(config):
-    """S-7(model_audit_v4_2026-08-26.md): 27.13の「食い違ったら遅いほうを信じる」
+    """S-7(docs/model_audit_v4_2026-08-26.md): 27.13の「食い違ったら遅いほうを信じる」
     安全装置は、CAGR・YoYの両方が揃っている銘柄でしか働かない。片方しか無い
     銘柄(BRUN型:上場直後で3年CAGRが無い)は、検証されないまま上限まで
     採用されてしまうため、より保守的な上限を使う。
@@ -198,7 +198,7 @@ def test_nowcast_is_skipped_when_momentum_is_unavailable(config):
 
 
 def test_nowcast_sign_flip_uses_the_narrower_cap(config):
-    """S-8(model_audit_v4_2026-08-26.md): 決算ベースの成長が負(縮小)なのに
+    """S-8(docs/model_audit_v4_2026-08-26.md): 決算ベースの成長が負(縮小)なのに
     株価トレンドで成長側へ反転させる補正は、一次情報(決算)を株価で上書き
     する行為であり、通常の nowcast_cap より狭い nowcast_cap_sign_flip までしか
     動かしてはならない(ALTO型:決算-11.7%が株価補正で+3.3%に反転していた)。
@@ -254,7 +254,7 @@ def test_quality_is_neutral_when_the_f_score_is_unavailable(config):
     assert growth_fade(make_inputs(piotroski_ratio=None), config) == config.growth.fade
 
 
-# --- 粗利率の外挿(15.1②) - S-1/S-2リグレッション(model_audit_v4_2026-08-26.md) ---
+# --- 粗利率の外挿(15.1②) - S-1/S-2リグレッション(docs/model_audit_v4_2026-08-26.md) ---
 
 
 def test_margin_floor_does_not_lift_a_collapsing_margin(config):
@@ -311,7 +311,7 @@ def test_margin_extrapolation_still_moves_normally_within_bounds(config):
 
 
 def test_margin_extrapolation_depends_only_on_the_two_most_recent_periods(config):
-    """S-3/S-4を試して不採用にした経緯のリグレッション(model_audit_v4_2026-08-26.md §11)。
+    """S-3/S-4を試して不採用にした経緯のリグレッション(docs/model_audit_v4_2026-08-26.md §11)。
 
     粗利率の年次系列を使う案を2件実装して `run-backtest` で比較し、どちらも
     採らなかった:
@@ -543,7 +543,7 @@ def test_heavy_dilution_alone_can_disqualify_a_grower(config):
 
 
 def test_dilution_missing_uses_cross_section_median_not_zero(config):
-    """A-1(model_audit_v4_2026-08-26.md): `dilution_cagr` が欠損している銘柄を
+    """A-1(docs/model_audit_v4_2026-08-26.md): `dilution_cagr` が欠損している銘柄を
     「希薄化ゼロ」(=最良シナリオ)として扱うのは、27.1の「欠損を減点に読み替え
     ない」の裏返しで「欠損を満点に読み替える」ことになっていた(BRUN型)。
     断面の中央値を中立値として使うべきで、ゼロへは決め打ちしない。
@@ -569,7 +569,7 @@ def test_dilution_missing_without_cross_section_falls_back_to_zero(config):
 
 
 def test_net_debt_data_missing_flag_flows_through_to_result(config):
-    """E-1(defect_audit_2026-08-27.md): `MoicInputs.net_debt_data_missing` が
+    """E-1(docs/defect_audit_2026-08-27.md): `MoicInputs.net_debt_data_missing` が
     `MoicResult` までそのまま伝播すること(計算式は変えない診断フラグ)。"""
     flagged = compute_moic(make_inputs(net_debt_data_missing=True), NEUTRAL, config)
     clean = compute_moic(make_inputs(net_debt_data_missing=False), NEUTRAL, config)
@@ -760,7 +760,7 @@ def test_legacy_cross_section_without_horizon_is_left_alone(config):
     assert result is not None
 
 
-# --- J-4(investment_decision_gap_2026-08-29.md):実現倍率の分位点 ---
+# --- J-4(docs/investment_decision_gap_2026-08-29.md):実現倍率の分位点 ---
 
 
 def test_moic_quantiles_match_plain_lognormal_when_survival_is_one():

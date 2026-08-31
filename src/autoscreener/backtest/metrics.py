@@ -24,7 +24,7 @@ from statistics import NormalDist
 
 _NORMAL = NormalDist()
 
-# D-2(defect_and_edge_audit_2026-08-28.md):観測数がこれ未満の評価日は、
+# D-2(docs/defect_and_edge_audit_2026-08-28.md):観測数がこれ未満の評価日は、
 # 資産相関推定(runner._MIN_DATES_FOR_CORRELATION)と同じ基準で「独立な1点」
 # として扱わない。最悪日リフト・右裾リフトの母集団から外す。
 MIN_DATE_OBSERVATIONS = 100
@@ -47,10 +47,10 @@ class Observation:
     expected_moic: float = 1.0
     market_cap: float = 0.0
     sector: str | None = None
-    # S-8(2026-08-26、model_audit_v4_2026-08-26.md):価格ナウキャストが
+    # S-8(2026-08-26、docs/model_audit_v4_2026-08-26.md):価格ナウキャストが
     # 初期成長率に加えた補正量。`nowcast_cap_hit_rate` の算出に使う。
     growth_nowcast_adjustment: float = 0.0
-    # D-5(defect_and_edge_audit_2026-08-28.md):この観測を建て・決済したときの
+    # D-5(docs/defect_and_edge_audit_2026-08-28.md):この観測を建て・決済したときの
     # 往復取引コスト(bps)。Corwin–Schultz スプレッド + 平方根則インパクト。
     # `cost_adjusted_metrics` がコスト後KPIを出すのに使う。
     cost_bps: float = 0.0
@@ -154,31 +154,36 @@ class BacktestMetrics:
 
     # 27.11:上場廃止として決済された観測の割合。0%なら生存バイアスを疑う
     delisted_settlement_rate: float = 0.0
+    delisted_count: int = 0
+    delisted_settled_count: int = 0
+    bankruptcy_count: int = 0
+    mna_count: int = 0
+    unknown_delisting_count: int = 0
 
     # 28.9:平均だけでは分からないものを測る
     rank_ic: float = 0.0  # 評価日ごとの順位ICの平均(確率 vs 実現リターン)
     rank_ic_t_stat: float = 0.0  # 上の平均の t値(評価日を独立とみなした場合の上限値)
     lift_ratio_worst_date: float = 0.0  # 最悪の評価日のリフト倍率
 
-    # S-8(2026-08-26、model_audit_v4_2026-08-26.md):価格ナウキャストが
+    # S-8(2026-08-26、docs/model_audit_v4_2026-08-26.md):価格ナウキャストが
     # `nowcast_cap`(または反転方向は `nowcast_cap_sign_flip`)の上限に
     # 張り付いている観測の割合。高いほど「補正のはずが実質モメンタム加点に
     # なっている」ことを示す診断指標。設計意図(28.3「これはモメンタム戦略
     # ではない」)と実挙動の乖離を継続的に監視するために追加した。
     nowcast_cap_hit_rate: float = 0.0
 
-    # D-5(defect_and_edge_audit_2026-08-28.md):観測ごとの往復取引コスト(bps)の
+    # D-5(docs/defect_and_edge_audit_2026-08-28.md):観測ごとの往復取引コスト(bps)の
     # 平均と、コストを差し引いた後の主要KPI。`after_cost` を**別立て**にするのは、
     # 片方だけを出すと次に読む人が必ず取り違えるため(D-5 修正案2)。
     mean_round_trip_cost_bps: float = 0.0
     after_cost: dict | None = None
 
-    # D-4(defect_and_edge_audit_2026-08-28.md):ポートフォリオ・シミュレーション
+    # D-4(docs/defect_and_edge_audit_2026-08-28.md):ポートフォリオ・シミュレーション
     # (`backtest.portfolio_sim.PortfolioBacktest.as_dict()`)。上位N銘柄を等金額で
     # 建て、指数(IWC 等)超過CAGRと最大ドローダウンを1つの数字で出す。
     portfolio: dict | None = None
 
-    # D-10(defect_and_edge_audit_2026-08-28.md):ライブ相当ゲート通過数 /
+    # D-10(docs/defect_and_edge_audit_2026-08-28.md):ライブ相当ゲート通過数 /
     # 旧「バックテスト専用」ゲート通過数。1.0 未満なら、ライブでだけ削られていた
     # 銘柄群(cash_runway_floor 等)がバックテストの母集団に混じっていた分。
     gate_parity: dict | None = None
@@ -192,7 +197,7 @@ class BacktestMetrics:
     # 入れば同じ関数で `by_public_float` を出せる)。edge がどの帯で立っているか。
     stratified_kpis: dict | None = None
 
-    # D-2(defect_and_edge_audit_2026-08-28.md):観測数の少ない評価日を独立と
+    # D-2(docs/defect_and_edge_audit_2026-08-28.md):観測数の少ない評価日を独立と
     # 扱わないための量。`effective_dates` は Kish の実効標本サイズ(評価日ごとの
     # 観測数で重み付けした「実質的な評価日数」)。CI は評価日単位のブロック・
     # ブートストラップ(同一日の銘柄は共通因子で相関しているので銘柄単位では
@@ -204,7 +209,7 @@ class BacktestMetrics:
     decile_monotonicity_ci: tuple[float, float] | None = None
     non_overlapping: bool = False
 
-    # D-3(defect_and_edge_audit_2026-08-28.md):14.2 の成功指標に対する
+    # D-3(docs/defect_and_edge_audit_2026-08-28.md):14.2 の成功指標に対する
     # PASS / FAIL / INSUFFICIENT_DATA 判定。`run-backtest` は FAIL があれば
     # 非ゼロ終了する。
     kpi_verdicts: dict = field(default_factory=dict)
@@ -228,6 +233,12 @@ class BacktestMetrics:
             "mean_predicted_on_pace_rate": self.mean_predicted_on_pace_rate,
             "calibration_error": self.calibration_error,
             "delisted_settlement_rate": self.delisted_settlement_rate,
+            "delisted_count": self.delisted_count,
+            "delisted_settled_count": self.delisted_settled_count,
+            "bankruptcy_count": self.bankruptcy_count,
+            "mna_count": self.mna_count,
+            "unknown_delisting_count": self.unknown_delisting_count,
+            "effective_independent_periods": self.effective_dates,
             "rank_ic": self.rank_ic,
             "rank_ic_t_stat": self.rank_ic_t_stat,
             "lift_ratio_worst_date": self.lift_ratio_worst_date,
@@ -379,7 +390,7 @@ def compute_metrics(
     デシルは**評価日ごとに**確率の降順で切ってから束ねる(decile 1 = 各評価日で
     モデルが最も有望とした10%)。理由は `_cross_sectional_buckets` を参照。
 
-    D-2(defect_and_edge_audit_2026-08-28.md):
+    D-2(docs/defect_and_edge_audit_2026-08-28.md):
     - `rank_ic` は評価日ごとの値を**観測数で加重平均**する(観測20件の日と
       629件の日を同じ重みで平均していたのを是正)。
     - `lift_ratio_worst_date` は `MIN_DATE_OBSERVATIONS` 未満の日を母集団から外す。
@@ -501,6 +512,14 @@ def compute_metrics(
         acceptance=kpi_acceptance,
     )
 
+    settlement_values = [o.settlement for o in observations]
+    delisted_kinds = {
+        "delisted", "delisted_unpriced", "cash_acquisition", "stock_acquisition",
+        "bankruptcy", "liquidation", "unknown_delisting",
+    }
+    settled_kinds = {"delisted", "cash_acquisition", "stock_acquisition", "bankruptcy", "liquidation"}
+    delisted_count = sum(s in delisted_kinds for s in settlement_values)
+
     return BacktestMetrics(
         observation_count=len(observations),
         horizon_years=horizon_years,
@@ -515,10 +534,15 @@ def compute_metrics(
         top_decile_loss_rate=top.loss_rate if top else 0.0,
         mean_predicted_on_pace_rate=mean_predicted,
         calibration_error=mean_predicted - universe_on_pace,
-        delisted_settlement_rate=_rate(
-            [o.settlement for o in observations],
-            lambda s: s in ("delisted", "delisted_unpriced"),
+        delisted_settlement_rate=(
+            sum(s in settled_kinds for s in settlement_values) / len(settlement_values)
+            if settlement_values else 0.0
         ),
+        delisted_count=delisted_count,
+        delisted_settled_count=sum(s in settled_kinds for s in settlement_values),
+        bankruptcy_count=sum(s in {"bankruptcy", "liquidation"} for s in settlement_values),
+        mna_count=sum(s in {"cash_acquisition", "stock_acquisition"} for s in settlement_values),
+        unknown_delisting_count=sum(s in {"delisted_unpriced", "unknown_delisting"} for s in settlement_values),
         rank_ic=weighted_rank_ic,
         rank_ic_t_stat=_t_stat(date_ics),
         lift_ratio_worst_date=min(date_lifts) if date_lifts else 0.0,
@@ -566,7 +590,7 @@ def tail_lifts(
             returns = sorted((o.realized_return for o in bucket), reverse=True)
             cutoff_index = max(1, int(len(returns) * quantile)) - 1
             cutoff_val = returns[cutoff_index]
-            # D-14(defect_and_edge_audit_2026-08-28.md):`r >= threshold` は
+            # D-14(docs/defect_and_edge_audit_2026-08-28.md):`r >= threshold` は
             # 低価格帯で 0.00% リターンが密集する日にタイを全部「当たり」に数え、
             # リフトを過大にする。閾値を「カットオフ値と、それより厳密に小さい
             # 直近の値」の中点へ補間し、`>` で比較する(タイの下側を除外できる)。
@@ -764,7 +788,7 @@ def bootstrap_kpi_interval(
     return (lo, hi)
 
 
-# D-3(defect_and_edge_audit_2026-08-28.md):KPIの合否判定。
+# D-3(docs/defect_and_edge_audit_2026-08-28.md):KPIの合否判定。
 _INSUFFICIENT = "INSUFFICIENT_DATA"
 _PASS = "PASS"
 _FAIL = "FAIL"
@@ -881,7 +905,7 @@ def _cross_sectional_buckets(
 
     buckets: list[list[Observation]] = [[] for _ in range(bucket_count)]
     for base_date in sorted(by_date):
-        # E-8(2026-08-27、defect_audit_2026-08-27.md):確率が完全同値の観測は、
+        # E-8(2026-08-27、docs/defect_audit_2026-08-27.md):確率が完全同値の観測は、
         # 安定ソートだと入力(=dictの挿入)順でデシル所属が決まり、実行間で
         # 非決定的になりうる。成長率上限・粗利率フロア等のクランプで入力が
         # 実質同一になる銘柄群は起こりうるため、ticker_id を決定的な第二キーに

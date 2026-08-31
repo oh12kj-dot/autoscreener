@@ -1,4 +1,4 @@
-"""J-7(investment_decision_gap_2026-08-29.md):需給の収集と隔離のテスト。"""
+"""J-7(docs/investment_decision_gap_2026-08-29.md):需給の収集と隔離のテスト。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""ポートフォリオ・シミュレーション(defect_and_edge_audit_2026-08-28.md D-4)。純粋関数。
+"""ポートフォリオ・シミュレーション(docs/defect_and_edge_audit_2026-08-28.md D-4)。純粋関数。
 
 **なぜ必要か。** 今のバックテスト(`backtest/metrics.py`)は「観測ごとのリターンの
 集計」であって、ポートフォリオを一度も組んでいない。`BacktestMetrics` の

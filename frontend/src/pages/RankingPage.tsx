@@ -151,7 +151,7 @@ export function RankingPage() {
         確率の<strong>絶対値</strong>は目標の選び方だけで大きく動くので、序列として読んでください。
       </div>
 
-      {/* B-2/B-4/C-6(model_audit_v4_2026-08-26.md):検証範囲・最悪日・買収リスクの明示 */}
+      {/* B-2/B-4/C-6(docs/model_audit_v4_2026-08-26.md):検証範囲・最悪日・買収リスクの明示 */}
       <div className="model-notice">
         <strong>検証は1年ホライズンでしか行われていません。</strong>
         {" "}目標が「7年で10倍」でも、実測(rank IC +0.15)は1年分の擬似バックテストです。
@@ -268,7 +268,7 @@ export function RankingPage() {
                   <th>
                     <Term id="on-pace">1年オンペース率</Term>
                     <span className="th-badge">実測較正</span>
-                    {/* B-3(model_audit_v4_2026-08-26.md):較正は観測範囲の外へ外挿しない
+                    {/* B-3(docs/model_audit_v4_2026-08-26.md):較正は観測範囲の外へ外挿しない
                         ため、上位の帯では同じ値に飽和する(差が無い)ことがある */}
                   </th>
                   <th>
@@ -280,7 +280,7 @@ export function RankingPage() {
                   <th>
                     <Term id="survival">生存確率</Term>
                   </th>
-                  {/* E-5(defect_audit_2026-08-27.md):C-1が「一覧と詳細の両方に」
+                  {/* E-5(docs/defect_audit_2026-08-27.md):C-1が「一覧と詳細の両方に」
                       求めていた下振れ確率。一覧では最初に目に入る画面なので必須。 */}
                   <th>
                     <Term id="downside-probability">下振れ(半値以下)</Term>

@@ -10,6 +10,9 @@
 from __future__ import annotations
 
 import datetime
+from types import SimpleNamespace
+
+import pytest
 
 from autoscreener.backtest.runner import RebalanceSlice, _realized_return
 
@@ -53,7 +56,7 @@ def test_delisted_settlement_uses_the_last_observed_close_not_the_entry_day_clos
 
 
 def test_delisted_without_any_post_entry_price_is_a_total_loss():
-    # B-2(defect_and_edge_audit_2026-08-28.md D-1):価格が全く取れない廃止銘柄は
+    # B-2(docs/defect_and_edge_audit_2026-08-28.md D-1):価格が全く取れない廃止銘柄は
     # 別区分 `delisted_unpriced` にして、KPIを「含めた/除いた」の両方で出せるようにする。
     price_slice = _slice(last_price_date={1: AS_OF})
 
@@ -72,3 +75,23 @@ def test_still_listed_but_missing_exit_price_is_not_settled():
 
 def test_no_entry_price_means_no_observation():
     assert _realized_return(1, _slice(entry_open={}), TARGET) is None
+
+
+def _event(event_type: str, settlement=None, source="sec_edgar"):
+    return SimpleNamespace(event_type=event_type, settlement_value_per_share=settlement, source=source)
+
+
+def test_cash_acquisition_uses_cash_consideration():
+    realized, settlement = _realized_return(1, _slice(), TARGET, _event("cash_acquisition", 12.0))
+    assert settlement == "cash_acquisition"
+    assert realized == pytest.approx(0.2)
+
+
+def test_bankruptcy_uses_zero_recovery_when_no_settlement_is_disclosed():
+    assert _realized_return(1, _slice(), TARGET, _event("bankruptcy")) == (-1.0, "bankruptcy")
+
+
+def test_stock_acquisition_without_roll_value_is_conservative_unknown():
+    assert _realized_return(1, _slice(), TARGET, _event("stock_acquisition")) == (
+        -1.0, "unknown_delisting"
+    )

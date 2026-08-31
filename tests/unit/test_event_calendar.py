@@ -1,4 +1,4 @@
-"""J-6(investment_decision_gap_2026-08-29.md):カタリスト・カレンダーのテスト。"""
+"""J-6(docs/investment_decision_gap_2026-08-29.md):カタリスト・カレンダーのテスト。"""
 
 from __future__ import annotations
 

@@ -26,6 +26,20 @@ sizing:
   amount_usd: 4000
   rationale: ADV制約(上限$3,200)ではなく規律側が効いた。二値イベント無し
 verification_date: 2026-11-05   # 次にテーゼが試される日(次回決算)
+milestones:
+  # bull/base/bear は「売却シグナル」ではなく、仮説を再検証するための事前基準。
+  - due_date: 2026-11-05
+    category: financial
+    metric: revenue_yoy
+    bull: 0.35
+    base: 0.25
+    bear: 0.15
+    unit: ratio
+  - due_date: 2027-03-31
+    category: customer
+    metric: customer_count
+    base: 5000
+    unit: count
 exit_plan:
   # J-8 / 元文書 第11節:買う前に降り方を決める。閾値は売却条件ではない——
   # 点灯は「価格に関係なく判断をやり直す」合図であって、機械的な売りシグナルとして

@@ -1,4 +1,4 @@
-"""財務推移の表示用ビュー(J-2、investment_decision_gap_2026-08-29.md)。
+"""財務推移の表示用ビュー(J-2、docs/investment_decision_gap_2026-08-29.md)。
 
 **表示層のためだけのモジュール。** スコアリング・ゲートからは import しない
 (順位を動かしてはならない。J-2 受け入れ基準)。`raw_snapshots.payload` に既に

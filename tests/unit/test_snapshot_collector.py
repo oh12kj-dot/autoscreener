@@ -105,7 +105,7 @@ def test_successful_collection_clears_stale_delisted_at(mock_fetch_financials, m
 
 @patch("autoscreener.collectors.snapshot_collector.fetch_raw_financials")
 def test_persistent_empty_response_is_eventually_treated_as_delisted(mock_fetch_financials):
-    """B-5(model_audit_v4_2026-08-26.md): yfinanceはHTTP 404を例外にせず空の
+    """B-5(docs/model_audit_v4_2026-08-26.md): yfinanceはHTTP 404を例外にせず空の
     `info`として返すことがあり、その場合は`EmptyResponseError`(=PermanentFailure
     ではない)になるため`delisted_at`が一度も設定されず、バックテストの
     生存バイアスが恒久化していた。連続失敗が閾値を超えたら`delisted_at`を

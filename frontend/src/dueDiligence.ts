@@ -1,5 +1,5 @@
 /**
- * デューデリ・チェックリストの判定ロジック(J-5、investment_decision_gap_2026-08-29.md)。
+ * デューデリ・チェックリストの判定ロジック(J-5、docs/investment_decision_gap_2026-08-29.md)。
  *
  * 元文書 30.9.2 の11工程を、既存の API(`/candidates/{ticker}` と
  * `/research/{ticker}`)だけで3状態に落とす**純関数**。フロントに vitest 基盤が

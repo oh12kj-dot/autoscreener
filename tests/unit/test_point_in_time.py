@@ -170,7 +170,7 @@ def test_build_moic_inputs_computes_net_debt_from_visible_balance_sheet():
 
 
 def test_build_moic_inputs_extracts_lease_liability_when_present():
-    """S-5(model_audit_v4_2026-08-26.md): `Capital Lease Obligations` を
+    """S-5(docs/model_audit_v4_2026-08-26.md): `Capital Lease Obligations` を
     net_debt とは独立に持ち回り、リースの多い企業(DBI型)をUIで警告できる
     ようにする。net_debt の計算自体は変えない。"""
     payload_with_lease = {
@@ -191,7 +191,7 @@ def test_build_moic_inputs_extracts_lease_liability_when_present():
 
 
 def test_missing_total_debt_sets_net_debt_data_missing_flag():
-    """E-1(defect_audit_2026-08-27.md): `Total Debt` の行が無い銘柄で、
+    """E-1(docs/defect_audit_2026-08-27.md): `Total Debt` の行が無い銘柄で、
     net_debt が黙って「無借金(=有利)」として計算されていることを可視化する
     診断フラグが立つこと(A-1と同型の欠陥への回帰テスト)。net_debt の計算式
     自体はまだ変えない(実データ調査と run-backtest 確認が済むまで)。"""

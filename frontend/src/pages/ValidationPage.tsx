@@ -121,7 +121,7 @@ function buildKpis(data: BacktestSummary): KpiRow[] {
         "S-8(2026-08-26の監査で追加)。価格トレンドによる成長率補正が上限に張り付いている" +
         "観測の割合。高いほど「決算にもとづく補正」のはずが実質的にモメンタムをそのまま" +
         "反映している状態に近づく。狭い上限への変更は実測でKPIを悪化させたため未採用(詳細は" +
-        "model_audit_v4_2026-08-26.md S-8)。",
+        "docs/model_audit_v4_2026-08-26.md S-8)。",
     },
   ];
 }
@@ -146,6 +146,12 @@ export function ValidationPage() {
     <div>
       <h2>モデルの検証状況</h2>
 
+      <div className={`model-notice ${data.validation_status === "PASS" ? "positive" : "negative"}`}>
+        <strong>VALIDATION {data.validation_status}</strong>
+        {data.validation_reasons.length > 0 && <p>{data.validation_reasons.join(" / ")}</p>}
+        <p>上場廃止 {data.delisted_count}件（決済値あり {data.delisted_settled_count}、破綻・清算 {data.bankruptcy_count}、M&amp;A {data.mna_count}、unknown {data.unknown_delisting_count}）・実効独立期間 {data.effective_independent_periods?.toFixed(2) ?? "—"}</p>
+      </div>
+
       <div className="model-notice">
         <strong>このモデルはまだ検証途中です。</strong> 下の数値は擬似バックテスト
         ——過去の各時点で「その時に開示済みだったデータだけ」からスコアを付け直し、
@@ -156,7 +162,7 @@ export function ValidationPage() {
         説明が出ます(一覧は<Link to="/glossary">用語集</Link>)。
       </div>
 
-      {/* S-9(model_audit_v4_2026-08-26.md):σの縮小推定により、順位は実質的に
+      {/* S-9(docs/model_audit_v4_2026-08-26.md):σの縮小推定により、順位は実質的に
           リスク未調整の期待倍率の順序に近い、という実測結果の明示 */}
       <div className="model-notice">
         <strong>順位はリスクをほとんど反映していません。</strong> σ(ばらつき)の推定を

@@ -8,3 +8,16 @@ binary_event_position_cap: 0.02  # 二値イベント(FDA承認等)を抱える�
 adv_participation_cap: 0.10      # 1銘柄のポジションがADVに占める上限。元文書 第06節
 sector_cap: 0.25                 # 1セクターあたりの上限(フェーズ6の集計で使う)
 max_positions: 30                # 銘柄数の上限。等金額運用の分母の目安
+
+# TENX v2: hard capを広げず、観測リスクに応じて縮小するプレビュー。
+# 検証が完了するまで既定OFF。表示は行うが実際の上限には反映しない。
+risk_sizing:
+  enabled: false
+  target_annual_vol: 0.60
+  min_vol_factor: 0.35
+  max_pairwise_corr_soft: 0.65
+  evidence_grade_factors:
+    A: 1.0
+    B: 0.9
+    C: 0.75
+    D: 0.5

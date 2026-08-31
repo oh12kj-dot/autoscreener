@@ -1,4 +1,4 @@
-"""バリュエーションの現在地(J-3、investment_decision_gap_2026-08-29.md)。
+"""バリュエーションの現在地(J-3、docs/investment_decision_gap_2026-08-29.md)。
 
 `current_ev_to_gross_profit` が 12.4 だとして、それが**高いのか安いのか**を、
 同じ日の断面での分位で示す。

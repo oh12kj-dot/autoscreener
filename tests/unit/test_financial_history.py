@@ -1,4 +1,4 @@
-"""J-2(investment_decision_gap_2026-08-29.md):財務推移ビューのテスト。
+"""J-2(docs/investment_decision_gap_2026-08-29.md):財務推移ビューのテスト。
 
 `build_financial_history` は表示専用の純関数(DB不要)。
 """

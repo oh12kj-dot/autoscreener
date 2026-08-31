@@ -48,7 +48,7 @@ def _rollback_run_failures(
     failure_statuses: set[str],
     consecutive_failure_threshold: int,
 ) -> int:
-    """A-1(defect_and_edge_audit_2026-08-28.md D-12):一斉隔離を障害として扱う。
+    """A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):一斉隔離を障害として扱う。
 
     サーキットブレーカーが作動した実行は、1銘柄ずつの恒久的失敗ではなく
     インフラ側の広域障害である可能性が高い。その実行で積み上がった
@@ -111,7 +111,7 @@ def run_parallel(
     # `yfinance_client` は安全側の既定値のまま動く(遅すぎて気づきにくい)。
     configure_shared_limiter("yfinance", collection_config.yfinance_requests_per_second)
 
-    # B-6(2026-08-26、model_audit_v4_2026-08-26.md):`/universe/status` が実行
+    # B-6(2026-08-26、docs/model_audit_v4_2026-08-26.md):`/universe/status` が実行
     # 完了までの途中経過をそのまま返しており、「1,215銘柄しか取れていない」と
     # 誤読される原因になっていた。開始時の対象件数を記録しておき、APIが
     # `sum(status_counts) / target_count` で進捗率を算出できるようにする。

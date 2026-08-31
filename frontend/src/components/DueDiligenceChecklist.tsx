@@ -4,7 +4,7 @@ import type { CandidateDetail, ResearchNoteResponse } from "../api/types";
 import { deriveChecklist, externalLinks, type ChecklistState } from "../dueDiligence";
 import { Term } from "./Term";
 
-/** J-5(investment_decision_gap_2026-08-29.md):デューデリ・チェックリスト(11工程)。
+/** J-5(docs/investment_decision_gap_2026-08-29.md):デューデリ・チェックリスト(11工程)。
  *  バックエンド変更ゼロ。既存の `/candidates/{ticker}` と `/research/{ticker}` だけで状態が決まる。 */
 
 const STATE_LABEL: Record<ChecklistState, string> = {

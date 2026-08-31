@@ -99,12 +99,12 @@ class MoicInputs:
     # 過去時点でもそのまま引けるため、ライブとバックテストの同一性は崩れない。
     log_momentum_12m: float | None = None
 
-    # --- S-5診断用(2026-08-26、model_audit_v4_2026-08-26.md) ------------------
+    # --- S-5診断用(2026-08-26、docs/model_audit_v4_2026-08-26.md) ------------------
     # `net_debt` に含まれるオペレーティングリース債務の推定額。取得できない
     # 場合はNone(=診断できない。net_debtの計算そのものは変えない)。
     lease_liability: float | None = None
 
-    # --- E-1診断用(2026-08-27、defect_audit_2026-08-27.md) --------------------
+    # --- E-1診断用(2026-08-27、docs/defect_audit_2026-08-27.md) --------------------
     # `net_debt` の構成要素(Total Debt / 現金)のいずれかが貸借対照表に無く、
     # `or 0.0` で補完された場合に True。計算そのものは変えず、A-1と同型の
     # 「欠損を有利な値へ読み替える」挙動を利用者に可視化するためのフラグ。
@@ -164,7 +164,7 @@ class CrossSection:
     # 30.5:断面の値づけ線 ln(EV/粗利) = c + κ·g の切片 c。
     # 残差 ε = ln M_0 − (c + κ·g_0) が「同じ成長率の銘柄と比べた割高/割安」。
     log_multiple_intercept: float | None = None
-    # A-1(2026-08-26、model_audit_v4_2026-08-26.md):希薄化データが欠損している
+    # A-1(2026-08-26、docs/model_audit_v4_2026-08-26.md):希薄化データが欠損している
     # 銘柄に使う中立値。断面の中央値を使う。理由は `compute_moic` 側のコメント参照。
     median_dilution_cagr: float | None = None
     # `median_log_sigma` を測ったときのホライズン(年)。σ はホライズンとともに
@@ -237,7 +237,7 @@ class MoicResult:
     health_index: float
     raw_log_moic_sigma: float  # 縮小推定**前**の σ
 
-    # --- 診断フラグ(2026-08-26追加、model_audit_v4_2026-08-26.md) ------------
+    # --- 診断フラグ(2026-08-26追加、docs/model_audit_v4_2026-08-26.md) ------------
     growth_rate_clamped: bool = False  # S-6:初期成長率が上限/下限に張り付いたか
     dilution_data_missing: bool = False  # A-1:希薄化が欠損し断面中央値で補完したか
     lease_share_of_net_debt: float | None = None  # S-5:ネットデットに占めるリース債務の割合
@@ -286,7 +286,7 @@ def base_initial_growth(inputs: MoicInputs, config: ScoringConfig) -> float | No
     ことを挙げていた(ランキング対象の15%が該当)。v4の価格ナウキャスト
     (`nowcast_initial_growth`)は、まさにその取りこぼしを埋めるために入っている。
 
-    **S-7(2026-08-26、model_audit_v4_2026-08-26.md)**:上の「食い違ったら
+    **S-7(2026-08-26、docs/model_audit_v4_2026-08-26.md)**:上の「食い違ったら
     遅いほうを信じる」安全装置は、CAGR・YoY のどちらか一方しか無い銘柄では
     働かない(比較対象が無いため)。そうした銘柄には、より保守的な上限
     (`max_initial_rate_single_observation`)を適用する。
@@ -302,7 +302,7 @@ def raw_initial_growth(inputs: MoicInputs) -> float | None:
     """クランプ**前**の初期成長率 g0(3年CAGRと直近年次YoYの小さいほう)。
 
     `base_initial_growth` はこの値を `_clamp` で丸めて返す。E-4
-    (defect_audit_2026-08-27.md)のマルチプル成長弾力性 κ の推定で、
+    (docs/defect_audit_2026-08-27.md)のマルチプル成長弾力性 κ の推定で、
     「モデル自身の丸めを経由していない生の成長率」を説明変数に使えるように
     切り出したもの。ランキング計算は引き続き `base_initial_growth`(丸め後)を
     使う——丸め自体は外挿の暴走防止という別目的で必要。
@@ -420,7 +420,7 @@ def nowcast_initial_growth(
     なく、成長率という**モデルの入力**を修正している。したがってナウキャストが
     効いた銘柄でも、粗利率・希薄化・レバレッジが悪ければ順位は上がらない。
 
-    **S-8(2026-08-26、model_audit_v4_2026-08-26.md)**:実測では上位銘柄の
+    **S-8(2026-08-26、docs/model_audit_v4_2026-08-26.md)**:実測では上位銘柄の
     約3割が `nowcast_cap` の上限に張り付いており、うち複数件は決算ベースの
     成長率が負(縮小)なのに補正で正(成長)へ反転していた。決算という一次
     情報を株価で上書きする補正は、通常の補正より強い証拠を要求すべきなので、
@@ -507,7 +507,7 @@ def terminal_gross_margin(inputs: MoicInputs, config: ScoringConfig) -> float:
     制限する。前期の粗利率が取れない場合はトレンド0(現状維持)とする。
 
     **粗利率の年次系列を使う案(S-3/S-4)は2件とも試して不採用にした**
-    (2026-08-26、model_audit_v4_2026-08-26.md §11)。
+    (2026-08-26、docs/model_audit_v4_2026-08-26.md §11)。
 
     - **S-3(トレンドを全期間の最小二乗の傾きにする)**:狙いどおりシクリカル
       銘柄の1年だけの急変動は穏やかになったが、**主指標のデシル単調性が
@@ -550,7 +550,7 @@ def terminal_gross_margin(inputs: MoicInputs, config: ScoringConfig) -> float:
         # トレンドが測れない = 現状維持。上下限で丸めるだけで、持ち上げはしない。
         return _clamp(current, lower_bound, margin.ceiling)
     total_change = _clamp(annual_trend * config.horizon_years, -margin.max_total_change, margin.max_total_change)
-    # S-1(2026-08-26修正、model_audit_v4_2026-08-26.md):`floor` は「外挿の暴走を
+    # S-1(2026-08-26修正、docs/model_audit_v4_2026-08-26.md):`floor` は「外挿の暴走を
     # 防ぐ下限」のはずが、現在の粗利率が floor を下回る銘柄では外挿結果を
     # 上から押し上げる**加点装置**になっていた(実データでAMR:粗利率11.2%→1.2%の
     # 崩壊が margin_multiple 4.29倍の改善として計上されていた)。floor は現在値
@@ -937,7 +937,7 @@ def projected_net_debt(
     dilution_rate: float,
     config: ScoringConfig,
 ) -> float:
-    """D-6(defect_and_edge_audit_2026-08-28.md):ホライズン終端のネットデット。
+    """D-6(docs/defect_and_edge_audit_2026-08-28.md):ホライズン終端のネットデット。
 
         net_debt_H = net_debt_0
                      - Σ_t FCF_t                       # 営業からの純増減
@@ -1053,7 +1053,7 @@ def compute_moic(
     # (D-6:射影ネットデットが `dilution_rate` を必要とするため、レバレッジ計算より
     #  前に出した。挙動は変わらない。)
     dilution = config.dilution
-    # A-1(2026-08-26、model_audit_v4_2026-08-26.md):`dilution_cagr` が欠損して
+    # A-1(2026-08-26、docs/model_audit_v4_2026-08-26.md):`dilution_cagr` が欠損して
     # いる銘柄を「希薄化ゼロ(=自社株買いと同等の最良シナリオ)」として扱うと、
     # 27.1の「欠損を減点に読み替えない」方針の裏返しで「欠損を満点に読み替える」
     # ことになっていた。断面の中央値(=典型的な希薄化ペース)を中立値として使い、
@@ -1123,7 +1123,7 @@ def compute_moic(
             inputs, initial_growth, fade, config, cross_section.horizon_years
         ),
     )
-    # D-7(defect_and_edge_audit_2026-08-28.md):`expected_moic` は5因子の**中心的
+    # D-7(docs/defect_and_edge_audit_2026-08-28.md):`expected_moic` は5因子の**中心的
     # 見通しの積**である。各因子が対数正規なら中央値の積は積の中央値であって
     # 平均ではない(平均には各因子に exp(σ_i²/2) が要るが掛けていない)。したがって
     # `expected_moic` は構造的に中央値側の量で、そこから −σ²/2 を引くのは根拠の
@@ -1142,7 +1142,7 @@ def compute_moic(
     prior = size_prior(inputs.market_cap, config)
     probability = _clamp(conditional_probability * survival * prior, 0.0, 1.0)
 
-    # --- 診断フラグ(2026-08-26追加、S-5/S-6/A-1、model_audit_v4_2026-08-26.md) --
+    # --- 診断フラグ(2026-08-26追加、S-5/S-6/A-1、docs/model_audit_v4_2026-08-26.md) --
     growth_clamped = is_initial_growth_clamped(inputs, config)
     lease_share = None
     if inputs.lease_liability is not None and inputs.net_debt > 0:
@@ -1192,7 +1192,7 @@ def moic_quantiles(
     survival_probability: float,
     quantiles: "list[float] | tuple[float, ...]" = (0.10, 0.25, 0.50, 0.75, 0.90),
 ) -> dict[float, float]:
-    """実現倍率(MOIC)の分位点(J-4、investment_decision_gap_2026-08-29.md)。
+    """実現倍率(MOIC)の分位点(J-4、docs/investment_decision_gap_2026-08-29.md)。
 
     **混合分布として扱う**:確率 `1 - S` で結果は ≈0(倒産・上場廃止)、確率 `S` で
     対数正規 `LogNormal(log_mu, log_sigma)`。累積確率 `q <= 1 - S` の分位点は

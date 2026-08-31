@@ -1,4 +1,4 @@
-"""A-1(defect_and_edge_audit_2026-08-28.md D-12):スコア行にデータ鮮度を残す。
+"""A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):スコア行にデータ鮮度を残す。
 
 `scores.price_as_of` / `scores.financials_as_of` を追加する。日次バッチが一斉
 隔離(D-12)などで途中停止しても `run_scoring` は前日以前のデータで当日付の

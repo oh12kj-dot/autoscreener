@@ -18,7 +18,7 @@ import yaml
 
 REQUIRED_FIELDS = ("thesis", "assumptions", "premortem", "sizing", "verification_date")
 MIN_PREMORTEM_ITEMS = 3  # 元文書 第08節「失敗要因を3つ書き出す」
-# J-8(investment_decision_gap_2026-08-29.md):買う前に降り方を決める(元文書 第11節)。
+# J-8(docs/investment_decision_gap_2026-08-29.md):買う前に降り方を決める(元文書 第11節)。
 MIN_THESIS_BREAK_ITEMS = 3
 
 _FRONT_MATTER_DELIMITER = "---"

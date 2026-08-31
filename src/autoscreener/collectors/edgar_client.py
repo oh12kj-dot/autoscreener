@@ -43,7 +43,7 @@ COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 COMPANY_CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/{taxonomy}/{tag}.json"
-# B-1(defect_and_edge_audit_2026-08-28.md I-1/I-2):四半期フルインデックス。
+# B-1(docs/defect_and_edge_audit_2026-08-28.md I-1/I-2):四半期フルインデックス。
 # `form.idx` は Form Type でソートされた固定幅テキスト。上場廃止届(Form 25/15)を
 # 全期間走査して、期間中に消えた企業を復元するのに使う。
 FULL_INDEX_FORM_URL = "https://www.sec.gov/Archives/edgar/full-index/{year}/QTR{quarter}/form.idx"

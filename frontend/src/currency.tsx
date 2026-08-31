@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { fetchUsdJpy } from "./api/client";
 
 /**
- * J-10(investment_decision_gap_2026-08-29.md):円換算表示。
+ * J-10(docs/investment_decision_gap_2026-08-29.md):円換算表示。
  *
  * **やらないこと(30.1.3 のまま)**:税務計算、取得為替レートでの損益計算、
  * 確定申告用の出力。ここにあるのは**表示用の換算だけ**。

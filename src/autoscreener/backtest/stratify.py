@@ -1,4 +1,4 @@
-"""KPIの層別(defect_and_edge_audit_2026-08-28.md I-4 / 28.9)。純粋関数。
+"""KPIの層別(docs/defect_and_edge_audit_2026-08-28.md I-4 / 28.9)。純粋関数。
 
 **I-4【高】浮動株比率とインサイダー保有** — `dei:EntityPublicFloat`。
 

@@ -8,7 +8,7 @@
 > concentration and litigation currently have zero detected records for the
 > tracked universe; the UI represents this as no findings, not proof of absence.
 
-yfinanceの定量データから、小型〜中型の米国株を対象に将来10倍株(10バガー)になる可能性が相対的に高い銘柄をスクリーニング・スコアリングするアプリです。詳細な設計・実装の経緯は [`10bagger_app_requirements.md`](10bagger_app_requirements.md) を参照してください。
+yfinanceの定量データから、小型〜中型の米国株を対象に将来10倍株(10バガー)になる可能性が相対的に高い銘柄をスクリーニング・スコアリングするアプリです。詳細な設計・実装の経緯は [`docs/10bagger_app_requirements.md`](docs/10bagger_app_requirements.md)、文書全体の案内は [`docs/README.md`](docs/README.md) を参照してください。
 
 **スコアは0〜100の点数ではなく `P(7年で10倍)` という確率です。** 株価を恒等式
 `売上 × 利益率 × マルチプル ÷ 発行済株式数` に分解し、4因子をそれぞれ7年後まで
@@ -44,17 +44,17 @@ yfinanceの定量データから、小型〜中型の米国株を対象に将来
 >   (「3年で3倍」が中央値1.11倍過大)、無効化されたまま有効だと文書化されて
 >   いた安全装置(BRUNが9位→18位)など。
 >   全件の原因・実測影響・修正内容・**残課題6件**は
->   [`defect_fixes_2026-08-26.md`](defect_fixes_2026-08-26.md) にあります。
+>   [`docs/defect_fixes_2026-08-26.md`](docs/defect_fixes_2026-08-26.md) にあります。
 >   **とくに残課題 R-1(バックテストの生存バイアス)は全KPIを実態より
 >   良く見せているので、`/validation` を読む前に把握してください。**
 > - **一部未着手** — 実データでランキング上位を逆解析した監査により、
 >   **上位30銘柄はモデルの外挿限界(クランプ)に当たった銘柄に偏っている**ことが
 >   分かっています。全26項目の内訳・原因・修正案・実装手順は
->   [`model_audit_v4_2026-08-26.md`](model_audit_v4_2026-08-26.md) にあります。
+>   [`docs/model_audit_v4_2026-08-26.md`](docs/model_audit_v4_2026-08-26.md) にあります。
 >
 > **モデルに手を入れる前に、両方とも必ず読んでください。**
 
-> 🧭 **投資判断の周辺機能(2026-08-29、[`investment_decision_gap_2026-08-29.md`](investment_decision_gap_2026-08-29.md))。**
+> 🧭 **投資判断の周辺機能(2026-08-29、[`docs/investment_decision_gap_2026-08-29.md`](docs/investment_decision_gap_2026-08-29.md))。**
 > 銘柄詳細に「会社の姿」「実績の推移(売上・粗利率・CF・現金・株式数・ランウェイ・
 > F-score内訳)」「バリュエーションの現在地(断面分位・52週位置)」「実現倍率の
 > 分位点(P10–P90)」「デューデリ・チェックリスト(11工程)」「需給(インサイダー・
@@ -62,7 +62,7 @@ yfinanceの定量データから、小型〜中型の米国株を対象に将来
 > 保有画面の売却規律(達成倍率・利食い計画・テーゼ点灯)、円換算トグルも追加。
 > **いずれも表示・記録層で、順位計算(`probability`)は一切動かしていません。**
 
-> 🧭 **投資判断の情報表示(2026-08-30、[`investment_information_gap_2026-08-30.md`](investment_information_gap_2026-08-30.md))。**
+> 🧭 **投資判断の情報表示(2026-08-30、[`docs/investment_information_gap_2026-08-30.md`](docs/investment_information_gap_2026-08-30.md))。**
 > 銘柄詳細に実測リスク(ボラティリティ・ドローダウン・β)、決算サプライズと予想改訂、
 > 経営陣・保有構成、提出書類時系列、同業比較、推定の足場、執行日数、顧客集中・
 > ガイダンス・訴訟の取得状態を追加しました。保有画面では残余必要倍率・必要CAGRと
@@ -75,7 +75,7 @@ yfinanceの定量データから、小型〜中型の米国株を対象に将来
 > **モデル検証の回復(J-0:`recover-quarantine` → `collect-delistings` →
 > `run-backtest`)はまだ実行していません。** 上の R-1 の警告は引き続き有効です。
 
-> 📐 **投資理論に基づく再監査(2026-08-30、[`investment_theory_review_2026-08-30.md`](investment_theory_review_2026-08-30.md))。**
+> 📐 **投資理論に基づく再監査(2026-08-30、[`docs/investment_theory_review_2026-08-30.md`](docs/investment_theory_review_2026-08-30.md))。**
 > 実装の欠陥ではなく「モデルが投資理論として何を主張しているか」だけを見た監査です。
 > 見つかった主要な問題は3つ:
 > ① **点推定が景気循環のどの局面で観測したかに依存している**——粗利率トレンドも
@@ -215,7 +215,7 @@ uv run python -m autoscreener.cli estimate-elasticity          # マルチプル
 
 ### 第30章「TENXの外側」の機能(EDGAR連携・マクロ・保有管理)
 
-[`outside_tenx_implementation_plan_2026-08-28.md`](outside_tenx_implementation_plan_2026-08-28.md)
+[`docs/outside_tenx_implementation_plan_2026-08-28.md`](docs/outside_tenx_implementation_plan_2026-08-28.md)
 に基づく追加機能群。取扱可否・流動性(フェーズ1)は追加設定なしで動きますが、
 SEC EDGAR連携(フェーズ2〜5)とFRED連携(フェーズ7)は `.env` の追加設定が必要です。
 
@@ -228,12 +228,12 @@ SEC EDGAR連携(フェーズ2〜5)とFRED連携(フェーズ7)は `.env` の追�
 > UIの該当パネルは「未取得」を表示し続けます。
 >
 > **とくに `tickers.delisted_at` が0件であることはモデル検証の根幹に効きます。**
-> [`defect_and_edge_audit_2026-08-28.md`](defect_and_edge_audit_2026-08-28.md) の
+> [`docs/defect_and_edge_audit_2026-08-28.md`](docs/defect_and_edge_audit_2026-08-28.md) の
 > D-1(擬似バックテストの母集団が100%生存者)は「致命的」と判定されたまま
 > 未修正であり、`/validation` に出るKPIはすべて実態より良い方向に偏っています。
 > 依存の連鎖(`EDGAR_USER_AGENT` → `refresh-cik-map` → `collect-delistings` /
 > `collect-xbrl` → 生存バイアスの解消)の起点は `.env` の1行です。
-> 詳細は [`investment_theory_review_2026-08-30.md`](investment_theory_review_2026-08-30.md) §3。
+> 詳細は [`docs/investment_theory_review_2026-08-30.md`](docs/investment_theory_review_2026-08-30.md) §3。
 
 ```bash
 # 取扱可否(30.2.1):証券会社の取扱銘柄リストを置く。1つも無ければ全銘柄 "unknown"
@@ -273,13 +273,13 @@ SEC提出書類の本文をClaudeに読ませ、投資ノートの下読みに�
 0件で終わります——他の機能はすべて動きます)。
 
 > ⚠ **この3コマンドは呼ぶたびに実費が発生します。** 日次パイプラインには
-> 入れていません(`draft-note` と同じく、人間が明示的に叩いたときだけ動く)。
+> 入れておらず、人間が明示的に叩いたときだけ動きます。
 > 1回あたりの銘柄数は `config/collection.yaml` の `llm.max_tickers_per_run`
 > (既定25)が上限です。目安として、10-Kのリスク要因1セクション(約3万トークン)
 > で入力$0.15前後です。
 
 > **重要:これらの出力はゲートにもスコアにも入りません。** 根拠は
-> [`outside_tenx_implementation_plan_2026-08-28.md`](outside_tenx_implementation_plan_2026-08-28.md)
+> [`docs/outside_tenx_implementation_plan_2026-08-28.md`](docs/outside_tenx_implementation_plan_2026-08-28.md)
 > 第618行の原則1——再現性が無く検証もできない判定をブロッキング条件にしては
 > ならない。LLMは同じ入力でも毎回同じ答えを返さないため、除外や順位づけの
 > 根拠にするとバックテストが再現できなくなります。保存先は `llm_analyses` 表に
@@ -402,6 +402,32 @@ Windows Task Scheduler にタスク `AutoScreenerDailyPipeline` が登録済み�
    docker compose exec -T db psql -U autoscreener -d postgres -c "DROP DATABASE autoscreener_restore_test;"
    ```
 5. 最低でも四半期に1回、この手順を実際に実行する。
+
+## TENX v2 Live Investment Intelligence
+
+Live Intelligence は既存の `P(horizon年でtarget_moic倍)` を変更しない表示・履歴層です。
+Consensus、Guidance、KPI、債務、資本配分、TAM、マイルストーン等には必ず取得時点と
+`coverage_status` を残し、`not_collected` と `collected_no_finding` を区別します。
+
+初回はマイグレーション後、次の順で収集します。
+
+```bash
+uv run alembic upgrade head
+uv run python -m autoscreener.cli collect-filings
+uv run python -m autoscreener.cli collect-filing-sections
+uv run python -m autoscreener.cli collect-guidance
+uv run python -m autoscreener.cli collect-consensus
+uv run python -m autoscreener.cli collect-investment-intelligence
+```
+
+`collect-investment-intelligence` は保存済みSEC本文だけを読み、KPI・債務満期・資本配分・
+DEF 14Aの所有情報と、研究ノートの `milestones` を再実行可能な形で保存します。
+日次パイプラインではこれらを提出書類収集後に自動実行します。Consensus の外部取得失敗は
+Coreスコアを止めず `collection_failed` として履歴化します。
+
+画面は銘柄詳細の意思決定順セクションと `/data-coverage` で確認できます。すべての
+Live Intelligence API は `as_of` を受け取り、その日より後に観測された値を返しません。
+`/validation` が FAIL / STALE の間、ランキング上部には `Research Only` が固定表示されます。
 
 ## 設定のカスタマイズ
 

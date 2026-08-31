@@ -1,4 +1,4 @@
-"""B-5(defect_and_edge_audit_2026-08-28.md D-10)のテスト:ライブと同一の
+"""B-5(docs/defect_and_edge_audit_2026-08-28.md D-10)のテスト:ライブと同一の
 `evaluate_gates` を、ポイントインタイム値で組み立てた `GateInput` に適用する。
 
 `point_in_time.build_gate_input` は純粋関数(DBに触らない)。

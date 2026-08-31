@@ -80,7 +80,7 @@ def test_run_monitoring_no_tickers_returns_zero_counts():
     assert counts == {"tickers": 0, "new_alerts": 0, "already_open": 0}
 
 
-# --- J-8(investment_decision_gap_2026-08-29.md):利食い閾値の到達アラート ---
+# --- J-8(docs/investment_decision_gap_2026-08-29.md):利食い閾値の到達アラート ---
 
 
 class _FakeNote:

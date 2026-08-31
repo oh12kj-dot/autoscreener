@@ -66,7 +66,7 @@ def run_daily_collection(
         with session_scope() as session:
             return collect_one(session, run_id, symbol, collection_config, snapshot_date)
 
-    # A-1(defect_and_edge_audit_2026-08-28.md D-12):広域障害でブレーカーが
+    # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):広域障害でブレーカーが
     # 作動したら、その実行で積み上がった consecutive_failures を巻き戻して
     # 一斉隔離を防ぐ。
     return run_parallel(

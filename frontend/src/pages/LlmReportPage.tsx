@@ -16,7 +16,7 @@ import { LlmMarkdown } from "../components/LlmMarkdown";
 
 /** K-9:当日ランキングの説明文(生成AI・参考)。
  *
- * **生成はこの画面から実行できる**(ui_llm_provider_selection_2026-08-30.md)。
+ * **生成はこの画面から実行できる**(docs/ui_llm_provider_selection_2026-08-30.md)。
  * ただし課金が発生するので、モデル/プロバイダを選んだうえで確認ダイアログを
  * 挟み、`confirm: true` を明示的に送る。サーバ側でも 30 秒のレート制限と
  * 同時実行ロックがかかる。読み取り(表示)は従来どおり無条件。

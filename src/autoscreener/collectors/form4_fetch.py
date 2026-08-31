@@ -1,4 +1,4 @@
-"""Form 4(インサイダー取引)の実取得(K-7:defect_and_edge_audit_2026-08-28.md I-3 の配線)。
+"""Form 4(インサイダー取引)の実取得(K-7:docs/defect_and_edge_audit_2026-08-28.md I-3 の配線)。
 
 `collectors/form4_source.py` にパース本体(`parse_form4` / `build_insider_signal`)
 は既に実装済み。このモジュールはそこへ実データを流し込む薄いオーケストレーション

@@ -10,7 +10,7 @@ import {
 } from "../api/client";
 import type { LlmConnection, LlmSettings } from "../api/types";
 
-/** K-9(ui_llm_provider_selection_2026-08-30.md):名前付きLLM接続プロファイルの管理。
+/** K-9(docs/ui_llm_provider_selection_2026-08-30.md):名前付きLLM接続プロファイルの管理。
  *
  * provider / base_url / model / APIキー を名前を付けて何件でも保存し、1件を
  * **アクティブ** にする。アクティブな行が collection.yaml / .env の上に重なり、

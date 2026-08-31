@@ -141,11 +141,11 @@ def result_to_factors(result: MoicResult) -> dict[str, float]:
         "target_ev_to_gross_profit": result.target_ev_to_gross_profit,
         "implied_terminal_ev": result.implied_terminal_ev,
         "health_index": result.health_index,
-        # 2026-08-26追加(model_audit_v4_2026-08-26.md)の診断フラグ。
+        # 2026-08-26追加(docs/model_audit_v4_2026-08-26.md)の診断フラグ。
         # `factors` は dict[str, float] なので bool は 0.0/1.0 で表す(S-6/A-1)。
         "growth_rate_clamped": 1.0 if result.growth_rate_clamped else 0.0,
         "dilution_data_missing": 1.0 if result.dilution_data_missing else 0.0,
-        # E-1(2026-08-27、defect_audit_2026-08-27.md):net_debtの構成要素欠損フラグ。
+        # E-1(2026-08-27、docs/defect_audit_2026-08-27.md):net_debtの構成要素欠損フラグ。
         "net_debt_data_missing": 1.0 if result.net_debt_data_missing else 0.0,
         **(
             {"lease_share_of_net_debt": result.lease_share_of_net_debt}
@@ -233,7 +233,7 @@ _MUTABLE_SCORE_COLUMNS = frozenset(
         "log_moic_sigma",
         "survival_probability",
         "factors",
-        # A-1(defect_and_edge_audit_2026-08-28.md D-12):このスコアが読んだデータの日付。
+        # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):このスコアが読んだデータの日付。
         "price_as_of",
         "financials_as_of",
     }
@@ -418,7 +418,7 @@ def primary_universe_inputs(
 def _check_price_freshness(
     session: Session, score_date: date, scoring_config: ScoringConfig
 ) -> str | None:
-    """A-1(defect_and_edge_audit_2026-08-28.md D-12):スコアリングを走らせてよい
+    """A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):スコアリングを走らせてよい
     データ鮮度か。問題があれば `skipped_reason` 文字列を、無ければ None を返す。
 
     2つの前提を確認する:
@@ -488,7 +488,7 @@ def run_scoring(
             )
             return {"scored": 0, "unmeasurable": 0}
 
-        # A-1(defect_and_edge_audit_2026-08-28.md D-12):データ鮮度の前提条件。
+        # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):データ鮮度の前提条件。
         # 収集が一斉隔離・レート制限・ネットワーク断で途中停止すると、ここに
         # 到達しても最新の price_snapshots が数日前で止まっている。その状態で
         # スコアを書くと、古い株価のランキングが今日付で出て、その事実がどこにも
@@ -510,7 +510,7 @@ def run_scoring(
         )
         stored_cross_section = cross_section.to_dict()
 
-        # J-3(investment_decision_gap_2026-08-29.md):同じ日の断面での
+        # J-3(docs/investment_decision_gap_2026-08-29.md):同じ日の断面での
         # バリュエーション分位。**表示専用**であり `factors` JSONB に混ぜるだけ
         # ——`compute_moic` には渡さないので順位は動かない。
         valuation_percentiles = compute_valuation_percentiles(

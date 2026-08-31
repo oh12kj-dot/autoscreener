@@ -1,4 +1,4 @@
-"""上場廃止ハザード較正のテスト(defect_and_edge_audit_2026-08-28.md D-9)。純粋関数。"""
+"""上場廃止ハザード較正のテスト(docs/defect_and_edge_audit_2026-08-28.md D-9)。純粋関数。"""
 
 import math
 import random

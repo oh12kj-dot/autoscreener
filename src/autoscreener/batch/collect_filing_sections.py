@@ -35,7 +35,7 @@ from autoscreener.db.session import session_scope
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TICKER_LIMIT = 300
-_DEFAULT_FORMS: frozenset[str] = frozenset({"10-K", "10-Q", "8-K"})
+_DEFAULT_FORMS: frozenset[str] = frozenset({"10-K", "10-Q", "8-K", "DEF 14A"})
 
 # 決算発表(item 2.02)8-Kは四半期ごとに来るので、追跡開始から溜まった全件を
 # 処理すると際限が無い。直近N件に絞る(8件あれば約2年分:K-4がガイダンス
@@ -166,6 +166,23 @@ def _process_ex99_filing(
     counts["new_sections"] += 1
 
 
+def _process_proxy_filing(session: Session, ticker: Ticker, filing: Filing,
+                          source: SectionSource, today: Any, counts: dict[str, int]) -> None:
+    """Store the latest DEF 14A as one source-preserving proxy section."""
+    if "proxy" in _existing_sections(session, filing.accession_number):
+        counts["existing"] += 1
+        return
+    if not filing.document_url:
+        counts["skipped_no_url"] += 1
+        return
+    text, _truncated = source.document_text(filing.document_url)
+    if not text.strip():
+        counts["not_found"] += 1
+        return
+    _save_section(session, ticker, filing, "proxy", text, filing.document_url, today)
+    counts["new_sections"] += 1
+
+
 def collect_filing_sections(
     symbols: list[str] | None = None,
     *,
@@ -242,6 +259,16 @@ def collect_filing_sections(
                         if "2.02" not in (filing.items or []):
                             continue
                         _process_ex99_filing(session, ticker, filing, source, today, counts)
+
+                if "DEF 14A" in target_forms:
+                    latest_proxy = (
+                        session.query(Filing)
+                        .filter_by(ticker_id=ticker.id, form="DEF 14A")
+                        .order_by(Filing.filed_date.desc())
+                        .first()
+                    )
+                    if latest_proxy is not None:
+                        _process_proxy_filing(session, ticker, latest_proxy, source, today, counts)
             except CollectionError:
                 logger.exception("%s: filing section collection failed", ticker.symbol)
                 counts["failures"] += 1

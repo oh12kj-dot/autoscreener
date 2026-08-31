@@ -4,7 +4,7 @@
 留める(`scripts/run_daily_pipeline.bat` がログファイルに書き出すため、
 異常時はそこで気づける)。メール・デスクトップ通知等への拡張は将来課題。
 
-**2026-08-30(daily_job_status_screen_2026-08-30.md、14.15の運用監視):**
+**2026-08-30(docs/daily_job_status_screen_2026-08-30.md、14.15の運用監視):**
 判定結果を `list[HealthFinding]` として構造化して返すよう拡張した。
 ログ出力(18.7)はそのまま維持し、戻り値を追加しただけ——既存3閾値の値・
 判定ロジックは1行も変えていない(実データに基づく根拠は各定数のコメントを
@@ -23,7 +23,7 @@ COLLECTION_SUCCESS_ERROR_THRESHOLD = 0.90
 QUARANTINE_WARN_RATIO = 0.05
 QUARANTINE_ERROR_RATIO = 0.10
 
-# E-2(2026-08-27、defect_audit_2026-08-27.md):`sanitized`(旧 `invalid_data`、
+# E-2(2026-08-27、docs/defect_audit_2026-08-27.md):`sanitized`(旧 `invalid_data`、
 # B-7で改名)は「一部フィールドを無効化した上でスコアリングに正常採用された
 # データ」であり収集の失敗ではない。実データでは全体の約18.7%を占めるため、
 # 分子に含めないと平常運転日でも success_rate が81%前後に張り付き、ERROR閾値
@@ -32,7 +32,7 @@ QUARANTINE_ERROR_RATIO = 0.10
 # 別のWARNINGとして独立に監視する。
 SANITIZED_RATIO_WARN_THRESHOLD = 0.30
 
-# 新規(2026-08-30、daily_job_status_screen_2026-08-30.md §3.4)。既存3閾値と
+# 新規(2026-08-30、docs/daily_job_status_screen_2026-08-30.md §3.4)。既存3閾値と
 # 異なり実データの根拠は無い——「前回の半分を下回ったら警告」という粗い相対
 # 基準で、08-29型の静かな劣化(前回5,287件→今日0件、のような)を検出する
 # ためのセーフティネットにすぎない。根拠を持って調整されるまでは変更しない。
@@ -154,7 +154,7 @@ def check_pipeline_health(
     failed_stages: list[str],
 ) -> list[HealthFinding]:
     """既存3閾値では拾えない「例外なく完走したのに成果が実質ゼロ」を検出する
-    (§3.4新規、daily_job_status_screen_2026-08-30.md)。2026-08-29の実運用は
+    (§3.4新規、docs/daily_job_status_screen_2026-08-30.md)。2026-08-29の実運用は
     ここで足す3判定すべてに引っかかる(それがこの画面の存在理由)。
 
     `failed_stages` は**中核工程を除いた**失敗工程名のリストを呼び出し側

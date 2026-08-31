@@ -425,7 +425,7 @@ a {
   white-space: nowrap;
 }
 
-/* C-4(model_audit_v4_2026-08-26.md):警告バッジ。amberの「注意」トーンを
+/* C-4(docs/model_audit_v4_2026-08-26.md):警告バッジ。amberの「注意」トーンを
    exclusion-banner等と共有する(独自の色トークンを増やさない)。 */
 .warning-badge-group {
   display: inline-flex;
@@ -787,7 +787,7 @@ section + section {
   font-weight: 600;
 }
 
-/* 収集進捗バナー(E-6、defect_audit_2026-08-27.md)。独自の色トークンは
+/* 収集進捗バナー(E-6、docs/defect_audit_2026-08-27.md)。独自の色トークンは
    増やさず、model-notice と同じ accent 系を使う。 */
 .collection-status-banner {
   display: flex;
@@ -1593,7 +1593,7 @@ td.negative {
   font-size: 0.72rem;
 }
 
-/* ===== 日次ジョブ実行状況(§6.6、daily_job_status_screen_2026-08-30.md)=====
+/* ===== 日次ジョブ実行状況(§6.6、docs/daily_job_status_screen_2026-08-30.md)=====
    新しい配色は導入せず、既存トークンを役割に割り当てる:
    score-high=正常 / score-mid=要注意 / danger=失敗 / score-low=対象外 /
    accent=実行中。色だけに意味を載せない方針(§6.2)なので、記号と語を必ず

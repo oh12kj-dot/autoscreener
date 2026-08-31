@@ -57,16 +57,16 @@ class CandidateSummary(BaseModel):
     # `probability`(7年で10倍)とは別の量であり、**唯一利用者が自分で
     # 答え合わせできる数字**。較正写像が無いときは None。
     calibrated_on_pace_probability: float | None = None
-    # C-1(2026-08-26、model_audit_v4_2026-08-26.md):P(MOIC < 閾値)。
+    # C-1(2026-08-26、docs/model_audit_v4_2026-08-26.md):P(MOIC < 閾値)。
     # `probability`(右裾に届く確率)と対になる、下振れ側の確率。
     probability_below_half: float | None = None
     probability_below_one: float | None = None
-    # J-4(investment_decision_gap_2026-08-29.md):実現倍率の分位点(生存確率込みの
+    # J-4(docs/investment_decision_gap_2026-08-29.md):実現倍率の分位点(生存確率込みの
     # 混合分布)。幅を一覧でも見せるための任意フィールドで、**ソート対象にはしない**。
     moic_p10: float | None = None
     moic_p90: float | None = None
     # C-4:上位に偏っていたクランプ到達・欠損・高レバレッジ等を示す警告コード。
-    # 意味は `/glossary` および `model_audit_v4_2026-08-26.md` 参照。
+    # 意味は `/glossary` および `docs/model_audit_v4_2026-08-26.md` 参照。
     warnings: list[str] = []
     # 30.2.1:証券口座で発注できるか。"tradable" / "not_listed" / "unknown"。
     # リストファイルが無いときは全銘柄 "unknown"(不可と断定しない)。
@@ -83,14 +83,14 @@ class CandidateSummary(BaseModel):
     days_to_exit_stressed: float | None = None
     # "liquidity"(板が制約) / "portfolio"(規律が制約)。どちらが効いているかを見せる
     position_binding_constraint: str | None = None
-    # D-5(defect_and_edge_audit_2026-08-28.md):推定往復取引コスト(bps)。
+    # D-5(docs/defect_and_edge_audit_2026-08-28.md):推定往復取引コスト(bps)。
     # Corwin–Schultz 実効スプレッド + 平方根則マーケットインパクト。モデル確率が
     # 高くてもコストで食われる銘柄を順位表の上で識別できるようにする。
     estimated_round_trip_cost_bps: float | None = None
     # 30.4.3:提出書類から読み取れる即死要因の件数(一覧では件数だけ)。
     blocking_flag_count: int = 0
     warning_flag_count: int = 0
-    # A-1(defect_and_edge_audit_2026-08-28.md D-12):このスコアが読んだデータの
+    # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):このスコアが読んだデータの
     # 日付と、`score_date` からの営業日差。`data_age_days` が2営業日を超えたら
     # UIは「このランキングは古いデータで作られている」と明示する。
     price_as_of: datetime.date | None = None
@@ -148,7 +148,7 @@ class CandidateListResponse(BaseModel):
     items: list[CandidateSummary]
     # 28.12:表示中の上位銘柄をまとめて持った場合の見通し
     portfolio: PortfolioOutlook | None = None
-    # A-1(defect_and_edge_audit_2026-08-28.md D-12):表示中の行のうち最も古い
+    # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):表示中の行のうち最も古い
     # データ齢(営業日)。2 を超えたらUIがページ全体に鮮度警告を出す。
     max_data_age_days: int | None = None
 
@@ -156,7 +156,7 @@ class CandidateListResponse(BaseModel):
 class ScoreHistoryPoint(BaseModel):
     score_date: datetime.date
     probability: float | None
-    # J-3(investment_decision_gap_2026-08-29.md):その日の EV/粗利。直近の
+    # J-3(docs/investment_decision_gap_2026-08-29.md):その日の EV/粗利。直近の
     # 織り込みの変化を見るために `probability` と併記する(`scores.factors` に
     # 日次で貯まっている値)。
     ev_to_gross_profit: float | None = None
@@ -224,7 +224,7 @@ class DilutionOutlook(BaseModel):
 
 
 class CalendarEvent(BaseModel):
-    """J-6(investment_decision_gap_2026-08-29.md):これから起きるイベント1件。
+    """J-6(docs/investment_decision_gap_2026-08-29.md):これから起きるイベント1件。
 
     アプリは日数だけを出す——「決算前に建てるな」とは書かない(それは判断)。
     """
@@ -245,7 +245,7 @@ class CalendarResponse(BaseModel):
 
 
 class SupplyView(BaseModel):
-    """J-7(investment_decision_gap_2026-08-29.md):需給(インサイダー・空売り残・浮動株)。
+    """J-7(docs/investment_decision_gap_2026-08-29.md):需給(インサイダー・空売り残・浮動株)。
 
     **原則3:ゲート・スコアには一切入っていない。** 表示のみ。データが無い項目は
     None(「未取得」)であり 0 とは区別する。空売り残は遅延があるので
@@ -264,7 +264,7 @@ class SupplyView(BaseModel):
 
 
 class CompanyProfile(BaseModel):
-    """J-1(investment_decision_gap_2026-08-29.md):会社の姿。
+    """J-1(docs/investment_decision_gap_2026-08-29.md):会社の姿。
 
     `raw_snapshots.payload.info` に既にある一次情報を**原文のまま**出す。
     要約も翻訳も生成しない(原則1。生成要約は「読んだつもり」を作る)。
@@ -308,7 +308,7 @@ class CandidateDetail(BaseModel):
     log_moic_sigma: float | None = None
     survival_probability: float | None = None
     calibrated_on_pace_probability: float | None = None
-    # C-1(2026-08-26、model_audit_v4_2026-08-26.md):P(MOIC < 閾値)。
+    # C-1(2026-08-26、docs/model_audit_v4_2026-08-26.md):P(MOIC < 閾値)。
     probability_below_half: float | None = None
     probability_below_one: float | None = None
     # J-4:実現倍率の分位点(P10/P25/P50/P75/P90)。生存確率 1-S で ≈0、S で対数正規、
@@ -318,7 +318,7 @@ class CandidateDetail(BaseModel):
     # C-4:警告バッジのコード一覧。
     warnings: list[str] = []
     scoring_version: str | None = None
-    # A-1(defect_and_edge_audit_2026-08-28.md D-12):このスコアが読んだデータの日付。
+    # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):このスコアが読んだデータの日付。
     price_as_of: datetime.date | None = None
     financials_as_of: datetime.date | None = None
     data_age_days: int | None = None
@@ -448,7 +448,7 @@ class FinancialHistoryDerivedView(BaseModel):
 
 
 class FinancialHistoryResponse(BaseModel):
-    """J-2(investment_decision_gap_2026-08-29.md):財務推移。**表示専用**であり
+    """J-2(docs/investment_decision_gap_2026-08-29.md):財務推移。**表示専用**であり
     `run-scoring` / `apply-gates` の出力には一切影響しない。"""
 
     ticker: str
@@ -487,7 +487,7 @@ class UniverseStatusResponse(BaseModel):
     last_collection_run_at: datetime.datetime | None
     universe_size: int
     collection_status_counts: dict[str, int]
-    # B-6(2026-08-26、model_audit_v4_2026-08-26.md):実行中の途中経過を
+    # B-6(2026-08-26、docs/model_audit_v4_2026-08-26.md):実行中の途中経過を
     # 完了結果と区別するため。`collection_target_count` が対象件数、
     # `collection_complete` が真なら`collection_status_counts`の合計が最終値。
     collection_target_count: int | None = None
@@ -642,7 +642,7 @@ class PositionView(BaseModel):
     note_exists: bool = False
     note_is_complete: bool = False
     note_missing_fields: list[str] = []
-    # J-8(investment_decision_gap_2026-08-29.md):売却規律の達成度。
+    # J-8(docs/investment_decision_gap_2026-08-29.md):売却規律の達成度。
     # `achieved_moic` = 現在値 ÷ 取得単価。`next_trim` は未到達で最小の trim_rule。
     # `thesis_break_hits` は点灯中の monitoring_metrics のうち exit_plan.thesis_break の
     # indicator と一致したコード。**閾値は売却シグナルではない**(判断のやり直しの合図)。
@@ -677,7 +677,7 @@ class PortfolioSummary(BaseModel):
 class PositionsResponse(BaseModel):
     items: list[PositionView]
     summary: PortfolioSummary
-    # J-9(investment_decision_gap_2026-08-29.md):保有群をまとめて持ったときの見通し。
+    # J-9(docs/investment_decision_gap_2026-08-29.md):保有群をまとめて持ったときの見通し。
     # 保有0件では None。相関はランキング画面と同じ直近バックテスト由来。
     portfolio: PortfolioOutlook | None = None
     # 現金比率(portfolio_value_usd − 取得原価合計)÷ portfolio_value_usd。
@@ -782,16 +782,24 @@ class BacktestSummary(BaseModel):
     universe_loss_rate: float | None = None
     calibration_error: float | None = None
     delisted_settlement_rate: float | None = None
+    delisted_count: int = 0
+    delisted_settled_count: int = 0
+    bankruptcy_count: int = 0
+    mna_count: int = 0
+    unknown_delisting_count: int = 0
+    effective_independent_periods: float | None = None
+    validation_status: str = "FAIL"
+    validation_reasons: list[str] = []
     rank_ic: float | None = None
     rank_ic_t_stat: float | None = None
     lift_ratio_worst_date: float | None = None
-    # S-8(2026-08-26、model_audit_v4_2026-08-26.md):価格ナウキャストが上限に
+    # S-8(2026-08-26、docs/model_audit_v4_2026-08-26.md):価格ナウキャストが上限に
     # 張り付いている観測の割合。高いほど「補正のはずが実質モメンタム加点に
     # なっている」ことを示す。
     nowcast_cap_hit_rate: float | None = None
     asset_correlation: float | None = None
     is_calibrated: bool = False
-    # A-4/A-5(defect_and_edge_audit_2026-08-28.md D-2/D-3):検出力とKPI合否。
+    # A-4/A-5(docs/defect_and_edge_audit_2026-08-28.md D-2/D-3):検出力とKPI合否。
     # `effective_dates` は Kish 実効評価日数、`*_ci` は評価日単位ブロック・
     # ブートストラップの95%CI。`non_overlapping` は保有期間の重ならない実行か。
     effective_dates: float | None = None
@@ -817,7 +825,7 @@ class BacktestSummary(BaseModel):
     caveats: list[str] = []
 
 
-# --- 日次ジョブ実行状況(14.15、daily_job_status_screen_2026-08-30.md §5) --------
+# --- 日次ジョブ実行状況(14.15、docs/daily_job_status_screen_2026-08-30.md §5) --------
 
 
 class PipelineHealthFinding(BaseModel):
@@ -984,7 +992,7 @@ class LlmReportResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# K-9(ui_llm_provider_selection_2026-08-30.md):UIからのレポート生成。
+# K-9(docs/ui_llm_provider_selection_2026-08-30.md):UIからのレポート生成。
 #
 # **`POST /llm/report/generate` はAPI層で唯一の書き込みであり、原則18.6を
 # 意図的に破る。** 生成には課金が伴うので、`confirm=true` を必須にし、サーバ側で
@@ -1096,3 +1104,58 @@ class LlmConnectionUpdate(BaseModel):
     effort: str | None = None
     send_effort: bool | None = None
     api_key: str | None = None
+
+
+# TENX v2 endpoints intentionally share metadata while keeping their payloads
+# independent. This prevents CandidateDetail from becoming an unbounded schema.
+class ReverseValuationScenarioView(BaseModel):
+    required_return: float
+    implied_revenue_cagr: float | None = None
+    implied_terminal_margin: float | None = None
+    implied_terminal_multiple: float | None = None
+    feasible: bool
+    reason: str | None = None
+    tenx_gap: float | None = None
+    consensus_gap: float | None = None
+    guidance_gap: float | None = None
+
+
+class InvestmentIntelligenceResponse(BaseModel):
+    ticker: str
+    as_of: datetime.date
+    coverage_status: str
+    source: str | None = None
+    data_age_days: int | None = None
+    not_used_in_ranking: bool = True
+    data: dict | list | None = None
+
+
+class ReverseValuationResponse(BaseModel):
+    ticker: str
+    as_of: datetime.date
+    horizon_years: int
+    coverage_status: str
+    source: str = "tenx_core_assumptions"
+    not_used_in_ranking: bool = True
+    model_family: str
+    model_supported: bool
+    tenx_initial_growth: float | None = None
+    consensus_growth: float | None = None
+    management_guidance_growth: float | None = None
+    scenarios: list[ReverseValuationScenarioView] = []
+    return_distribution: dict[str, float] | None = None
+
+
+class DataCoverageRow(BaseModel):
+    dataset: str
+    coverage: float
+    stale: float
+    failed: float
+    last_successful: datetime.datetime | None = None
+    source: str | None = None
+
+
+class DataCoverageResponse(BaseModel):
+    as_of: datetime.date
+    ticker_count: int
+    datasets: list[DataCoverageRow]

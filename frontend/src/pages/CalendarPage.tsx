@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { fetchCalendar } from "../api/client";
 import type { CalendarResponse } from "../api/types";
 
-/** J-6(investment_decision_gap_2026-08-29.md):カタリスト・カレンダー。
+/** J-6(docs/investment_decision_gap_2026-08-29.md):カタリスト・カレンダー。
  *  次回決算日(yfinance)とノートの検証日を近い順に並べる。
  *  **「決算前に建てるな」とは書かない**——それは判断であり、アプリは日数だけを出す。 */
 

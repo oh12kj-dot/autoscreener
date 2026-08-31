@@ -56,7 +56,7 @@ from autoscreener.config import (
     load_universe_config,
 )
 from autoscreener.screening.trading_cost import corwin_schultz_spread, round_trip_cost_bps
-from autoscreener.db.models import BacktestRun, Ticker
+from autoscreener.db.models import BacktestRun, DelistingEvent, Ticker
 from autoscreener.db.session import session_scope
 from autoscreener.scoring.engine import config_hash
 from autoscreener.scoring.elasticity import ElasticityEstimate, estimate_growth_elasticity
@@ -120,7 +120,7 @@ class RebalanceSlice:
     final_close: dict[int, float]
     median_dollar_volume: dict[int, float]
     last_price_date: dict[int, datetime.date]
-    # D-5(defect_and_edge_audit_2026-08-28.md):`as_of` 直近の日次 (high, low) 系列
+    # D-5(docs/defect_and_edge_audit_2026-08-28.md):`as_of` 直近の日次 (high, low) 系列
     # (古い→新しい)。Corwin–Schultz 実効スプレッド推定に使う。
     recent_hl_bars: dict[int, list[tuple[float, float]]] = field(default_factory=dict)
     # D-11:保有期間 (as_of, target] に落ちた1株あたり配当の合計。総リターン算出用。
@@ -378,7 +378,7 @@ def _passes_point_in_time_gate(
     scoring_config: ScoringConfig,
     ceilings: UniverseCeilings,
 ) -> bool:
-    """D-10(defect_and_edge_audit_2026-08-28.md):ライブと**同一の** `evaluate_gates`
+    """D-10(docs/defect_and_edge_audit_2026-08-28.md):ライブと**同一の** `evaluate_gates`
     を、ポイントインタイム値で通す。
 
     以前はここにライブと別物のゲートを実装しており、`cash_runway_floor`
@@ -446,7 +446,8 @@ def _passes_legacy_gate(
 
 
 def _realized_return(
-    ticker_id: int, price_slice: RebalanceSlice, target_date: datetime.date
+    ticker_id: int, price_slice: RebalanceSlice, target_date: datetime.date,
+    delisting_event: DelistingEvent | None = None,
 ) -> tuple[float, str] | None:
     """建玉→決済の実現リターンと決済区分。建てられなければ None。
 
@@ -458,7 +459,7 @@ def _realized_return(
     if entry is None or entry <= 0:
         return None
 
-    # D-11(defect_and_edge_audit_2026-08-28.md):価格リターンではなく総リターン。
+    # D-11(docs/defect_and_edge_audit_2026-08-28.md):価格リターンではなく総リターン。
     # 保有期間に落ちた配当を分子に足す。配当を無視すると、成熟した配当銘柄が
     # 混じるユニバースの基準率(リフトの分母)が系統的に低く出る。
     dividends = price_slice.dividends_in_holding.get(ticker_id, 0.0)
@@ -466,6 +467,26 @@ def _realized_return(
     exit_price = price_slice.exit_close.get(ticker_id)
     if exit_price is not None:
         return (exit_price + dividends) / entry - 1, "market"
+
+    if delisting_event is not None:
+        event_type = delisting_event.event_type
+        settlement = (
+            float(delisting_event.settlement_value_per_share)
+            if delisting_event.settlement_value_per_share is not None else None
+        )
+        if not delisting_event.source:
+            return -1.0, "unknown_delisting"
+        if event_type == "cash_acquisition" and settlement is not None:
+            return (settlement + dividends) / entry - 1, "cash_acquisition"
+        if event_type == "stock_acquisition" and settlement is not None:
+            return (settlement + dividends) / entry - 1, "stock_acquisition"
+        if event_type in {"cash_acquisition", "stock_acquisition"}:
+            return -1.0, "unknown_delisting"
+        if event_type in {"bankruptcy", "liquidation"}:
+            recovery = settlement or 0.0
+            return (recovery + dividends) / entry - 1, event_type
+        if event_type in {"exchange_transfer", "unknown"}:
+            return -1.0, "unknown_delisting"
 
     last_date = price_slice.last_price_date.get(ticker_id)
     if last_date is not None and last_date < target_date - datetime.timedelta(days=_MAX_EXIT_LOOKAHEAD_DAYS):
@@ -480,7 +501,7 @@ def _realized_return(
         final_close = price_slice.final_close.get(ticker_id)
         if final_close is not None:
             return (final_close + dividends) / entry - 1, "delisted"
-        # B-2(defect_and_edge_audit_2026-08-28.md D-1):価格が全く取れなかった
+        # B-2(docs/defect_and_edge_audit_2026-08-28.md D-1):価格が全く取れなかった
         # 廃止銘柄。−100% で決め打ちせず別区分にして、KPIを「含めた場合/除いた
         # 場合」の両方で出せるようにする(片方に決め打ちすると隠れバイアスになる)。
         return -1.0, "delisted_unpriced"
@@ -521,6 +542,13 @@ def _evaluate_one_date(
 ) -> list[Observation]:
     price_slice = _load_slice(session, as_of, horizon_days)
     target_date = as_of + datetime.timedelta(days=horizon_days)
+    delisting_events = {
+        row.ticker_id: row
+        for row in session.query(DelistingEvent).filter(
+            DelistingEvent.event_date > as_of,
+            DelistingEvent.event_date <= target_date,
+        ).order_by(DelistingEvent.event_date.asc()).all()
+    }
     # D-5:名目建玉サイズ(往復コストの平方根則インパクトに使う)。
     nominal_position_usd = portfolio_config.portfolio_value_usd * portfolio_config.per_position_cap
 
@@ -570,7 +598,9 @@ def _evaluate_one_date(
         result = compute_moic(inputs, cross_section, scoring_config)
         if result is None:
             continue
-        realized = _realized_return(ticker_id, price_slice, target_date)
+        realized = _realized_return(
+            ticker_id, price_slice, target_date, delisting_events.get(ticker_id)
+        )
         if realized is None:
             continue
         realized_return, settlement = realized
@@ -615,7 +645,7 @@ def collect_backtest_observations(
 ) -> list[Observation]:
     """擬似バックテストの観測を集めるところまで(KPI算出・保存はしない)。
 
-    A-4(defect_and_edge_audit_2026-08-28.md D-2)の `compare-configs` が、同じ
+    A-4(docs/defect_and_edge_audit_2026-08-28.md D-2)の `compare-configs` が、同じ
     価格・財務データに対して2つの `config/scoring.yaml` でKPIを出して比較する
     ために使う。**設定ごとに観測を作り直す必要がある**——`MoicInputs` は共通でも
     断面統計(σの縮小中心・ナウキャスト基準線)・生存ハザード・κ が設定で変わる。
@@ -862,7 +892,7 @@ def fit_calibration_from_observations(
 
 @dataclass(frozen=True)
 class ElasticityCrossSection:
-    """1評価日分の κ 推定。E-4(defect_audit_2026-08-27.md)。
+    """1評価日分の κ 推定。E-4(docs/defect_audit_2026-08-27.md)。
 
     `full` は全銘柄(初期成長率がクランプされた銘柄を含む)での推定で、これが
     従来 `estimate_elasticity_over_history` が返していた値。`unclamped` は

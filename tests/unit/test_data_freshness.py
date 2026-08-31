@@ -1,4 +1,4 @@
-"""A-1(defect_and_edge_audit_2026-08-28.md D-12)のテスト:
+"""A-1(docs/defect_and_edge_audit_2026-08-28.md D-12)のテスト:
 
   1. `business_days_between` の境界
   2. `run_scoring` のデータ鮮度ガード(`_check_price_freshness`)

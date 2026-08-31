@@ -52,7 +52,7 @@ class Ticker(Base):
     # 呼び出し側が毎回 f"{cik:010d}" を書くことになるため。
     cik: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
 
-    # D-4(defect_and_edge_audit_2026-08-28.md):ベンチマーク(IWM/IWC/IJR/SPY)。
+    # D-4(docs/defect_and_edge_audit_2026-08-28.md):ベンチマーク(IWM/IWC/IJR/SPY)。
     # 価格は収集・バックフィルするが、ゲート判定・スコアリング・ランキングには
     # 一切混ぜない。ポートフォリオ・シミュレーションの超過CAGR算出に使う。
     is_benchmark: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -148,7 +148,7 @@ class PriceSnapshot(Base):
     volume: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 13.4: 分割調整後の発行済株式数。希薄化率計算の基礎データ。
     shares_outstanding: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # D-11(defect_and_edge_audit_2026-08-28.md):その取引日の1株あたり配当(ex-date)。
+    # D-11(docs/defect_and_edge_audit_2026-08-28.md):その取引日の1株あたり配当(ex-date)。
     # `_realized_return` を価格リターンから**総リターン**へ変えるのに使う。配当が
     # 抜けているとユニバース基準率(リフトの分母)が系統的に低く出て、リフトが
     # 過大に見える。分割と同じ経路(yfinance actions 列)で拾う。
@@ -230,7 +230,7 @@ class Score(Base):
     # 1銘柄あたり十数個の数値にすぎず、raw_snapshots を読み直すより桁違いに速い。
     inputs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    # A-1(defect_and_edge_audit_2026-08-28.md D-12):このスコアが実際に読んだ
+    # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):このスコアが実際に読んだ
     # データの日付。`score_date` と比べて何営業日古いかをAPIが `data_age_days` として
     # 返す。日次収集が一斉隔離などで止まっても `run_scoring` は前日以前のデータで
     # 当日付のランキングを書けてしまうため、その事実を利用者に見せる。
@@ -302,7 +302,7 @@ class BacktestRun(Base):
     # ポートフォリオ確率(「上位N銘柄で少なくとも1つ当たる確率」)に使う。
     asset_correlation: Mapped[float | None] = mapped_column(Numeric(6, 5), nullable=True)
 
-    # D-2(defect_and_edge_audit_2026-08-28.md):評価日の間隔がホライズン未満で、
+    # D-2(docs/defect_and_edge_audit_2026-08-28.md):評価日の間隔がホライズン未満で、
     # 保有期間が重なっている実行かどうか。False(非重複)の実行が「正直な検出力」で
     # あり、`run-backtest --non-overlapping` で併走させる。
     overlapping: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -406,7 +406,7 @@ class Alert(Base):
 
 
 class InsiderTransaction(Base):
-    """Form 4 由来のインサイダー取引(J-7、investment_decision_gap_2026-08-29.md)。
+    """Form 4 由来のインサイダー取引(J-7、docs/investment_decision_gap_2026-08-29.md)。
 
     **原則3:ゲートにもスコアにも入れない。** 表示とアラートのみ。インサイダー
     売却は権利行使・納税・分散のいずれでも起きるため、UI は色で断定しない。
@@ -459,7 +459,7 @@ class ShortInterest(Base):
 
 
 class EventCalendar(Base):
-    """これから起きるイベント(J-6、investment_decision_gap_2026-08-29.md)。
+    """これから起きるイベント(J-6、docs/investment_decision_gap_2026-08-29.md)。
 
     **`scores` / `raw_snapshots` から物理的に分離した専用テーブル。** 次回決算日は
     現在時点のスナップショットしか取れず過去に遡れないため、モデル(`scoring/`)と
@@ -485,7 +485,7 @@ class EventCalendar(Base):
 
 class PipelineRun(Base):
     """日次パイプライン1回分の実行記録(14.15の運用監視、
-    daily_job_status_screen_2026-08-30.md §3.1)。
+    docs/daily_job_status_screen_2026-08-30.md §3.1)。
 
     `collection_logs` は収集工程の**銘柄単位**のログであり、パイプライン全体の
     実行単位ではない。両者は別の粒度なので別テーブルにする(collection_logs の
@@ -775,7 +775,7 @@ class LlmAnalysis(Base):
 
 
 class LlmConnection(Base):
-    """名前を付けて保存する LLM 接続プロファイル(ui_llm_provider_selection_2026-08-30.md)。
+    """名前を付けて保存する LLM 接続プロファイル(docs/ui_llm_provider_selection_2026-08-30.md)。
 
     UIから「provider / base_url / model / APIキー」を名前付きで何件でも保存し、
     そのうち1件を **アクティブ** にする。アクティブな行が
@@ -824,3 +824,278 @@ class LlmConnection(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+# TENX Investment Decision v2: every table below is an append-only/display layer.
+# Nothing in scoring/engine.py reads these models.
+class DelistingEvent(Base):
+    __tablename__ = "delisting_events"
+    __table_args__ = (UniqueConstraint("ticker_id", "event_date", "event_type", name="uq_delisting_event"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    event_date: Mapped[datetime.date] = mapped_column(Date, index=True)
+    event_type: Mapped[str] = mapped_column(String(30))
+    last_trade_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    last_trade_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    settlement_value_per_share: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    settlement_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    confidence: Mapped[str] = mapped_column(String(20), default="unknown")
+
+
+class AnalystConsensusSnapshot(Base):
+    __tablename__ = "analyst_consensus_snapshots"
+    __table_args__ = (UniqueConstraint("ticker_id", "observed_at", "period_end", "source", name="uq_consensus_snapshot"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    period_type: Mapped[str] = mapped_column(String(4))
+    period_end: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    revenue_mean: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    revenue_low: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    revenue_high: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    eps_mean: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    ebitda_mean: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    analyst_count: Mapped[int | None] = mapped_column(nullable=True)
+    target_price_mean: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20), default="unknown")
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+
+
+class ManagementGuidanceSnapshot(Base):
+    __tablename__ = "management_guidance_snapshots"
+    __table_args__ = (UniqueConstraint("ticker_id", "announced_at", "period_end", "metric", "source", name="uq_management_guidance_snapshot"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    announced_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    period_end: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    metric: Mapped[str] = mapped_column(String(80))
+    low: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    high: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    status: Mapped[str] = mapped_column(String(20))
+    source: Mapped[str] = mapped_column(String(60))
+    source_accession: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20), default="unknown")
+
+
+class MarketOpportunityEstimate(Base):
+    __tablename__ = "market_opportunity_estimates"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    as_of: Mapped[datetime.date] = mapped_column(Date)
+    method: Mapped[str] = mapped_column(String(30))
+    tam_value: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    sam_value: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    current_revenue_addressable: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    penetration_rate: Mapped[float | None] = mapped_column(Numeric(12, 8), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    formula_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[str] = mapped_column(String(20))
+    created_by: Mapped[str] = mapped_column(String(20))
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+
+
+class MarketOpportunityComponent(Base):
+    __tablename__ = "market_opportunity_components"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_id: Mapped[int] = mapped_column(ForeignKey("market_opportunity_estimates.id"), index=True)
+    component_name: Mapped[str] = mapped_column(String(120))
+    quantity: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    price_per_unit: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    penetration_assumption: Mapped[float | None] = mapped_column(Numeric(12, 8), nullable=True)
+    result_value: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+
+
+class OperatingKpiDefinition(Base):
+    __tablename__ = "operating_kpi_definitions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), unique=True)
+    label: Mapped[str] = mapped_column(String(160))
+    unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    model_family: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    higher_is_better: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class OperatingKpiObservation(Base):
+    __tablename__ = "operating_kpi_observations"
+    __table_args__ = (UniqueConstraint("ticker_id", "kpi_definition_id", "period_end", "reported_at", name="uq_kpi_observation"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    kpi_definition_id: Mapped[int] = mapped_column(ForeignKey("operating_kpi_definitions.id"), index=True)
+    period_end: Mapped[datetime.date] = mapped_column(Date)
+    reported_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    value: Mapped[float | None] = mapped_column(Numeric(24, 6), nullable=True)
+    company_definition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_accession: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extraction_method: Mapped[str] = mapped_column(String(20))
+    confidence: Mapped[str] = mapped_column(String(20))
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+
+
+class CapitalAllocationEvent(Base):
+    __tablename__ = "capital_allocation_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    announced_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    event_type: Mapped[str] = mapped_column(String(30))
+    amount: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    counterparty_or_asset: Mapped[str | None] = mapped_column(Text, nullable=True)
+    shares_issued: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    price_per_share: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_accession: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20))
+
+
+class ManagementIncentiveSnapshot(Base):
+    __tablename__ = "management_incentive_snapshots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    proxy_date: Mapped[datetime.date] = mapped_column(Date)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    executive_name: Mapped[str] = mapped_column(String(160))
+    role: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    founder_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    tenure_years: Mapped[float | None] = mapped_column(Numeric(8, 2), nullable=True)
+    beneficial_ownership_pct: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    total_compensation: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    equity_compensation_pct: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    performance_metrics: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_accession: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20))
+
+
+class DebtInstrument(Base):
+    __tablename__ = "debt_instruments"
+    __table_args__ = (UniqueConstraint("ticker_id", "instrument_id", "as_of", name="uq_debt_instrument"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    instrument_id: Mapped[str] = mapped_column(String(120))
+    as_of: Mapped[datetime.date] = mapped_column(Date)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    instrument_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    principal: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    coupon_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    rate_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    benchmark_rate: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    maturity_date: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    secured_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    convertible_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    conversion_price: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    covenant_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_accession: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20))
+
+
+class LiquidityFacility(Base):
+    __tablename__ = "liquidity_facilities"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    as_of: Mapped[datetime.date] = mapped_column(Date)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revolver_total: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    revolver_drawn: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    revolver_available: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    atm_remaining: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    shelf_remaining: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    cash_balance: Mapped[float | None] = mapped_column(Numeric(24, 4), nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_accession: Mapped[str | None] = mapped_column(String(25), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20))
+
+
+class ThesisMilestone(Base):
+    __tablename__ = "thesis_milestones"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    due_date: Mapped[datetime.date] = mapped_column(Date)
+    category: Mapped[str] = mapped_column(String(30))
+    metric_code: Mapped[str] = mapped_column(String(80))
+    bull_threshold: Mapped[float | None] = mapped_column(Numeric(24, 6), nullable=True)
+    base_threshold: Mapped[float | None] = mapped_column(Numeric(24, 6), nullable=True)
+    bear_threshold: Mapped[float | None] = mapped_column(Numeric(24, 6), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20))
+    resolved_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_value: Mapped[float | None] = mapped_column(Numeric(24, 6), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20), default="manual")
+
+
+class MacroExposureSnapshot(Base):
+    __tablename__ = "macro_exposure_snapshots"
+    __table_args__ = (UniqueConstraint("ticker_id", "factor", "observed_at", name="uq_macro_exposure"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    observation_end: Mapped[datetime.date] = mapped_column(Date)
+    factor: Mapped[str] = mapped_column(String(40))
+    beta: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
+    downside_beta: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
+    sample_count: Mapped[int | None] = mapped_column(nullable=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20))
+
+
+class LiveDatasetCoverage(Base):
+    """Collection attempt state, including the important no-finding outcome."""
+    __tablename__ = "live_dataset_coverage"
+    __table_args__ = (UniqueConstraint("ticker_id", "dataset", "observed_at", "source", name="uq_live_dataset_coverage"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    dataset: Mapped[str] = mapped_column(String(60), index=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    source: Mapped[str] = mapped_column(String(60))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    confidence: Mapped[str] = mapped_column(String(20))

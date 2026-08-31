@@ -1,4 +1,4 @@
-"""FINRA 空売り残高(defect_and_edge_audit_2026-08-28.md I-5)。
+"""FINRA 空売り残高(docs/defect_and_edge_audit_2026-08-28.md I-5)。
 
 半月ごとの全銘柄空売り残高が無料・機械可読で公開されている(consolidated short
 interest ファイル)。`days_to_cover = short_interest / avg_daily_volume`。

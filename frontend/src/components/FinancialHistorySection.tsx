@@ -13,7 +13,7 @@ import {
 import { fetchCandidateFinancials } from "../api/client";
 import type { FinancialHistoryResponse, FinancialPeriodView } from "../api/types";
 
-/** J-2(investment_decision_gap_2026-08-29.md):実績の推移。
+/** J-2(docs/investment_decision_gap_2026-08-29.md):実績の推移。
  *  `raw_snapshots.payload` に既にある財務三表を整形して見せるだけ。順位計算には一切影響しない。 */
 
 function fmtMoney(v: number | null): string {

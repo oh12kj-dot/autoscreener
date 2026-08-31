@@ -91,7 +91,7 @@ def run_monitoring(as_of=None) -> dict[str, int]:
 
     counts = {"tickers": 0, "new_alerts": 0, "already_open": 0}
 
-    # J-8(investment_decision_gap_2026-08-29.md):保有銘柄の取得単価。達成倍率が
+    # J-8(docs/investment_decision_gap_2026-08-29.md):保有銘柄の取得単価。達成倍率が
     # ノートの `exit_plan.trim_rule` の閾値を超えたら info アラートを1回だけ立てる。
     open_positions_by_symbol = {
         p.ticker.upper(): p for p in load_positions_config().positions if p.closed_on is None

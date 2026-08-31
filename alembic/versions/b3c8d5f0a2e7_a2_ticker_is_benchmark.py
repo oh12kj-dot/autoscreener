@@ -1,4 +1,4 @@
-"""A-2(defect_and_edge_audit_2026-08-28.md D-4):tickers.is_benchmark。
+"""A-2(docs/defect_and_edge_audit_2026-08-28.md D-4):tickers.is_benchmark。
 
 IWM / IWC / IJR / SPY を「ベンチマーク」として登録できるようにする。価格は
 収集・バックフィルするが、除外ゲート・スコアリング・ランキングには一切混ぜない

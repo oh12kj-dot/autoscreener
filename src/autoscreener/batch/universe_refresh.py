@@ -63,7 +63,7 @@ def refresh_universe(snapshot_date: date | None = None) -> int:
                     )
                 )
 
-        # B-8(2026-08-26、model_audit_v4_2026-08-26.md):`tickers` には候補フィルタ
+        # B-8(2026-08-26、docs/model_audit_v4_2026-08-26.md):`tickers` には候補フィルタ
         # (`universe_source.filter_candidates`)が実装される**前**に登録された
         # 残骸が残っていた——実データで優先株等24銘柄("AHL$D"等)。これらは
         # 毎日の収集対象であり続け、存在しないシンボルへの404を吐き続けていた。

@@ -1,4 +1,4 @@
-"""52週レンジ内の位置(J-3、investment_decision_gap_2026-08-29.md)。
+"""52週レンジ内の位置(J-3、docs/investment_decision_gap_2026-08-29.md)。
 
 `price_snapshots` の直近1年の終値から高値・安値と、現在値のレンジ内位置
 (0〜1)を出す。表示専用——順位計算には使わない。

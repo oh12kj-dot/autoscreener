@@ -1,4 +1,4 @@
-"""カタリスト・カレンダーの収集バッチ(J-6、investment_decision_gap_2026-08-29.md)。
+"""カタリスト・カレンダーの収集バッチ(J-6、docs/investment_decision_gap_2026-08-29.md)。
 
 対象は 30.3.4 の**追跡対象銘柄**(保有 + 上位N + ノートあり)に限定する。
 全銘柄には広げない(レート制限 8.3・14.9)。yfinance `Ticker.calendar` の

@@ -19,7 +19,7 @@ dependencies = [
     # K-9:Claude API(定性分析)。未設定のAPIキーで無効化できるため、
     # LLMを使わない運用でもこの依存は害にならない。
     "anthropic>=1.0,<2.0",
-    # K-9(UIプロバイダ選択、ui_llm_provider_selection_2026-08-30.md):
+    # K-9(UIプロバイダ選択、docs/ui_llm_provider_selection_2026-08-30.md):
     # `llm.provider = openai_compat` のときだけ使う。NVIDIA NIM / ChatGPT /
     # Ollama / vLLM / LiteLLM はいずれも OpenAI 互換 API を持つので、SDKは1つで足りる。
     "openai>=1.40,<3.0",

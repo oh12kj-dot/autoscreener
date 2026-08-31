@@ -1,4 +1,4 @@
-"""J-6(investment_decision_gap_2026-08-29.md):event_calendar。
+"""J-6(docs/investment_decision_gap_2026-08-29.md):event_calendar。
 
 次回決算日・検証日などの「これから起きるイベント」を、`scores` / `raw_snapshots`
 から物理的に分離した専用テーブルに保存する。スコアリング・バックテストからは

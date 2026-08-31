@@ -808,7 +808,7 @@ def test_positions_endpoint_returns_empty_list_when_no_positions_file():
     assert body["cash_ratio"] is None or 0.0 <= body["cash_ratio"] <= 1.0
 
 
-# --- J-8(investment_decision_gap_2026-08-29.md):売却規律の器 ---
+# --- J-8(docs/investment_decision_gap_2026-08-29.md):売却規律の器 ---
 
 
 def test_exit_plan_view_picks_next_unreached_trim_and_matches_thesis_break():
@@ -1019,7 +1019,7 @@ def test_alerts_endpoint_rejects_unknown_severity():
     assert client.get("/api/v1/alerts?severity=bogus").status_code == 422
 
 
-# --- J-1(investment_decision_gap_2026-08-29.md):会社概要の表示 ---
+# --- J-1(docs/investment_decision_gap_2026-08-29.md):会社概要の表示 ---
 
 
 def _seed_profile_ticker(symbol: str, *, info: dict, listed_date=None, cik=None, industry=None) -> None:
@@ -1112,7 +1112,7 @@ def test_candidate_detail_profile_falls_back_to_ticker_columns_when_info_sparse(
         _cleanup([symbol])
 
 
-# --- J-2(investment_decision_gap_2026-08-29.md):財務推移エンドポイント ---
+# --- J-2(docs/investment_decision_gap_2026-08-29.md):財務推移エンドポイント ---
 
 
 def test_financials_endpoint_returns_series_from_payload():
@@ -1185,7 +1185,7 @@ def test_financials_endpoint_unknown_ticker_returns_404():
     assert client.get("/api/v1/candidates/ZZNOTREAL8/financials").status_code == 404
 
 
-# --- J-3(investment_decision_gap_2026-08-29.md):バリュエーションの現在地 ---
+# --- J-3(docs/investment_decision_gap_2026-08-29.md):バリュエーションの現在地 ---
 
 
 def test_candidate_detail_reports_52_week_range_and_ev_history():
@@ -1256,7 +1256,7 @@ def test_candidate_detail_reports_52_week_range_and_ev_history():
         _cleanup([symbol])
 
 
-# --- J-4(investment_decision_gap_2026-08-29.md):実現倍率の分位点 ---
+# --- J-4(docs/investment_decision_gap_2026-08-29.md):実現倍率の分位点 ---
 
 
 def test_candidate_detail_and_list_expose_moic_quantiles(seeded_candidate):

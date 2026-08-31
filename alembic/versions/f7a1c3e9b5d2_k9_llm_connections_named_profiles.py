@@ -1,6 +1,6 @@
 """K-9:名前付きLLM接続プロファイル(llm_connections)。
 
-`ui_llm_provider_selection_2026-08-30.md`。provider / base_url / model / APIキーを
+`docs/ui_llm_provider_selection_2026-08-30.md`。provider / base_url / model / APIキーを
 名前付きで何件でも保存し、1件をアクティブにする。アクティブな行が
 `config/collection.yaml` / `.env` の上に重なる(CLIも同じ解決)。
 

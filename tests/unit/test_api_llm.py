@@ -6,7 +6,7 @@
 
 **読み取りは無条件。** `POST /llm/report/generate` だけが書き込みで、課金が
 伴うので `confirm=true` 必須・30秒レート制限・同時実行ロックを検査する
-(ui_llm_provider_selection_2026-08-30.md)。実LLMは叩かず `generate_report` を
+(docs/ui_llm_provider_selection_2026-08-30.md)。実LLMは叩かず `generate_report` を
 差し替える。
 """
 

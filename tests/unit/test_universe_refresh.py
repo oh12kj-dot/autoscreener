@@ -1,4 +1,4 @@
-"""週次ユニバース更新のテスト(B-8、model_audit_v4_2026-08-26.md)。"""
+"""週次ユニバース更新のテスト(B-8、docs/model_audit_v4_2026-08-26.md)。"""
 
 import datetime
 from unittest.mock import patch

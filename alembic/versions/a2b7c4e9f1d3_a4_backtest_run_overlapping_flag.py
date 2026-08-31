@@ -1,4 +1,4 @@
-"""A-4(defect_and_edge_audit_2026-08-28.md D-2):backtest_runs.overlapping。
+"""A-4(docs/defect_and_edge_audit_2026-08-28.md D-2):backtest_runs.overlapping。
 
 評価日の間隔がホライズン未満で保有期間が重なっている実行かどうかを記録する。
 非重複(overlapping=False)の実行が「正直な検出力」であり、

@@ -20,7 +20,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BACKUP_DIR = _PROJECT_ROOT / "backups"
 RETENTION_COUNT = 14  # 直近14日分を保持(個人利用規模のため簡易なローテーション)
 
-# E-7(2026-08-27、defect_audit_2026-08-27.md):`check=True` は pg_dump の終了
+# E-7(2026-08-27、docs/defect_audit_2026-08-27.md):`check=True` は pg_dump の終了
 # コードしか見ないため、空/破損ダンプ(DBコンテナ未起動で接続だけ成立、権限
 # エラーがstderrに出つつ終了コード0 等)がそのまま「成功」として保存され、
 # ローテーションが正常だった古いバックアップを消していく。最低限の内容検証を

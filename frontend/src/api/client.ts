@@ -28,6 +28,9 @@ import type {
   ScoreDatesResponse,
   UniverseStatusResponse,
   WatchlistResponse,
+  InvestmentIntelligenceResponse,
+  ReverseValuationResponse,
+  DataCoverageResponse,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -144,6 +147,32 @@ export function fetchCandidateDetail(ticker: string, target: TargetParams = {}):
 /** J-2:財務推移(売上・粗利率・CF・現金・株式数・ランウェイ・F-score内訳)。表示専用。 */
 export function fetchCandidateFinancials(ticker: string): Promise<FinancialHistoryResponse> {
   return apiFetch(`/api/v1/candidates/${encodeURIComponent(ticker)}/financials`);
+}
+
+const intelligencePath = (ticker: string, section: string) =>
+  `/api/v1/candidates/${encodeURIComponent(ticker)}/${section}`;
+
+export function fetchReverseValuation(ticker: string, horizonYears = 7): Promise<ReverseValuationResponse> {
+  return apiFetch(`${intelligencePath(ticker, "reverse-valuation")}?horizon_years=${horizonYears}`);
+}
+
+export function fetchInvestmentIntelligence(ticker: string, section: string): Promise<InvestmentIntelligenceResponse> {
+  return apiFetch(intelligencePath(ticker, section));
+}
+
+export function fetchRiskSizing(ticker: string, realizedVol?: number | null, evidenceGrade = "C"): Promise<InvestmentIntelligenceResponse> {
+  const q = new URLSearchParams({ ticker, evidence_grade: evidenceGrade });
+  if (realizedVol != null) q.set("realized_vol", String(realizedVol));
+  return apiFetch(`/api/v1/positions/risk-sizing?${q.toString()}`);
+}
+
+export function fetchJpyReturn(ticker: string, usdMoic: number, entryUsdJpy: number, exitUsdJpy: number): Promise<InvestmentIntelligenceResponse> {
+  const q = new URLSearchParams({ ticker, usd_moic: String(usdMoic), entry_usdjpy: String(entryUsdJpy), exit_usdjpy: String(exitUsdJpy) });
+  return apiFetch(`/api/v1/positions/jpy-return?${q.toString()}`);
+}
+
+export function fetchDataCoverage(): Promise<DataCoverageResponse> {
+  return apiFetch(`/api/v1/data-coverage`);
 }
 
 export function fetchCandidatePeers(ticker: string): Promise<PeerResponse> {

@@ -4,7 +4,7 @@
 - `GET /candidates/{ticker}`:個別詳細・スコア履歴・除外理由
 - `GET /universe/status`:直近の収集・ゲート・スコアリングの実行状況
 - `GET /pipeline/runs`・`GET /pipeline/runs/{run_id}`:日次ジョブの実行履歴・
-  工程詳細(14.15、daily_job_status_screen_2026-08-30.md)。読み取り専用(18.6)。
+  工程詳細(14.15、docs/daily_job_status_screen_2026-08-30.md)。読み取り専用(18.6)。
 - `GET /excluded`:除外銘柄の検索(14.16:除外銘柄確認画面用)
 - `GET /scores/dates`:スコアが存在する日付一覧(順位変動画面が比較対象日を選ぶために使う)
 - `GET /watchlist`:Tier 2(監視対象)一覧(15.5の二層構成。ランキングに出ないが追跡する価値のある銘柄)
@@ -111,6 +111,11 @@ from autoscreener.api.schemas import (
     UniverseStatusResponse,
     WatchlistEntry,
     WatchlistResponse,
+    InvestmentIntelligenceResponse,
+    ReverseValuationResponse,
+    ReverseValuationScenarioView,
+    DataCoverageResponse,
+    DataCoverageRow,
 )
 from autoscreener.config import (
     ScoringConfig,
@@ -159,6 +164,20 @@ from autoscreener.db.models import (
     Ticker,
     UniverseSnapshot,
     XbrlFact,
+    AnalystConsensusSnapshot,
+    ManagementGuidanceSnapshot,
+    MarketOpportunityEstimate,
+    MarketOpportunityComponent,
+    OperatingKpiDefinition,
+    OperatingKpiObservation,
+    CapitalAllocationEvent,
+    ManagementIncentiveSnapshot,
+    DebtInstrument,
+    LiquidityFacility,
+    ThesisMilestone,
+    MacroExposureSnapshot,
+    DelistingEvent,
+    LiveDatasetCoverage,
 )
 from autoscreener.research.notes import load_all_notes, load_note
 from autoscreener.screening.dilution_outlook import (
@@ -191,6 +210,15 @@ from autoscreener.screening.tradability import (
     get_cached_broker_coverage,
 )
 from autoscreener.screening.watchlist import REASON_LABELS, GateOutcome, build_tier2
+from autoscreener.scoring.reverse_valuation import solve_scenarios
+from autoscreener.scoring.model_router import CompanyModelProfile, classify_model_family
+from autoscreener.scoring.investment_intelligence import (
+    calculate_reinvestment_quality,
+    jpy_after_tax_return,
+    return_distribution,
+    risk_sizing_preview,
+)
+from autoscreener.screening.accounting_quality import calculate_accounting_quality
 
 router = APIRouter(prefix="/api/v1")
 
@@ -226,12 +254,12 @@ class _ScoreView:
     median_moic: float | None
     survival_probability: float | None
     calibrated_on_pace_probability: float | None = None
-    # C-1(2026-08-26、model_audit_v4_2026-08-26.md):下振れ確率の算出に使う。
+    # C-1(2026-08-26、docs/model_audit_v4_2026-08-26.md):下振れ確率の算出に使う。
     log_moic_mu: float | None = None
     log_moic_sigma: float | None = None
     # C-4:警告バッジの算出に使う診断フラグ群(result_to_factorsと同じ内容)。
     factors: dict | None = None
-    # A-1(defect_and_edge_audit_2026-08-28.md D-12):このスコアが読んだデータの日付。
+    # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):このスコアが読んだデータの日付。
     price_as_of: datetime.date | None = None
     financials_as_of: datetime.date | None = None
 
@@ -580,7 +608,7 @@ def _moic_quantile_map(
 def _downside_probability(
     mu: float | None, sigma: float | None, survival: float | None, threshold: float
 ) -> float | None:
-    """C-1(2026-08-26、model_audit_v4_2026-08-26.md): P(MOIC < threshold)。
+    """C-1(2026-08-26、docs/model_audit_v4_2026-08-26.md): P(MOIC < threshold)。
 
     `log_moic_mu` / `log_moic_sigma` は保存済みなので新規計算は不要。生存確率が
     低い銘柄は「上場廃止=実現倍率0」も下振れに含める必要があるため、
@@ -598,9 +626,9 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
-# C-4(2026-08-26、model_audit_v4_2026-08-26.md):ランキング上位に偏っていた
+# C-4(2026-08-26、docs/model_audit_v4_2026-08-26.md):ランキング上位に偏っていた
 # クランプ到達・欠損データ・高レバレッジを利用者に見せるための警告バッジ。
-# 条件は model_audit_v4_2026-08-26.md の該当項目(S-5〜S-9・A-1)に対応する。
+# 条件は docs/model_audit_v4_2026-08-26.md の該当項目(S-5〜S-9・A-1)に対応する。
 _WARNING_RULES: list[tuple[str, str]] = [
     ("growth_rate_clamped", "初期成長率が上限(または下限)に張り付いています(S-6)。この銘柄の成長力は測れておらず、モデルの外挿限界で丸められた値です。"),
     ("dilution_data_missing", "希薄化データが欠損しているため、断面の中央値で補完しています(A-1)。"),
@@ -717,7 +745,7 @@ def _round_trip_cost_by_ticker(
     as_of: datetime.date,
     liquidity_by_ticker: dict[int, LiquidityProfile],
 ) -> dict[int, float]:
-    """D-5(defect_and_edge_audit_2026-08-28.md):銘柄ごとの推定往復取引コスト(bps)。
+    """D-5(docs/defect_and_edge_audit_2026-08-28.md):銘柄ごとの推定往復取引コスト(bps)。
 
     Corwin–Schultz 実効スプレッド(直近の日次 high/low)+ 平方根則インパクト
     (ADV と `per_position_cap` の名目建玉サイズ)。
@@ -1498,7 +1526,7 @@ def get_candidate_financials(
     ticker: str = Path(..., pattern=TICKER_PATTERN),
     session: Session = Depends(get_session),
 ) -> FinancialHistoryResponse:
-    """J-2(investment_decision_gap_2026-08-29.md):財務三表の推移。
+    """J-2(docs/investment_decision_gap_2026-08-29.md):財務三表の推移。
 
     詳細本体(`GET /candidates/{ticker}`)を重くしないため別エンドポイントにする。
     `raw_snapshots.payload` に既に入っている値を整形するだけ——追加収集はしない。
@@ -1705,7 +1733,7 @@ def list_calendar(
     return CalendarResponse(as_of=today, items=events)
 
 
-# B-6(2026-08-26、model_audit_v4_2026-08-26.md):バッチ単位のマーカー
+# B-6(2026-08-26、docs/model_audit_v4_2026-08-26.md):バッチ単位のマーカー
 # (`ticker_id IS NULL`)。銘柄ごとの収集結果ではないので `collection_status_counts`
 # には出さず、進捗の算出専用に使う。
 _BATCH_MARKER_STATUSES = ("run_started", "run_finished")
@@ -1836,7 +1864,7 @@ def universe_status(session: Session = Depends(get_session)) -> UniverseStatusRe
 # Task Schedulerがタイムアウトで殺す・Dockerが落ちる等で finished_at が
 # NULLのまま残った実行を、DBを書き換えずAPI応答でのみ「failed」に見せる
 # (死亡を検知する主体がバッチ内に存在しないため、DBの状態を「修復」すると
-# 嘘になりうる。daily_job_status_screen_2026-08-30.md §4.3)。
+# 嘘になりうる。docs/daily_job_status_screen_2026-08-30.md §4.3)。
 _PIPELINE_ORPHAN_THRESHOLD = datetime.timedelta(hours=6)
 
 # 過去実行のバックフィルはしない(§2の「やらないこと」)。半分だけ埋まった
@@ -2268,6 +2296,20 @@ def latest_backtest(session: Session = Depends(get_session)) -> BacktestSummary:
             "期間中に廃止された銘柄が母集団に存在せず、リターンは実態より良い方向へ偏っている(27.15)。",
         )
 
+    validation_reasons: list[str] = []
+    if (metrics.get("delisted_settlement_rate") or 0) <= 0:
+        validation_reasons.append("delisted_settlement_rate_zero")
+    if run.observation_count <= 0:
+        validation_reasons.append("no_backtest_observations")
+    for key, verdict in (metrics.get("kpi_verdicts") or {}).items():
+        if verdict == "FAIL":
+            validation_reasons.append(f"kpi_failed:{key}")
+        elif verdict == "INSUFFICIENT_DATA":
+            validation_reasons.append(f"kpi_insufficient:{key}")
+    run_date = run.run_at.date() if run.run_at else None
+    stale = run_date is None or (utc_today() - run_date).days > 14
+    validation_status = "STALE" if stale else ("FAIL" if validation_reasons else "PASS")
+
     return BacktestSummary(
         run_at=run.run_at,
         scoring_version=run.scoring_version,
@@ -2280,6 +2322,16 @@ def latest_backtest(session: Session = Depends(get_session)) -> BacktestSummary:
         universe_loss_rate=metrics.get("universe_loss_rate"),
         calibration_error=metrics.get("calibration_error"),
         delisted_settlement_rate=metrics.get("delisted_settlement_rate"),
+        delisted_count=metrics.get("delisted_count", 0),
+        delisted_settled_count=metrics.get("delisted_settled_count", 0),
+        bankruptcy_count=metrics.get("bankruptcy_count", 0),
+        mna_count=metrics.get("mna_count", 0),
+        unknown_delisting_count=metrics.get("unknown_delisting_count", 0),
+        effective_independent_periods=metrics.get(
+            "effective_independent_periods", metrics.get("effective_dates")
+        ),
+        validation_status=validation_status,
+        validation_reasons=validation_reasons,
         rank_ic=metrics.get("rank_ic"),
         rank_ic_t_stat=metrics.get("rank_ic_t_stat"),
         lift_ratio_worst_date=metrics.get("lift_ratio_worst_date"),
@@ -2444,7 +2496,7 @@ _MACRO_HISTORY_DAYS = 365
 
 @router.get("/fx/usdjpy", response_model=FxRateResponse)
 def get_usdjpy(session: Session = Depends(get_session)) -> FxRateResponse:
-    """J-10(investment_decision_gap_2026-08-29.md):円換算表示のための USD/JPY レート。
+    """J-10(docs/investment_decision_gap_2026-08-29.md):円換算表示のための USD/JPY レート。
 
     まず `macro_series` の `DEXJPUS`(FRED、`collect-macro` が入れる)を見る。
     無ければ yfinance の `JPY=X` にフォールバックする。どちらも取れなければ
@@ -2886,7 +2938,7 @@ def list_positions(session: Session = Depends(get_session)) -> PositionsResponse
 #
 # 要約(`summarize-filings`)と定性評価(`score-qualitative`)の生成は CLI 専用。
 # レポート(`generate-report`)だけは、UIからモデル/プロバイダを選んで実行できる
-# `POST /llm/report/generate` を持つ(ui_llm_provider_selection_2026-08-30.md)。
+# `POST /llm/report/generate` を持つ(docs/ui_llm_provider_selection_2026-08-30.md)。
 # これは API 層で唯一の書き込みで、原則18.6を意図的に破る。**HTTP1本で課金が
 # 発生する**ので、`confirm=true` 必須・短間隔レート制限・同時実行ロックで守る。
 #
@@ -3327,3 +3379,315 @@ def get_llm_analysis(
     return LlmTickerAnalysisResponse(
         ticker=symbol, summaries=summaries, qualitative=qualitative
     )
+
+
+# ---------------------------------------------------------------------------
+# TENX Investment Decision v2 — independent Live Intelligence endpoints.
+# These routes never update or reinterpret Score.probability.
+# ---------------------------------------------------------------------------
+
+def _intelligence_ticker(session: Session, ticker: str) -> Ticker:
+    row = session.query(Ticker).filter(func.upper(Ticker.symbol) == ticker.upper()).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="ticker not found")
+    return row
+
+
+def _pit_cutoff(as_of: datetime.date) -> datetime.datetime:
+    return datetime.datetime.combine(
+        as_of + datetime.timedelta(days=1), datetime.time.min, tzinfo=datetime.timezone.utc
+    )
+
+
+def _model_row_dict(row) -> dict:
+    return {column.name: getattr(row, column.name) for column in row.__table__.columns if column.name != "ticker_id"}
+
+
+def _intelligence_response(ticker: str, as_of: datetime.date, rows: list, *, source: str | None = None,
+                           data=None, coverage_status: str | None = None) -> InvestmentIntelligenceResponse:
+    observed = [getattr(row, "observed_at", None) for row in rows]
+    observed = [value for value in observed if value is not None]
+    statuses = [getattr(row, "coverage_status", None) for row in rows]
+    status = coverage_status or "not_collected"
+    if rows:
+        status = "collected_with_data" if any(s == "collected_with_data" for s in statuses) else (statuses[0] or "collected_with_data")
+    latest = max(observed) if observed else None
+    return InvestmentIntelligenceResponse(
+        ticker=ticker, as_of=as_of, coverage_status=status,
+        source=source or (getattr(rows[0], "source", None) if rows else None),
+        data_age_days=(as_of - latest.date()).days if latest else None,
+        data=data if data is not None else [_model_row_dict(row) for row in rows],
+    )
+
+
+def _dataset_status(session: Session, ticker_id: int, dataset: str, as_of: datetime.date) -> str:
+    row = session.query(LiveDatasetCoverage).filter(
+        LiveDatasetCoverage.ticker_id == ticker_id,
+        LiveDatasetCoverage.dataset == dataset,
+        LiveDatasetCoverage.observed_at < _pit_cutoff(as_of),
+    ).order_by(LiveDatasetCoverage.observed_at.desc()).first()
+    return row.coverage_status if row else "not_collected"
+
+
+@router.get("/candidates/{ticker}/reverse-valuation", response_model=ReverseValuationResponse)
+def get_reverse_valuation(
+    ticker: str = Path(..., pattern=TICKER_PATTERN),
+    horizon_years: int = Query(7, ge=1, le=15),
+    as_of: datetime.date | None = Query(None),
+    session: Session = Depends(get_session),
+) -> ReverseValuationResponse:
+    date = as_of or utc_today()
+    ticker_row = _intelligence_ticker(session, ticker)
+    route = classify_model_family(CompanyModelProfile(ticker_row.sector, ticker_row.industry))
+    score = session.query(Score).filter(
+        Score.ticker_id == ticker_row.id, Score.score_date <= date
+    ).order_by(Score.score_date.desc()).first()
+    if score is None or not score.inputs:
+        return ReverseValuationResponse(
+            ticker=ticker_row.symbol, as_of=date, horizon_years=horizon_years,
+            coverage_status="not_collected", model_family=route.model_family,
+            model_supported=route.supported,
+        )
+    config = load_scoring_config().model_copy(update={"horizon_years": horizon_years})
+    inputs = MoicInputs.from_dict(score.inputs)
+    scenario_rows = solve_scenarios(inputs, config)
+    consensus = session.query(AnalystConsensusSnapshot).filter(
+        AnalystConsensusSnapshot.ticker_id == ticker_row.id,
+        AnalystConsensusSnapshot.observed_at < _pit_cutoff(date),
+        AnalystConsensusSnapshot.revenue_mean.isnot(None),
+    ).order_by(AnalystConsensusSnapshot.observed_at.desc(), AnalystConsensusSnapshot.period_end.asc()).first()
+    guidance = session.query(ManagementGuidanceSnapshot).filter(
+        ManagementGuidanceSnapshot.ticker_id == ticker_row.id,
+        ManagementGuidanceSnapshot.observed_at < _pit_cutoff(date),
+        ManagementGuidanceSnapshot.metric.ilike("%revenue%"),
+    ).order_by(ManagementGuidanceSnapshot.observed_at.desc()).first()
+    consensus_growth = (
+        float(consensus.revenue_mean) / inputs.revenue_latest - 1
+        if consensus and consensus.revenue_mean is not None and inputs.revenue_latest > 0 else None
+    )
+    guidance_mid = None
+    if guidance and inputs.revenue_latest > 0 and (guidance.low is not None or guidance.high is not None):
+        values = [float(v) for v in (guidance.low, guidance.high) if v is not None]
+        guidance_mid = sum(values) / len(values) / inputs.revenue_latest - 1
+    tenx_growth = (score.factors or {}).get("initial_growth_rate")
+    scenarios = [ReverseValuationScenarioView(
+        **vars(item),
+        tenx_gap=(tenx_growth - item.implied_revenue_cagr if tenx_growth is not None and item.implied_revenue_cagr is not None else None),
+        consensus_gap=(consensus_growth - item.implied_revenue_cagr if consensus_growth is not None and item.implied_revenue_cagr is not None else None),
+        guidance_gap=(guidance_mid - item.implied_revenue_cagr if guidance_mid is not None and item.implied_revenue_cagr is not None else None),
+    ) for item in scenario_rows]
+    dist = None
+    if score.log_moic_mu is not None and score.log_moic_sigma is not None and score.survival_probability is not None:
+        dist = return_distribution(float(score.log_moic_mu), float(score.log_moic_sigma), float(score.survival_probability), horizon_years)
+    return ReverseValuationResponse(
+        ticker=ticker_row.symbol, as_of=date, horizon_years=horizon_years,
+        coverage_status="collected_with_data", model_family=route.model_family,
+        model_supported=route.supported, tenx_initial_growth=tenx_growth,
+        consensus_growth=consensus_growth, management_guidance_growth=guidance_mid,
+        scenarios=scenarios, return_distribution=dist,
+    )
+
+
+@router.get("/candidates/{ticker}/consensus", response_model=InvestmentIntelligenceResponse)
+def get_consensus(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None),
+                  session: Session = Depends(get_session)) -> InvestmentIntelligenceResponse:
+    date = as_of or utc_today(); t = _intelligence_ticker(session, ticker)
+    rows = session.query(AnalystConsensusSnapshot).filter(
+        AnalystConsensusSnapshot.ticker_id == t.id,
+        AnalystConsensusSnapshot.observed_at < _pit_cutoff(date),
+    ).order_by(AnalystConsensusSnapshot.observed_at.desc(), AnalystConsensusSnapshot.period_end.asc()).limit(50).all()
+    return _intelligence_response(t.symbol, date, rows)
+
+
+@router.get("/candidates/{ticker}/reinvestment-quality", response_model=InvestmentIntelligenceResponse)
+def get_reinvestment_quality(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None),
+                             session: Session = Depends(get_session)) -> InvestmentIntelligenceResponse:
+    date = as_of or utc_today(); t = _intelligence_ticker(session, ticker)
+    raw = session.query(RawSnapshot).filter(
+        RawSnapshot.ticker_id == t.id, RawSnapshot.available_from <= date
+    ).order_by(RawSnapshot.available_from.desc()).first()
+    if raw is None:
+        return _intelligence_response(t.symbol, date, [])
+    history = build_financial_history(raw.payload)
+    annual = [p for p in history.annual if p.period_end <= date]
+    if len(annual) < 2:
+        return InvestmentIntelligenceResponse(ticker=t.symbol, as_of=date, coverage_status="collected_no_finding", source=raw.source, data=[])
+    start, end = annual[0], annual[-1]
+    years = max(1.0, (end.period_end - start.period_end).days / 365.25)
+    nopat_start = start.operating_income * 0.79 if start.operating_income is not None and start.operating_income > 0 else None
+    nopat_end = end.operating_income * 0.79 if end.operating_income is not None and end.operating_income > 0 else None
+    ic_start = (start.total_debt or 0) - (start.cash_and_equivalents or 0) if start.total_debt is not None and start.cash_and_equivalents is not None else None
+    ic_end = (end.total_debt or 0) - (end.cash_and_equivalents or 0) if end.total_debt is not None and end.cash_and_equivalents is not None else None
+    quality = calculate_reinvestment_quality(
+        years=years, revenue_start=start.revenue, revenue_end=end.revenue,
+        gross_profit_start=start.gross_profit, gross_profit_end=end.gross_profit,
+        fcf_start=start.free_cash_flow, fcf_end=end.free_cash_flow,
+        shares_start=start.shares_outstanding, shares_end=end.shares_outstanding,
+        nopat_start=nopat_start, nopat_end=nopat_end,
+        invested_capital_start=ic_start, invested_capital_end=ic_end,
+    )
+    return InvestmentIntelligenceResponse(ticker=t.symbol, as_of=date, coverage_status="collected_with_data",
+        source=raw.source, data_age_days=(date - raw.available_from).days,
+        data={"period_years": years, **vars(quality)})
+
+
+def _rows_endpoint(session: Session, ticker: str, as_of: datetime.date, model, *, limit: int = 100, order_column=None):
+    t = _intelligence_ticker(session, ticker)
+    query = session.query(model).filter(model.ticker_id == t.id)
+    if hasattr(model, "observed_at"):
+        query = query.filter(model.observed_at < _pit_cutoff(as_of))
+    order = order_column if order_column is not None else getattr(
+        model, "observed_at", getattr(model, "id")
+    )
+    rows = query.order_by(order.desc()).limit(limit).all()
+    return t, rows
+
+
+@router.get("/candidates/{ticker}/market-opportunity", response_model=InvestmentIntelligenceResponse)
+def get_market_opportunity(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t, rows=_rows_endpoint(session,ticker,date,MarketOpportunityEstimate,limit=10)
+    data=[]
+    for row in rows:
+        item=_model_row_dict(row)
+        item["components"]=[_model_row_dict(c) for c in session.query(MarketOpportunityComponent).filter_by(estimate_id=row.id).all()]
+        data.append(item)
+    return _intelligence_response(t.symbol,date,rows,data=data)
+
+
+@router.get("/candidates/{ticker}/operating-kpis", response_model=InvestmentIntelligenceResponse)
+def get_operating_kpis(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t, rows=_rows_endpoint(session,ticker,date,OperatingKpiObservation)
+    labels={d.id:d for d in session.query(OperatingKpiDefinition).all()}
+    data=[]
+    for row in rows:
+        item=_model_row_dict(row); definition=labels.get(row.kpi_definition_id)
+        item.update({"code":definition.code if definition else None,"label":definition.label if definition else None,"unit":definition.unit if definition else None})
+        data.append(item)
+    return _intelligence_response(t.symbol,date,rows,data=data,coverage_status=_dataset_status(session,t.id,"operating_kpis",date))
+
+
+@router.get("/candidates/{ticker}/capital-allocation", response_model=InvestmentIntelligenceResponse)
+def get_capital_allocation(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,CapitalAllocationEvent)
+    totals={}
+    for row in rows:
+        if row.amount is not None: totals[row.event_type]=totals.get(row.event_type,0.0)+float(row.amount)
+    return _intelligence_response(t.symbol,date,rows,data={"three_year_totals":totals,"events":[_model_row_dict(r) for r in rows]},coverage_status=_dataset_status(session,t.id,"capital_allocation",date))
+
+
+@router.get("/candidates/{ticker}/management-incentives", response_model=InvestmentIntelligenceResponse)
+def get_management_incentives(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,ManagementIncentiveSnapshot)
+    return _intelligence_response(t.symbol,date,rows,coverage_status=_dataset_status(session,t.id,"management_incentives",date))
+
+
+@router.get("/candidates/{ticker}/debt-profile", response_model=InvestmentIntelligenceResponse)
+def get_debt_profile(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,DebtInstrument)
+    _, facilities=_rows_endpoint(session,ticker,date,LiquidityFacility,limit=1)
+    maturity={}
+    for row in rows:
+        if row.maturity_date and row.principal is not None: maturity[str(row.maturity_date.year)]=maturity.get(str(row.maturity_date.year),0.0)+float(row.principal)
+    cash=float(facilities[0].cash_balance) if facilities and facilities[0].cash_balance is not None else None
+    available=float(facilities[0].revolver_available) if facilities and facilities[0].revolver_available is not None else None
+    due_12m=sum(float(r.principal) for r in rows if r.principal is not None and r.maturity_date and r.maturity_date <= date+datetime.timedelta(days=365))
+    return _intelligence_response(t.symbol,date,rows or facilities,data={"maturity_ladder":maturity,"cash_balance":cash,"revolver_available":available,
+        "debt_due_12m":due_12m,"financing_review_required":bool(due_12m and cash is not None and due_12m > cash+(available or 0)),
+        "instruments":[_model_row_dict(r) for r in rows]},coverage_status=_dataset_status(session,t.id,"debt_profile",date))
+
+
+@router.get("/candidates/{ticker}/accounting-quality", response_model=InvestmentIntelligenceResponse)
+def get_accounting_quality(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t=_intelligence_ticker(session,ticker)
+    raw=session.query(RawSnapshot).filter(RawSnapshot.ticker_id==t.id,RawSnapshot.available_from<=date).order_by(RawSnapshot.available_from.desc()).first()
+    if raw is None: return _intelligence_response(t.symbol,date,[])
+    history=build_financial_history(raw.payload); annual=history.annual
+    if not annual: return InvestmentIntelligenceResponse(ticker=t.symbol,as_of=date,coverage_status="collected_no_finding",source=raw.source,data=[])
+    latest=annual[-1]; prior=annual[-2] if len(annual)>1 else None
+    revenue_growth=(latest.revenue/prior.revenue-1) if prior and latest.revenue is not None and prior.revenue else None
+    quality=calculate_accounting_quality(net_income=latest.net_income,operating_cash_flow=latest.operating_cash_flow,
+        average_assets=None,revenue_growth=revenue_growth,receivables_growth=None,inventory_growth=None,
+        stock_based_compensation=None,revenue=latest.revenue,goodwill=None,total_assets=None)
+    return InvestmentIntelligenceResponse(ticker=t.symbol,as_of=date,coverage_status="collected_with_data",source=raw.source,
+        data_age_days=(date-raw.available_from).days,data=vars(quality))
+
+
+@router.get("/candidates/{ticker}/thesis-milestones", response_model=InvestmentIntelligenceResponse)
+def get_thesis_milestones(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,ThesisMilestone,order_column=ThesisMilestone.due_date)
+    data=[]
+    for row in rows:
+        item=_model_row_dict(row); item["days_until"]=(row.due_date-date).days; data.append(item)
+    return _intelligence_response(t.symbol,date,rows,data=data)
+
+
+@router.get("/candidates/{ticker}/macro-exposure", response_model=InvestmentIntelligenceResponse)
+def get_macro_exposure(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,MacroExposureSnapshot)
+    return _intelligence_response(t.symbol,date,rows)
+
+
+@router.get("/candidates/{ticker}/mna-history", response_model=InvestmentIntelligenceResponse)
+def get_mna_history(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
+    date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,DelistingEvent,order_column=DelistingEvent.event_date)
+    peers=session.query(DelistingEvent).filter(DelistingEvent.event_date<=date).all()
+    acquisition=[r for r in peers if r.event_type in {"cash_acquisition","stock_acquisition"}]
+    data={"historical_acquisition_count":len(acquisition),"historical_delisting_count":len(peers),
+          "acquisition_share":len(acquisition)/len(peers) if peers else None,"ticker_events":[_model_row_dict(r) for r in rows]}
+    return _intelligence_response(t.symbol,date,rows,source="delisting_events",data=data)
+
+
+@router.get("/positions/risk-sizing", response_model=InvestmentIntelligenceResponse)
+def get_risk_sizing(ticker: str = Query(..., pattern=TICKER_PATTERN), realized_vol: float | None = Query(None, gt=0),
+                    liquidity_cap: float | None = Query(None, gt=0, le=1), evidence_grade: str = Query("C"),
+                    session: Session = Depends(get_session)):
+    t=_intelligence_ticker(session,ticker); config=load_portfolio_config()
+    risk=getattr(config,"risk_sizing",None); target_vol=getattr(risk,"target_annual_vol",0.60); min_factor=getattr(risk,"min_vol_factor",0.35)
+    evidence_factors=getattr(risk,"evidence_grade_factors",{"A":1.0,"B":0.9,"C":0.75,"D":0.5})
+    preview=risk_sizing_preview(per_position_cap=config.per_position_cap,liquidity_cap=liquidity_cap or config.per_position_cap,
+        realized_vol=realized_vol,target_vol=target_vol,uncertainty_factor=evidence_factors.get(evidence_grade.upper(),0.5),min_vol_factor=min_factor)
+    return InvestmentIntelligenceResponse(ticker=t.symbol,as_of=utc_today(),coverage_status="collected_with_data",source="portfolio_config",data=vars(preview))
+
+
+@router.get("/positions/jpy-return", response_model=InvestmentIntelligenceResponse)
+def get_jpy_return(ticker: str = Query(..., pattern=TICKER_PATTERN), usd_moic: float = Query(..., gt=0),
+                   entry_usdjpy: float = Query(..., gt=0), exit_usdjpy: float = Query(..., gt=0),
+                   account_type: str = Query("taxable", pattern="^(taxable|NISA)$"), horizon_years: float = Query(7, gt=0),
+                   session: Session = Depends(get_session)):
+    t=_intelligence_ticker(session,ticker)
+    return InvestmentIntelligenceResponse(ticker=t.symbol,as_of=utc_today(),coverage_status="collected_with_data",source="user_scenario",
+        data=jpy_after_tax_return(usd_moic=usd_moic,entry_usdjpy=entry_usdjpy,exit_usdjpy=exit_usdjpy,account_type=account_type,horizon_years=horizon_years))
+
+
+@router.get("/data-coverage", response_model=DataCoverageResponse)
+def get_data_coverage(session: Session = Depends(get_session)) -> DataCoverageResponse:
+    date=utc_today(); ticker_count=session.query(Ticker).filter(Ticker.is_benchmark.is_(False)).count()
+    tables=[("Consensus",AnalystConsensusSnapshot),("Guidance",ManagementGuidanceSnapshot),("TAM",MarketOpportunityEstimate),
+        ("Operating KPI",OperatingKpiObservation),("Capital allocation",CapitalAllocationEvent),("Management incentives",ManagementIncentiveSnapshot),
+        ("Debt",DebtInstrument),("Milestones",ThesisMilestone),("Macro exposure",MacroExposureSnapshot)]
+    generic_names = {"Operating KPI": "operating_kpis", "Capital allocation": "capital_allocation",
+                     "Management incentives": "management_incentives", "Debt": "debt_profile"}
+    datasets=[]
+    for label,model in tables:
+        status_model = LiveDatasetCoverage if label in generic_names else model
+        query = session.query(
+            status_model.ticker_id, status_model.observed_at,
+            status_model.coverage_status, status_model.source,
+        )
+        if label in generic_names:
+            query = query.filter(status_model.dataset == generic_names[label])
+        latest_by_ticker = {}
+        for item in query.all():
+            current = latest_by_ticker.get(item.ticker_id)
+            if current is None or item.observed_at > current.observed_at:
+                latest_by_ticker[item.ticker_id] = item
+        successful = [item for item in latest_by_ticker.values() if item.coverage_status in {"collected_with_data", "collected_no_finding"}]
+        covered = len(successful)
+        failed = sum(item.coverage_status == "collection_failed" for item in latest_by_ticker.values())
+        latest_item = max(successful, key=lambda item: item.observed_at) if successful else None
+        latest = latest_item.observed_at if latest_item else None
+        source = latest_item.source if latest_item else None
+        stale = sum(item.observed_at.date() < date - datetime.timedelta(days=90) for item in successful)
+        denominator=max(ticker_count,1)
+        datasets.append(DataCoverageRow(dataset=label,coverage=covered/denominator,stale=stale/denominator,failed=failed/denominator,last_successful=latest,source=source))
+    return DataCoverageResponse(as_of=date,ticker_count=ticker_count,datasets=datasets)

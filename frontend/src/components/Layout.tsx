@@ -42,6 +42,7 @@ export function Layout() {
           <NavLink to="/glossary">用語集</NavLink>
           <NavLink to="/reference">スコアについて</NavLink>
           <NavLink to="/validation">モデルの検証状況</NavLink>
+          <NavLink to="/data-coverage">データカバレッジ</NavLink>
           {/* 14.15:日常的に見る画面ではない。平常時は見なくてよく、異常時にだけ
               見に行く画面として、意図的にナビ末尾に置く(§6)。 */}
           <NavLink to="/pipeline">日次ジョブ</NavLink>

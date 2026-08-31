@@ -1,5 +1,5 @@
 """日次パイプラインの実行記録(14.15の運用監視。
-daily_job_status_screen_2026-08-30.md §4.1)。
+docs/daily_job_status_screen_2026-08-30.md §4.1)。
 
 `daily_pipeline.py` から工程単位で呼び出され、`pipeline_runs` /
 `pipeline_stage_runs` に書き込む。**このモジュールは記録するだけで、

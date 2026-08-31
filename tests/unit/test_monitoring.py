@@ -15,7 +15,7 @@ def test_degraded_collection_logs_warning(caplog):
         result = check_collection_health({"success": 92, "transient_failure": 8})
     assert len(caplog.records) == 1
     assert caplog.records[0].levelname == "WARNING"
-    # 2026-08-30(daily_job_status_screen_2026-08-30.md §3.4):戻り値を
+    # 2026-08-30(docs/daily_job_status_screen_2026-08-30.md §3.4):戻り値を
     # list[HealthFinding] に構造化した。ログ出力自体は変えていない
     # (閾値・判定ロジックも1行も変えていない)。
     assert result == [

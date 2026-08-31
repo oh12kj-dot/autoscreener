@@ -1,7 +1,7 @@
 import { WARNING_INFO } from "../warnings";
 
 /**
- * 警告バッジ(C-4、model_audit_v4_2026-08-26.md)。
+ * 警告バッジ(C-4、docs/model_audit_v4_2026-08-26.md)。
  *
  * `compact` はランキング表のセル用(ラベルのみ、ホバーで説明)。
  * 通常表示は銘柄詳細用で、コードごとに説明文まで並べる。

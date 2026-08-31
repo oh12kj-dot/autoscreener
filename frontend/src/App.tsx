@@ -15,6 +15,7 @@ import { ScoreReferencePage } from "./pages/ScoreReferencePage";
 import { TickerDetailPage } from "./pages/TickerDetailPage";
 import { ValidationPage } from "./pages/ValidationPage";
 import { WatchlistPage } from "./pages/WatchlistPage";
+import { DataCoveragePage } from "./pages/DataCoveragePage";
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="reference" element={<ScoreReferencePage />} />
           <Route path="validation" element={<ValidationPage />} />
           <Route path="pipeline" element={<PipelinePage />} />
+          <Route path="data-coverage" element={<DataCoveragePage />} />
         </Route>
       </Routes>
       </CurrencyProvider>

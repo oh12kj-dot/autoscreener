@@ -1,6 +1,6 @@
 """tests/unit/test_pipeline_health.py
 
-daily_job_status_screen_2026-08-30.md §7。
+docs/daily_job_status_screen_2026-08-30.md §7。
 
 2026-08-29の実運用(全工程succeeded・収集対象0件・スコアリング中断・
 隔離率100%)が`degraded`として検出されることを確認する

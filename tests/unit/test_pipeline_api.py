@@ -1,7 +1,7 @@
 """tests/unit/test_pipeline_api.py
 
 `GET /api/v1/pipeline/runs` / `GET /api/v1/pipeline/runs/{run_id}` のテスト
-(14.15、daily_job_status_screen_2026-08-30.md §5・§7)。
+(14.15、docs/daily_job_status_screen_2026-08-30.md §5・§7)。
 
 `docker compose up -d` で起動済みのローカル開発用Postgresに対して実行する。
 実データと衝突しない未来日付でテスト行を作り、終了時に削除する。

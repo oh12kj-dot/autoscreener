@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchPositions } from "../api/client";
+import { fetchInvestmentIntelligence, fetchPositions } from "../api/client";
 import type { PositionsResponse } from "../api/types";
 import { useCurrency } from "../currency";
 import { Term } from "../components/Term";
@@ -16,12 +16,26 @@ export function PositionsPage() {
   const [data, setData] = useState<PositionsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [milestones, setMilestones] = useState<Record<string, Record<string, unknown> | null>>({});
   const { formatMoney } = useCurrency(); // J-10:円換算表示
 
   useEffect(() => {
     setLoading(true);
     fetchPositions()
-      .then(setData)
+      .then((value) => {
+        setData(value);
+        return Promise.allSettled(value.items.filter((item) => item.closed_on == null).map(async (item) => {
+          const response = await fetchInvestmentIntelligence(item.ticker, "thesis-milestones");
+          const rows = Array.isArray(response.data) ? response.data as Record<string, unknown>[] : [];
+          return [item.ticker, rows.find((row) => row.status === "pending") ?? rows[0] ?? null] as const;
+        }));
+      })
+      .then((results) => {
+        if (!results) return;
+        const next: Record<string, Record<string, unknown> | null> = {};
+        for (const result of results) if (result.status === "fulfilled") next[result.value[0]] = result.value[1];
+        setMilestones(next);
+      })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
@@ -124,6 +138,7 @@ export function PositionsPage() {
                 <th>達成倍率</th>
                 <th>残り</th>
                 <th>次の計画</th>
+                <th>次のマイルストーン</th>
                 <th>テーゼ点灯</th>
                 <th>
                   <Term id="red-flags">未解消アラート</Term>
@@ -139,6 +154,12 @@ export function PositionsPage() {
                       <span className="ticker-symbol">{p.ticker}</span>
                     </Link>
                     {p.binary_event && <span className="th-badge">二値イベント</span>}
+                  </td>
+                  <td>
+                    {milestones[p.ticker] ? <span>
+                      {String(milestones[p.ticker]?.metric_code ?? "—")} ・ 残り {String(milestones[p.ticker]?.days_until ?? "—")}日
+                      <span className="detail-cagr"> base {String(milestones[p.ticker]?.base_threshold ?? "—")} / 実績 {String(milestones[p.ticker]?.actual_value ?? "未確定")}</span>
+                    </span> : "未設定"}
                   </td>
                   <td>{p.opened_on}</td>
                   <td>{p.shares.toLocaleString()}</td>

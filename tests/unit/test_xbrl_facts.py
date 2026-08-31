@@ -76,7 +76,7 @@ def test_shares_outstanding_from_dei_taxonomy():
 
 
 def test_extract_all_concepts_covers_the_full_concept_map():
-    # B-3(defect_and_edge_audit_2026-08-28.md I-1):概念セットを大幅拡張した。
+    # B-3(docs/defect_and_edge_audit_2026-08-28.md I-1):概念セットを大幅拡張した。
     from autoscreener.validation.xbrl_facts import CONCEPT_TAGS
 
     result = extract_all_concepts(_COMPANY_FACTS)

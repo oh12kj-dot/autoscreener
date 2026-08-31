@@ -38,7 +38,7 @@ export interface CandidateSummary {
    * 較正写像が無いとき(設定変更後にバックテスト未実行など)は null。
    */
   calibrated_on_pace_probability: number | null;
-  /** C-1(model_audit_v4_2026-08-26.md):P(MOIC < 0.5)。上場廃止も損失として合成済み。 */
+  /** C-1(docs/model_audit_v4_2026-08-26.md):P(MOIC < 0.5)。上場廃止も損失として合成済み。 */
   probability_below_half: number | null;
   /** C-1:P(MOIC < 1.0)=元本割れ確率。 */
   probability_below_one: number | null;
@@ -116,7 +116,7 @@ export interface CandidateDetail {
   log_moic_sigma: number | null;
   survival_probability: number | null;
   calibrated_on_pace_probability: number | null;
-  /** C-1(model_audit_v4_2026-08-26.md):P(MOIC < 0.5)。上場廃止も損失として合成済み。 */
+  /** C-1(docs/model_audit_v4_2026-08-26.md):P(MOIC < 0.5)。上場廃止も損失として合成済み。 */
   probability_below_half: number | null;
   /** C-1:P(MOIC < 1.0)=元本割れ確率。 */
   probability_below_one: number | null;
@@ -190,7 +190,7 @@ export interface CustomerConcentrationView { period_end: string; customer_label:
 export interface GuidanceView { filed_date: string; period_label: string; metric: string; low_usd: number | null; high_usd: number | null; }
 export interface LitigationView { event_date: string; kind: string; title: string; detail: string | null; source_url: string | null; }
 
-/** J-7(investment_decision_gap_2026-08-29.md):需給。ゲート・スコアには入らない。null は「未取得」で 0 とは別。 */
+/** J-7(docs/investment_decision_gap_2026-08-29.md):需給。ゲート・スコアには入らない。null は「未取得」で 0 とは別。 */
 export interface SupplyView {
   insider_net_shares_180d: number | null;
   insider_buyer_count_180d: number | null;
@@ -203,7 +203,7 @@ export interface SupplyView {
   float_ratio: number | null;
 }
 
-/** J-1(investment_decision_gap_2026-08-29.md):会社の姿。原文のまま。要約・翻訳は生成しない。 */
+/** J-1(docs/investment_decision_gap_2026-08-29.md):会社の姿。原文のまま。要約・翻訳は生成しない。 */
 export interface CompanyProfile {
   business_summary: string | null;
   website: string | null;
@@ -253,7 +253,7 @@ export interface DilutionOutlook {
   reserved_dilution_ratio: number | null;
 }
 
-/** J-2(investment_decision_gap_2026-08-29.md):1期(年次または四半期)の実績。取引通貨に統一済み。 */
+/** J-2(docs/investment_decision_gap_2026-08-29.md):1期(年次または四半期)の実績。取引通貨に統一済み。 */
 export interface FinancialPeriodView {
   period_end: string;
   revenue: number | null;
@@ -332,7 +332,7 @@ export interface FilingListResponse {
   items: FilingListItem[];
 }
 
-/** J-10(investment_decision_gap_2026-08-29.md):円換算表示のための USD/JPY レート。表示用のみ。 */
+/** J-10(docs/investment_decision_gap_2026-08-29.md):円換算表示のための USD/JPY レート。表示用のみ。 */
 export interface FxRateResponse {
   rate: number | null;
   as_of: string | null;
@@ -462,7 +462,7 @@ export interface UniverseStatusResponse {
   universe_size: number;
   collection_status_counts: Record<string, number>;
   /**
-   * B-6 / E-6(defect_audit_2026-08-27.md):実行中の途中経過を完了結果と
+   * B-6 / E-6(docs/defect_audit_2026-08-27.md):実行中の途中経過を完了結果と
    * 区別するためのマーカー。`collection_target_count` が当日の対象件数、
    * `collection_complete` が true なら `collection_status_counts` の合計が最終値。
    * どちらも null のときはマーカー導入前の実行(進捗を判定できない)。
@@ -474,7 +474,7 @@ export interface UniverseStatusResponse {
 }
 
 /**
- * 日次ジョブ実行状況(14.15、daily_job_status_screen_2026-08-30.md §5)。
+ * 日次ジョブ実行状況(14.15、docs/daily_job_status_screen_2026-08-30.md §5)。
  * 「終了コード0」と「正常」を同一視しないための画面が使う。
  */
 export interface PipelineHealthFinding {
@@ -543,7 +543,7 @@ export interface ScoreDatesResponse {
   dates: string[];
 }
 
-/** J-6(investment_decision_gap_2026-08-29.md):これから起きるイベント1件。アプリは日数だけを出す。 */
+/** J-6(docs/investment_decision_gap_2026-08-29.md):これから起きるイベント1件。アプリは日数だけを出す。 */
 export interface CalendarEvent {
   ticker: string;
   company_name: string | null;
@@ -634,6 +634,14 @@ export interface BacktestSummary {
   universe_loss_rate: number | null;
   calibration_error: number | null;
   delisted_settlement_rate: number | null;
+  delisted_count: number;
+  delisted_settled_count: number;
+  bankruptcy_count: number;
+  mna_count: number;
+  unknown_delisting_count: number;
+  effective_independent_periods: number | null;
+  validation_status: "PASS" | "FAIL" | "STALE";
+  validation_reasons: string[];
   rank_ic: number | null;
   rank_ic_t_stat: number | null;
   lift_ratio_worst_date: number | null;
@@ -646,6 +654,59 @@ export interface BacktestSummary {
   tail_lifts: BacktestTailLift[];
   calibration_curve: BacktestCalibrationBin[];
   caveats: string[];
+}
+
+export interface InvestmentIntelligenceResponse {
+  ticker: string;
+  as_of: string;
+  coverage_status: "not_collected" | "collected_no_finding" | "collected_with_data" | "collection_failed" | "not_applicable";
+  source: string | null;
+  data_age_days: number | null;
+  not_used_in_ranking: boolean;
+  data: Record<string, unknown> | unknown[] | null;
+}
+
+export interface ReverseValuationScenario {
+  required_return: number;
+  implied_revenue_cagr: number | null;
+  implied_terminal_margin: number | null;
+  implied_terminal_multiple: number | null;
+  feasible: boolean;
+  reason: string | null;
+  tenx_gap: number | null;
+  consensus_gap: number | null;
+  guidance_gap: number | null;
+}
+
+export interface ReverseValuationResponse {
+  ticker: string;
+  as_of: string;
+  horizon_years: number;
+  coverage_status: string;
+  source: string;
+  not_used_in_ranking: boolean;
+  model_family: string;
+  model_supported: boolean;
+  tenx_initial_growth: number | null;
+  consensus_growth: number | null;
+  management_guidance_growth: number | null;
+  scenarios: ReverseValuationScenario[];
+  return_distribution: Record<string, number> | null;
+}
+
+export interface DataCoverageRow {
+  dataset: string;
+  coverage: number;
+  stale: number;
+  failed: number;
+  last_successful: string | null;
+  source: string | null;
+}
+
+export interface DataCoverageResponse {
+  as_of: string;
+  ticker_count: number;
+  datasets: DataCoverageRow[];
 }
 
 // ---------------------------------------------------------------------------
@@ -725,7 +786,7 @@ export interface LlmReportResponse {
   created_at: string | null;
 }
 
-// K-9(ui_llm_provider_selection_2026-08-30.md):UIからのレポート生成。
+// K-9(docs/ui_llm_provider_selection_2026-08-30.md):UIからのレポート生成。
 // **これだけはAPIへの書き込み**で、課金が発生する。confirm を必須にしてある。
 
 /** 選べるプロバイダ1つぶん。configured=false はAPIキー未設定で呼べない。 */

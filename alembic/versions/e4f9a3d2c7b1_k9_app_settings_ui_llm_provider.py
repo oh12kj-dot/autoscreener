@@ -1,6 +1,6 @@
 """K-9:UIから編集できる実行時設定(app_settings)。
 
-`ui_llm_provider_selection_2026-08-30.md`。LLMの接続先(provider / base_url)・
+`docs/ui_llm_provider_selection_2026-08-30.md`。LLMの接続先(provider / base_url)・
 モデル・effort・APIキーを、UI から保存できるようにするための1枚テーブル。
 
 **コミット済みの `config/collection.yaml` / `.env` は既定値の唯一の出所で

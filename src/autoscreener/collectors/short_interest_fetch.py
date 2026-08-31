@@ -1,4 +1,4 @@
-"""FINRA 空売り残高ファイルの実取得(K-7:defect_and_edge_audit_2026-08-28.md I-5 の配線)。
+"""FINRA 空売り残高ファイルの実取得(K-7:docs/defect_and_edge_audit_2026-08-28.md I-5 の配線)。
 
 `collectors/short_interest_source.py` にパース本体(`parse_short_interest` /
 `ShortInterestRecord`)は既に実装済み。このモジュールはそこへ実データを

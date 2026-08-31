@@ -133,7 +133,7 @@ class CircuitBreakerConfig(BaseModel):
 class QuarantineConfig(BaseModel):
     consecutive_failure_threshold: int = Field(gt=0)
     retry_interval_days: int = Field(gt=0)
-    # B-5(2026-08-26、model_audit_v4_2026-08-26.md):yfinanceは404を例外として
+    # B-5(2026-08-26、docs/model_audit_v4_2026-08-26.md):yfinanceは404を例外として
     # 送出せず、空の`info`として返すことがある(`ticker.info`が内部でHTTPエラーを
     # 握りつぶす)。この場合こちらのコードは`PermanentFailure`ではなく
     # `EmptyResponseError`として扱うため、`tickers.delisted_at`が一度も
@@ -179,7 +179,7 @@ class GrowthConfig(BaseModel):
     # 0 にすると財務諸表だけの推定に戻る。
     nowcast_weight: float = Field(ge=0, le=1, default=0.0)
     nowcast_cap: float = Field(ge=0, default=0.0)
-    # S-8(2026-08-26、model_audit_v4_2026-08-26.md):決算が縮小を示している
+    # S-8(2026-08-26、docs/model_audit_v4_2026-08-26.md):決算が縮小を示している
     # 銘柄(base_growth < 0)を成長企業側へ反転させる補正は、一次情報(決算)を
     # 株価で上書きする行為なので、通常の nowcast_cap より狭い上限を課す。
     # nowcast_cap 以上にはならない(min で丸める)。
@@ -189,7 +189,7 @@ class GrowthConfig(BaseModel):
     fade_quality_sensitivity: float = Field(ge=0, default=0.0)
     min_fade: float = Field(gt=0, lt=1, default=0.55)
     max_fade: float = Field(gt=0, lt=1, default=0.92)
-    # S-7(2026-08-26、model_audit_v4_2026-08-26.md):3年CAGRと直近年次YoYの
+    # S-7(2026-08-26、docs/model_audit_v4_2026-08-26.md):3年CAGRと直近年次YoYの
     # どちらか一方しか無い銘柄に適用する、より保守的な初期成長率の上限。
     # 「食い違ったら遅いほうを信じる」安全装置(27.13)は観測が2つ揃って
     # はじめて働くため。既定 1.0 は実質無効(max_initial_rate 側で丸められる)。
@@ -216,7 +216,7 @@ class GrowthConfig(BaseModel):
 class MarginConfig(BaseModel):
     trend_damping: float = Field(ge=0, le=1)
     max_total_change: float = Field(ge=0)
-    # S-2(2026-08-26追加、model_audit_v4_2026-08-26.md):絶対ポイントの上限
+    # S-2(2026-08-26追加、docs/model_audit_v4_2026-08-26.md):絶対ポイントの上限
     # (max_total_change)だけでは、粗利率が薄い銘柄ほど同じ改善幅が過大な倍率に
     # なる(3.8%→11.6%は3.06倍、50%→57.8%は1.16倍)。終端粗利率が現在の何倍
     # までを許すかの相対上限。既定値は大きく取ってあり実質無効(既存設定を壊さない)。
@@ -313,7 +313,7 @@ class UncertaintyConfig(BaseModel):
     health_sigma_sensitivity: float = Field(ge=0, default=0.0)
     # 28.4:σ を断面中心へ縮小する重み(対数空間)。1.0 で完全に潰す。
     sigma_shrinkage: float = Field(ge=0, le=1, default=0.0)
-    # D-7(defect_and_edge_audit_2026-08-28.md):点推定(expected_moic)を対数正規の
+    # D-7(docs/defect_and_edge_audit_2026-08-28.md):点推定(expected_moic)を対数正規の
     # 「平均」とみなすか「中央値」とみなすか。"median" のとき mu = ln(expected_moic)
     # (−σ²/2 の減額をしない)。既定は現状維持の "mean"。D-1/D-2 修正後に
     # compare-configs で決める。
@@ -334,7 +334,7 @@ class SizePriorConfig(BaseModel):
 
 
 class BalanceSheetConfig(BaseModel):
-    """D-6(defect_and_edge_audit_2026-08-28.md):終端ネットデットの射影。
+    """D-6(docs/defect_and_edge_audit_2026-08-28.md):終端ネットデットの射影。
 
     現状 `terminal_equity = terminal_ev - net_debt` で **net_debt を7年間名目一定と
     仮定**しており、ネットキャッシュを持つ赤字マイクロキャップ(このアプリの中心
@@ -370,7 +370,7 @@ class CalibrationConfig(BaseModel):
 
 
 class KpiAcceptanceConfig(BaseModel):
-    """A-5(defect_and_edge_audit_2026-08-28.md D-3):14.2 の成功指標を機械可読に
+    """A-5(docs/defect_and_edge_audit_2026-08-28.md D-3):14.2 の成功指標を機械可読に
     した受け入れ基準。
 
     D-3 の指摘は「下落回避KPIが符号だけ合っていて実質未達なのに、誰も落第と
@@ -395,7 +395,7 @@ class KpiAcceptanceConfig(BaseModel):
 
 
 class FreshnessConfig(BaseModel):
-    """A-1(defect_and_edge_audit_2026-08-28.md D-12):スコアリングを走らせてよい
+    """A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):スコアリングを走らせてよい
     データ鮮度の前提条件。
 
     日次収集が一斉隔離・レート制限・ネットワーク断で途中停止すると、`run_scoring`
@@ -433,9 +433,21 @@ class ScoringConfig(BaseModel):
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     balance_sheet: BalanceSheetConfig = Field(default_factory=BalanceSheetConfig)
     freshness: FreshnessConfig = Field(default_factory=FreshnessConfig)
-    # A-5(defect_and_edge_audit_2026-08-28.md D-3):14.2 の成功指標を機械可読に
+    # A-5(docs/defect_and_edge_audit_2026-08-28.md D-3):14.2 の成功指標を機械可読に
     # した受け入れ基準。`run-backtest` が PASS/FAIL/INSUFFICIENT_DATA を判定する。
     kpi_acceptance: KpiAcceptanceConfig = Field(default_factory=lambda: KpiAcceptanceConfig())
+
+
+class RiskSizingConfig(BaseModel):
+    """Display-only shrink factors; never expands the existing hard cap."""
+
+    enabled: bool = False
+    target_annual_vol: float = Field(gt=0, default=0.60)
+    min_vol_factor: float = Field(gt=0, le=1, default=0.35)
+    max_pairwise_corr_soft: float = Field(ge=0, le=1, default=0.65)
+    evidence_grade_factors: dict[str, float] = Field(
+        default_factory=lambda: {"A": 1.0, "B": 0.9, "C": 0.75, "D": 0.5}
+    )
 
 
 class PortfolioConfig(BaseModel):
@@ -452,6 +464,7 @@ class PortfolioConfig(BaseModel):
     adv_participation_cap: float = Field(gt=0, le=1)
     sector_cap: float = Field(gt=0, le=1)
     max_positions: int = Field(gt=0)
+    risk_sizing: RiskSizingConfig = Field(default_factory=RiskSizingConfig)
 
     @model_validator(mode="after")
     def _caps_ordered(self) -> PortfolioConfig:
@@ -463,7 +476,7 @@ class PortfolioConfig(BaseModel):
 
 
 class ExecutionConfig(BaseModel):
-    """取引コスト・約定モデルの設定(defect_and_edge_audit_2026-08-28.md D-5 / I-7)。
+    """取引コスト・約定モデルの設定(docs/defect_and_edge_audit_2026-08-28.md D-5 / I-7)。
 
     スプレッドは既存OHLCVから Corwin–Schultz で推定するため設定不要。ここに置くのは
     平方根則マーケットインパクトの係数と、口座固有の手数料・下限スプレッドだけ。
@@ -518,7 +531,7 @@ class LlmConfig(BaseModel):
     """K-9:Claude API(定性分析)の設定。`api_key` は `.env` から読む。
 
     **ここで作るものは一切ゲート(`screening/exclusion_gates.py`)にもスコア
-    (`scoring/`)にも入らない**——`outside_tenx_implementation_plan_2026-08-28.md`
+    (`scoring/`)にも入らない**——`docs/outside_tenx_implementation_plan_2026-08-28.md`
     第618行の原則1「再現性が無く、検証もできない判定をブロッキング条件にしては
     ならない」を、コードの構造で守る。LLMの出力は同じ入力でも毎回変わりうるので、
     除外や順位づけの根拠にした瞬間、バックテストの再現性が失われる。
@@ -532,7 +545,7 @@ class LlmConfig(BaseModel):
     """
 
     enabled: bool = True
-    # K-9(ui_llm_provider_selection_2026-08-30.md):どのAPIに投げるか。
+    # K-9(docs/ui_llm_provider_selection_2026-08-30.md):どのAPIに投げるか。
     # `anthropic`(既定)= Claude native。`openai_compat` = OpenAI互換 `/v1/chat/
     # completions`。ChatGPT / NVIDIA NIM / Ollama / vLLM / LM Studio / LiteLLM は
     # すべて後者で、`base_url` と APIキーの差し替えだけで切り替わる。
@@ -627,7 +640,7 @@ class Settings(BaseSettings):
     # 揃えるため**にここでも読む(未設定を「無効」として静かに扱うか、
     # 呼び出し時に落とすかを、SDKではなくアプリ側で決めたい)。
     anthropic_api_key: str | None = None
-    # K-9(ui_llm_provider_selection_2026-08-30.md):`llm.provider = openai_compat`
+    # K-9(docs/ui_llm_provider_selection_2026-08-30.md):`llm.provider = openai_compat`
     # のときのキー。ChatGPT なら OpenAI のキー、NIM なら NVIDIA のキー、ローカル
     # (Ollama 等)なら任意のダミー文字列。未設定なら openai_compat 経路を無効扱いにする。
     openai_api_key: str | None = None

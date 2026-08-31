@@ -1,4 +1,4 @@
-"""ポートフォリオ・シミュレーションのテスト(defect_and_edge_audit_2026-08-28.md D-4)。純粋関数。"""
+"""ポートフォリオ・シミュレーションのテスト(docs/defect_and_edge_audit_2026-08-28.md D-4)。純粋関数。"""
 
 import pytest
 

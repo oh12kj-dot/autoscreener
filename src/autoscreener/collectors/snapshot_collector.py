@@ -288,7 +288,7 @@ def collect_one(
         return "permanent_failure"
     except EmptyResponseError as exc:
         _register_failure(ticker, collection_config)
-        # B-5(2026-08-26、model_audit_v4_2026-08-26.md):yfinanceはHTTP 404を
+        # B-5(2026-08-26、docs/model_audit_v4_2026-08-26.md):yfinanceはHTTP 404を
         # 例外として送出せず、空の`info`として返すことがある。この経路では
         # `PermanentFailure`に届かないため`delisted_at`が一度も設定されず、
         # 実質的に消えた銘柄が`tickers`に残り続けバックテストの生存バイアスを
@@ -422,7 +422,7 @@ def collect_one(
             for field, value in price.items():
                 setattr(existing_price, field, value)
 
-    # B-7(2026-08-26、model_audit_v4_2026-08-26.md):この行は`success`と対比
+    # B-7(2026-08-26、docs/model_audit_v4_2026-08-26.md):この行は`success`と対比
     # される旧名`invalid_data`だと「除外された」ように読めるが、`sanitize_info`
     # は問題のあるフィールドだけをNoneへ差し替えて**行自体は保存し使う**設計
     # である(is_validはスコアリングを止めない)。実データでは18.7%がこちらに

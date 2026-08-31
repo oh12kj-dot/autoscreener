@@ -8,7 +8,7 @@ from autoscreener.batch.daily_pipeline import run_daily_pipeline
 
 
 class _FakeRecorder:
-    """`PipelineRecorder`(14.15、daily_job_status_screen_2026-08-30.md)の
+    """`PipelineRecorder`(14.15、docs/daily_job_status_screen_2026-08-30.md)の
     実DBアクセスをこのテストファイルから隔離するダブル。
 
     このファイルの観点(月次/日次の骨格・順序・障害許容)は工程の記録内容とは
@@ -74,6 +74,13 @@ def _stub_phase2367_steps():
         patch("autoscreener.batch.daily_pipeline.collect_macro", return_value={"series": 0}) as macro,
         patch("autoscreener.batch.daily_pipeline.collect_filings", return_value={"tickers": 0}) as filings,
         patch("autoscreener.batch.daily_pipeline.collect_xbrl_facts", return_value={"tickers": 0}) as xbrl,
+        patch("autoscreener.batch.daily_pipeline.collect_consensus", return_value={"tickers": 0}) as consensus,
+        patch("autoscreener.batch.daily_pipeline.collect_investment_intelligence", return_value={"sections": 0}) as intelligence,
+        patch("autoscreener.batch.daily_pipeline.collect_filing_sections", return_value={"sections": 0}) as filing_sections,
+        patch("autoscreener.batch.daily_pipeline.collect_guidance", return_value={"rows": 0}) as guidance,
+        patch("autoscreener.batch.daily_pipeline.collect_concentration", return_value={"rows": 0}) as concentration,
+        patch("autoscreener.batch.daily_pipeline.collect_dilution", return_value={"rows": 0}) as dilution,
+        patch("autoscreener.batch.daily_pipeline.collect_litigation", return_value={"rows": 0}) as litigation,
         patch("autoscreener.batch.daily_pipeline.run_monitoring", return_value={"tickers": 0}) as monitoring,
         patch(
             "autoscreener.batch.collect_events.collect_events", return_value={"tickers": 0}
@@ -91,6 +98,13 @@ def _stub_phase2367_steps():
             "macro": macro,
             "filings": filings,
             "xbrl": xbrl,
+            "consensus": consensus,
+            "intelligence": intelligence,
+            "filing_sections": filing_sections,
+            "guidance": guidance,
+            "concentration": concentration,
+            "dilution": dilution,
+            "litigation": litigation,
             "monitoring": monitoring,
             "events": events,
             "insider": insider,

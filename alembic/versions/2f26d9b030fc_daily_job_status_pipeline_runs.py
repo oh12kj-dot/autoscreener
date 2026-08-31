@@ -1,5 +1,5 @@
 """daily job status: pipeline_runs and pipeline_stage_runs
-(daily_job_status_screen_2026-08-30.md、14.15の運用監視)。
+(docs/daily_job_status_screen_2026-08-30.md、14.15の運用監視)。
 
 2026-08-29の実運用で全銘柄隔離・収集0件・スコアリング中断・提出書類収集の
 例外落ちが同時発生したにもかかわらず、パイプラインの終了コードは0だった

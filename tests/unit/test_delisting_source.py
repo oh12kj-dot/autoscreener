@@ -1,4 +1,4 @@
-"""上場廃止ユニバース構築のテスト(defect_and_edge_audit_2026-08-28.md D-1 / I-2)。
+"""上場廃止ユニバース構築のテスト(docs/defect_and_edge_audit_2026-08-28.md D-1 / I-2)。
 
 パースは純粋関数。DB反映は ZZ*** シンボルで後片付けする。
 """
@@ -81,6 +81,8 @@ def test_register_delisting_events_sets_delisted_at_without_quarantine():
 
 
 def _cleanup(symbols: list[str]) -> None:
+    from autoscreener.db.models import DelistingEvent as DelistingEventRow
     with session_scope() as session:
         for ticker in session.query(Ticker).filter(Ticker.symbol.in_(symbols)).all():
+            session.query(DelistingEventRow).filter_by(ticker_id=ticker.id).delete()
             session.delete(ticker)

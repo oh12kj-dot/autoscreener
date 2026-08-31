@@ -37,6 +37,8 @@ from autoscreener.batch.collect_guidance import collect_guidance
 from autoscreener.batch.collect_litigation import collect_litigation
 from autoscreener.batch.collect_macro import collect_macro
 from autoscreener.batch.collect_xbrl_facts import collect_xbrl_facts
+from autoscreener.batch.collect_consensus import collect_consensus
+from autoscreener.batch.collect_investment_intelligence import collect_investment_intelligence
 from autoscreener.batch.daily_pipeline import run_daily_pipeline
 from autoscreener.batch.refresh_cik_map import refresh_cik_map
 from autoscreener.batch.run_daily_collection import run_daily_collection, select_collectable_symbols
@@ -113,7 +115,7 @@ def backfill_history_cmd(
 ) -> None:
     """価格・株式数の履歴を一括取得し price_snapshots を埋める(1回限りのジョブ)。
 
-    B-4(defect_and_edge_audit_2026-08-28.md I-1):既定を `max` にした。評価日を
+    B-4(docs/defect_and_edge_audit_2026-08-28.md I-1):既定を `max` にした。評価日を
     増やすには履歴を伸ばすのが唯一の道(→ XBRL は2009年まで遡れる)。
     """
     target_symbols = _resolve_symbols(sample, symbols)
@@ -461,7 +463,7 @@ def estimate_elasticity_cmd(
         divergence = abs(mean_unclamped - mean_slope)
         typer.echo("")
         typer.echo(
-            f"E-4(defect_audit_2026-08-27.md):2値の乖離 = {divergence:.4f}(断面間の標準偏差 {spread:.4f} と比較する)。"
+            f"E-4(docs/defect_audit_2026-08-27.md):2値の乖離 = {divergence:.4f}(断面間の標準偏差 {spread:.4f} と比較する)。"
         )
         if divergence <= spread:
             typer.echo(
@@ -539,6 +541,26 @@ def collect_guidance_cmd(
 ) -> None:
     """Extract forward guidance from earnings-release filing sections."""
     counts = collect_guidance(symbols=_optional_symbols(symbols), limit=limit)
+    for key, count in counts.items():
+        typer.echo(f"  {key}: {count}")
+
+
+@app.command("collect-consensus")
+def collect_consensus_cmd(
+    symbols: str = typer.Option("", help="Comma-separated ticker symbols; defaults to tracked tickers."),
+) -> None:
+    """Append provider-neutral analyst consensus snapshots without overwriting history."""
+    counts = collect_consensus(symbols=_optional_symbols(symbols))
+    for key, count in counts.items():
+        typer.echo(f"  {key}: {count}")
+
+
+@app.command("collect-investment-intelligence")
+def collect_investment_intelligence_cmd(
+    symbols: str = typer.Option("", help="Comma-separated ticker symbols; defaults to all stored filing sections."),
+) -> None:
+    """Extract KPI, debt, allocation and proxy facts from stored SEC sections."""
+    counts = collect_investment_intelligence(symbols=_optional_symbols(symbols))
     for key, count in counts.items():
         typer.echo(f"  {key}: {count}")
 
@@ -719,7 +741,7 @@ def register_benchmarks_cmd(
         help="ベンチマークとして登録するETFのティッカー(カンマ区切り)。",
     ),
 ) -> None:
-    """D-4(defect_and_edge_audit_2026-08-28.md):ベンチマークETFを登録する。
+    """D-4(docs/defect_and_edge_audit_2026-08-28.md):ベンチマークETFを登録する。
 
     IWM(Russell 2000)/ IWC(マイクロキャップ)/ IJR(S&P600)/ SPY を
     `tickers` に `is_benchmark=True` で入れる。`universe_source.filter_candidates`
@@ -757,7 +779,7 @@ def register_benchmarks_cmd(
 def recover_quarantine_cmd(
     backup: bool = typer.Option(True, help="実行前に pg_dump バックアップを取る。"),
 ) -> None:
-    """A-1(defect_and_edge_audit_2026-08-28.md D-12):一斉隔離からの応急復旧。
+    """A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):一斉隔離からの応急復旧。
 
     レート制限やネットワーク断で1回の収集実行が全滅すると、全銘柄が同時に隔離
     され、`select_collectable_symbols` は `retry_interval_days` 経過後にしか
@@ -866,7 +888,7 @@ def ack_cmd(alert_id: int = typer.Argument(..., help="確認済みにするア�
 # K-9:LLM(Claude API)を使う定性分析。
 #
 # **どれも日次パイプラインには入っていない。** 呼ぶたびに実費が出るためで、
-# `draft-note` と同じく人間が明示的に叩いたときだけ動く。1回あたりの上限は
+# 人間が明示的に叩いたときだけ動く。1回あたりの上限は
 # `config/collection.yaml` の `llm.max_tickers_per_run` が決める。
 #
 # 出力は `llm_analyses` に隔離され、ゲートにもスコアにも入らない

@@ -236,7 +236,7 @@ def test_metrics_expose_the_worst_date_lift():
     assert metrics.rank_ic > 0
 
 
-# --- ナウキャスト上限への張り付き率(S-8、model_audit_v4_2026-08-26.md) --------
+# --- ナウキャスト上限への張り付き率(S-8、docs/model_audit_v4_2026-08-26.md) --------
 
 
 def test_nowcast_cap_hit_rate_counts_observations_pinned_at_the_cap():

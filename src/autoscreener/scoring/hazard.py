@@ -1,4 +1,4 @@
-"""上場廃止ハザード率の実測較正(defect_and_edge_audit_2026-08-28.md D-9)。純粋関数。
+"""上場廃止ハザード率の実測較正(docs/defect_and_edge_audit_2026-08-28.md D-9)。純粋関数。
 
 `config/scoring.yaml` の `survival.base_annual_hazard = 0.06` /
 `health_sensitivity = 1.2` は「(b) 公表された基準率からの事前値」であり、

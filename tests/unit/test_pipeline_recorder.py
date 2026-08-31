@@ -1,6 +1,6 @@
 """tests/unit/test_pipeline_recorder.py
 
-daily_job_status_screen_2026-08-30.md §7。`docker compose up -d` で起動済みの
+docs/daily_job_status_screen_2026-08-30.md §7。`docker compose up -d` で起動済みの
 ローカル開発用Postgresに対して実行する(他の多くのバッチ系テストと同じ)。
 実データと衝突しない未来日付(2098年以降)でテスト行を作り、終了時に削除する。
 """

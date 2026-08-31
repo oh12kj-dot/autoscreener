@@ -1,4 +1,4 @@
-"""上場廃止ユニバースの構築バッチ(defect_and_edge_audit_2026-08-28.md D-1 / I-2)。
+"""上場廃止ユニバースの構築バッチ(docs/defect_and_edge_audit_2026-08-28.md D-1 / I-2)。
 
 `collectors.delisting_source` の薄いオーケストレーション。EDGAR フルインデックスを
 走査 → 上場廃止イベントを CIK でティッカーへ解決 → `tickers.delisted_at` に登録。

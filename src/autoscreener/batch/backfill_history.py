@@ -35,7 +35,7 @@ def _backfill_one(
     ticker = get_or_create_ticker(session, symbol)
 
     try:
-        # B-4(defect_and_edge_audit_2026-08-28.md I-1):既定を "3y" から "max" へ。
+        # B-4(docs/defect_and_edge_audit_2026-08-28.md I-1):既定を "3y" から "max" へ。
         # companyfacts が2009年まで遡れても、価格が3年しか無ければバックテストの
         # 評価日を増やせない。
         rows = fetch_price_and_shares_history(symbol, collection_config.retry, period=period)

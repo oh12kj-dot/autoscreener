@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchPipelineRuns, fetchUniverseStatus } from "../api/client";
-import type { PipelineRunSummary, UniverseStatusResponse } from "../api/types";
+import { fetchLatestBacktest, fetchPipelineRuns, fetchUniverseStatus } from "../api/client";
+import type { BacktestSummary, PipelineRunSummary, UniverseStatusResponse } from "../api/types";
 
 /**
- * 日次ジョブの状態バナー(E-6 → §6.5、daily_job_status_screen_2026-08-30.md)。
+ * 日次ジョブの状態バナー(E-6 → §6.5、docs/daily_job_status_screen_2026-08-30.md)。
  *
  * 当初(B-6/E-6)は「収集が実行中かどうか」だけを出すバナーだった。2026-08-29 の
  * 実運用で、全銘柄隔離により収集対象が0件・スコアリング中断・提出書類収集が例外、
@@ -28,6 +28,7 @@ export function CollectionStatusBanner({ scoreDate }: { scoreDate?: string | nul
   // undefined = 取得前 / null = 記録なし(または取得失敗)
   const [run, setRun] = useState<PipelineRunSummary | null | undefined>(undefined);
   const [collection, setCollection] = useState<UniverseStatusResponse | null>(null);
+  const [validation, setValidation] = useState<BacktestSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,10 +48,18 @@ export function CollectionStatusBanner({ scoreDate }: { scoreDate?: string | nul
       .catch(() => {
         // 進捗の件数は無くても文意が通る(下の detail が空になるだけ)。
       });
+    fetchLatestBacktest().then((value) => { if (!cancelled) setValidation(value); }).catch(() => undefined);
     return () => {
       cancelled = true;
     };
   }, []);
+
+  if (validation && validation.validation_status !== "PASS") {
+    return <div className="collection-status-banner collection-status-banner--warn" role="alert">
+      <span aria-hidden="true">⚠</span><span><strong>Research Only / validation {validation.validation_status}</strong>
+      {validation.validation_reasons.length > 0 && ` — ${validation.validation_reasons.join(", ")}`}。{" "}<Link to="/validation">検証理由を見る</Link></span>
+    </div>;
+  }
 
   if (run === undefined || run === null) return null;
 

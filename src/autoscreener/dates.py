@@ -28,7 +28,7 @@ def utc_today() -> datetime.date:
 def business_days_between(start: datetime.date, end: datetime.date) -> int:
     """`start`(排他)から `end`(包含)までの営業日数(Mon–Fri、祝日は数えない)。
 
-    A-1(defect_and_edge_audit_2026-08-28.md D-12)のデータ鮮度ガードで使う。
+    A-1(docs/defect_and_edge_audit_2026-08-28.md D-12)のデータ鮮度ガードで使う。
     `end < start` なら負値を返す(方向を保持する)。祝日カレンダーは持たない
     ——小型株スクリーニングの鮮度判定に半日精度は要らず、祝日で1日甘くなる
     ぶんは `max_price_staleness_days` の余裕で吸収する。

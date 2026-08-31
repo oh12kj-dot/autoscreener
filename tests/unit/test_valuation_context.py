@@ -1,4 +1,4 @@
-"""J-3(investment_decision_gap_2026-08-29.md):バリュエーション断面分位のテスト。"""
+"""J-3(docs/investment_decision_gap_2026-08-29.md):バリュエーション断面分位のテスト。"""
 
 from __future__ import annotations
 

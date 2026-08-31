@@ -35,7 +35,7 @@ def _two_most_recent(field_series: dict[str, float | None] | None) -> tuple[floa
 
 
 # Piotroski 9基準の識別子とラベル。`piotroski_f_score` が criteria を積む順と一致。
-# J-2(investment_decision_gap_2026-08-29.md):UI で「成長の質の根拠」を9項目に
+# J-2(docs/investment_decision_gap_2026-08-29.md):UI で「成長の質の根拠」を9項目に
 # 分解して見せるために、合成値だけでなく内訳を露出する。
 PIOTROSKI_CRITERIA: tuple[tuple[str, str], ...] = (
     ("roa_positive", "ROA > 0(黒字)"),

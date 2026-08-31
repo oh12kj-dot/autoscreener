@@ -80,7 +80,7 @@ fred:
 # 表に隔離してある。
 llm:
   enabled: true
-  # K-9(ui_llm_provider_selection_2026-08-30.md):どのAPIに投げるか。
+  # K-9(docs/ui_llm_provider_selection_2026-08-30.md):どのAPIに投げるか。
   #   anthropic     = Claude native(既定)。要約・定性評価・レポートすべて対応。
   #   openai_compat = OpenAI互換 /v1/chat/completions。ChatGPT / NVIDIA NIM /
   #                   Ollama / vLLM / LM Studio / LiteLLM。.env の OPENAI_API_KEY と

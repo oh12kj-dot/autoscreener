@@ -1,4 +1,4 @@
-"""上場廃止ユニバースの構築(defect_and_edge_audit_2026-08-28.md D-1 / I-2)。
+"""上場廃止ユニバースの構築(docs/defect_and_edge_audit_2026-08-28.md D-1 / I-2)。
 
 **D-1【致命的】**:擬似バックテストの母集団は100%が現在も上場している銘柄で
 あり(実測で確認)、v4のパラメータは全部この標本の上でKPIを比較して選ばれて
@@ -24,7 +24,7 @@ from dataclasses import dataclass
 
 from autoscreener.collectors.edgar_client import EdgarClient
 from autoscreener.config import get_settings, load_edgar_config
-from autoscreener.db.models import Ticker
+from autoscreener.db.models import DelistingEvent as DelistingEventRow, Ticker
 from autoscreener.db.session import session_scope
 from autoscreener.symbols import normalize_symbol
 
@@ -54,6 +54,7 @@ class DelistingEvent:
     form: str
     filed_date: datetime.date
     company: str
+    filename: str | None = None
 
 
 def parse_form_index(text: str) -> list[FormIndexEntry]:
@@ -104,6 +105,7 @@ def iter_delisting_events(entries: Iterable[FormIndexEntry]) -> Iterator[Delisti
                 form=entry.form,
                 filed_date=entry.date_filed,
                 company=entry.company,
+                filename=entry.filename,
             )
 
 
@@ -181,7 +183,7 @@ def register_delisting_events(
             if current is None or event.filed_date < current.filed_date:
                 earliest[symbol] = event
 
-        counts = {"resolved": 0, "registered": 0, "updated": 0, "unresolved": len(events)}
+        counts = {"resolved": 0, "registered": 0, "updated": 0, "unresolved": len(events), "event_rows": 0}
         for symbol, event in earliest.items():
             counts["resolved"] += 1
             filed_dt = datetime.datetime.combine(
@@ -189,17 +191,31 @@ def register_delisting_events(
             )
             ticker = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
             if ticker is None:
-                session.add(
-                    Ticker(
+                ticker = Ticker(
                         symbol=symbol,
                         market="US",
                         cik=event.cik,
                         delisted_at=filed_dt,
                     )
-                )
+                session.add(ticker)
+                session.flush()
                 counts["registered"] += 1
             elif ticker.delisted_at is None:
                 ticker.delisted_at = filed_dt
                 ticker.cik = ticker.cik or event.cik
                 counts["updated"] += 1
+            existing = session.query(DelistingEventRow.id).filter_by(
+                ticker_id=ticker.id, event_date=event.filed_date, event_type="unknown"
+            ).first()
+            if not existing:
+                session.add(DelistingEventRow(
+                    ticker_id=ticker.id,
+                    event_date=event.filed_date,
+                    event_type="unknown",
+                    source="sec_full_index",
+                    source_url=(f"https://www.sec.gov/Archives/{event.filename}" if event.filename else None),
+                    observed_at=datetime.datetime.now(datetime.UTC),
+                    confidence="low",
+                ))
+                counts["event_rows"] += 1
     return counts

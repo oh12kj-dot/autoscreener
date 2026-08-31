@@ -1,4 +1,4 @@
-"""需給データの収集(J-7、investment_decision_gap_2026-08-29.md)。
+"""需給データの収集(J-7、docs/investment_decision_gap_2026-08-29.md)。
 
 Form 4(インサイダー取引)と FINRA の空売り残。パーサは実装済み
 (`collectors/form4_source.py` / `collectors/short_interest_source.py`)。ここは

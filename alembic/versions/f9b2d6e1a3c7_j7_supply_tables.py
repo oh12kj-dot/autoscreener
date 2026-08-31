@@ -1,4 +1,4 @@
-"""J-7(investment_decision_gap_2026-08-29.md):insider_transactions / short_interest。
+"""J-7(docs/investment_decision_gap_2026-08-29.md):insider_transactions / short_interest。
 
 Form 4 由来のインサイダー取引と FINRA の空売り残。**原則3:ゲート・スコアには
 一切入れない**——表示とアラートのみ。空売り残は遅延があるので `published_date` /

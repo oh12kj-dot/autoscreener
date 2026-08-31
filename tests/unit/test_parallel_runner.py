@@ -1,4 +1,4 @@
-"""並列収集ランナーのテスト(B-6、model_audit_v4_2026-08-26.md)。"""
+"""並列収集ランナーのテスト(B-6、docs/model_audit_v4_2026-08-26.md)。"""
 
 import datetime
 import uuid

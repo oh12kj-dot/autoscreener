@@ -395,7 +395,7 @@ def build_gate_input(
     median_dollar_volume: float | None,
     min_annual_periods: int,
 ) -> GateInput:
-    """D-10(defect_and_edge_audit_2026-08-28.md):ライブの `evaluate_gates` を
+    """D-10(docs/defect_and_edge_audit_2026-08-28.md):ライブの `evaluate_gates` を
     バックテストでも**そのまま**呼べるように、ポイントインタイム値で `GateInput`
     を組み立てる。
 
@@ -510,7 +510,7 @@ def build_moic_inputs(
 
     market_cap = price_at_as_of * shares
 
-    # E-1(2026-08-27、defect_audit_2026-08-27.md):`Total Debt` / 現金の行が
+    # E-1(2026-08-27、docs/defect_audit_2026-08-27.md):`Total Debt` / 現金の行が
     # 貸借対照表ペイロードに**存在しない**場合、`_latest` / `_cash_balance` は
     # None を返す。`or 0.0` はこの「測れない」を無条件に「有利子負債ゼロ」へ
     # 読み替えており、A-1(希薄化の欠損を「希薄化ゼロ」に読み替えていた欠陥)と
@@ -523,7 +523,7 @@ def build_moic_inputs(
     total_debt = total_debt_raw or 0.0
     cash = cash_raw or 0.0
     net_debt = (total_debt - cash) * fx
-    # S-5診断用(2026-08-26、model_audit_v4_2026-08-26.md):`Total Debt` は
+    # S-5診断用(2026-08-26、docs/model_audit_v4_2026-08-26.md):`Total Debt` は
     # ASC842以降のオペレーティングリース債務(`Capital Lease Obligations`)を
     # 含む。店舗網を持つ企業(DBI等)ではこれが net_debt の大半を占め、
     # leverage_effect を金融負債と同列に扱ってしまう。ランキングの計算式は

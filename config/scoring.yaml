@@ -70,7 +70,7 @@ growth:
   # 済みだった弱点の再発)。どのKPIも悪化させない 0.45 を採る。
   max_initial_rate_single_observation: 0.45
 
-  # 30.1:**循環と構造を区別する。**(investment_theory_review_2026-08-30.md)
+  # 30.1:**循環と構造を区別する。**(docs/investment_theory_review_2026-08-30.md)
   #
   # 初期成長率も終端粗利率も「直近の観測をそのまま7年へ引き伸ばす」推定量である。
   # 単調に伸びている事業では不偏に近いが、**循環している事業では観測時点が
@@ -120,7 +120,7 @@ growth:
   nowcast_weight: 0.25
   # 補正の絶対上限(ポイント)。±15pt を超えて成長率推定を動かさない。
   #
-  # S-8(2026-08-26、model_audit_v4_2026-08-26.md)の監査結果:実測では上位
+  # S-8(2026-08-26、docs/model_audit_v4_2026-08-26.md)の監査結果:実測では上位
   # 銘柄の約3割がこの上限に張り付いており(`run-backtest` の
   # `nowcast_cap_hit_rate` で監視可能にした)、決算ベースが縮小(負)なのに
   # 補正で成長側へ反転する例(ALTO・DBI・MEI等)も見つかった。**「一次情報を
@@ -169,7 +169,7 @@ margin:
   trend_damping: 0.40
   # 7年間で許容する粗利率の変化幅(ポイント)
   max_total_change: 0.15
-  # S-2(2026-08-26追加、model_audit_v4_2026-08-26.md):粗利率が薄い銘柄ほど
+  # S-2(2026-08-26追加、docs/model_audit_v4_2026-08-26.md):粗利率が薄い銘柄ほど
   # 絶対ポイントの上限(max_total_change)が過大な倍率になる問題への対処。
   # 終端粗利率は現在値の何倍までを許すか。「擬似バックテストで選んだ値」に
   # 分類される(独立な観測期間が実質3つしかなく、弱くしか特定されていない)。
@@ -238,7 +238,7 @@ multiple:
   # 固定値として使う——7年先を外挿するモデルに直近の断面値を入れると、
   # 相場つきの短期変動がそのまま7年の見通しに乗ってしまうため。
   #
-  # **E-4(2026-08-27、defect_audit_2026-08-27.md):説明変数のクランプ問題。**
+  # **E-4(2026-08-27、docs/defect_audit_2026-08-27.md):説明変数のクランプ問題。**
   # `estimate_elasticity_over_history` の説明変数 `base_initial_growth` は
   # `max_initial_rate`(0.60)/ `max_initial_rate_single_observation`(0.45)で
   # 丸め済みであり、高成長企業が上限の一点に潰れて回帰へ入る(打ち切り回帰 →
@@ -276,7 +276,7 @@ multiple:
   max_change: 3.0
   min_change: 0.30
 
-  # 30.3:**終端 EV/粗利の絶対上限。**(investment_theory_review_2026-08-30.md)
+  # 30.3:**終端 EV/粗利の絶対上限。**(docs/investment_theory_review_2026-08-30.md)
   #
   #   cap = percentile(当日断面の EV/粗利, terminal_cap_percentile) × terminal_cap_slack
   #
@@ -341,7 +341,7 @@ dilution:
   min_annual_rate: -0.05   # 自社株買いによる増価は年5%までしか織り込まない
   max_annual_rate: 0.50
 
-  # 30.4:**自社株買いだけを減衰させる。**(investment_theory_review_2026-08-30.md)
+  # 30.4:**自社株買いだけを減衰させる。**(docs/investment_theory_review_2026-08-30.md)
   #
   #   drag = Π_t (1 + r_t),  r_t = r                      (r ≥ 0:増資)
   #                          r_t = r × persistence^(t−1)  (r < 0:自社株買い)
@@ -418,7 +418,7 @@ uncertainty:
   # 年次期数が伸びて(a)の充足率が上がれば、この値を下げて銘柄差を復活させる。
   sigma_shrinkage: 0.85
 
-  # D-7(defect_and_edge_audit_2026-08-28.md):点推定(expected_moic)を対数正規の
+  # D-7(docs/defect_and_edge_audit_2026-08-28.md):点推定(expected_moic)を対数正規の
   # 「平均」とみなすか「中央値」とみなすか。"median" なら mu = ln(expected_moic)
   # (−σ²/2 の恒久的減額をしない)。expected_moic は5因子の中心的見通しの積で
   # あって平均ではない(平均には各因子に exp(σ_i²/2) が要るが掛けていない)ため、
@@ -426,7 +426,7 @@ uncertainty:
   # compare-configs で calibration_error と rank_ic の変化を測って決める。
   point_estimate_interpretation: "mean"
 
-# --- 貸借対照表の射影(D-6 / defect_and_edge_audit_2026-08-28.md) ---------------
+# --- 貸借対照表の射影(D-6 / docs/defect_and_edge_audit_2026-08-28.md) ---------------
 # terminal_equity = terminal_ev - net_debt で net_debt を7年間名目一定と仮定して
 # いる。ネットキャッシュを持つ赤字マイクロキャップ(このアプリの中心プロファイル)
 # を systematically 過大評価する向きに効く。**既定は無効。** フラグだけ先に入れ、
@@ -488,7 +488,7 @@ calibration:
   min_observations: 1000
   bins: 10
 
-# --- データ鮮度の前提条件(A-1 / defect_and_edge_audit_2026-08-28.md D-12) -------
+# --- データ鮮度の前提条件(A-1 / docs/defect_and_edge_audit_2026-08-28.md D-12) -------
 # 日次収集が一斉隔離・レート制限・ネットワーク断で途中停止すると、run_scoring は
 # 前日以前の価格・財務で当日付の scores を書き続けてしまう(2026-08-28 のランキングは
 # 08-24 の株価で作られていた)。古いランキングを新しい日付で出すより中止するほうが安全。
@@ -498,7 +498,7 @@ freshness:
   max_price_staleness_days: 2
   min_same_day_price_coverage: 0.9
 
-# --- KPIの受け入れ基準(A-5 / defect_and_edge_audit_2026-08-28.md D-3) ----------
+# --- KPIの受け入れ基準(A-5 / docs/defect_and_edge_audit_2026-08-28.md D-3) ----------
 # 14.2 の成功指標を機械可読にしたもの。run-backtest が各KPIを
 # PASS / FAIL / INSUFFICIENT_DATA で判定し、FAIL があれば非ゼロ終了する。
 # **D-1(生存者バイアス)/ D-2(有効標本不足)が直るまで、多くのKPIは

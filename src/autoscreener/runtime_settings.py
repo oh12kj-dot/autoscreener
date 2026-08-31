@@ -1,6 +1,6 @@
 """アクティブな名前付き接続プロファイルを、コミット済みの既定値の上に重ねる(K-9)。
 
-`ui_llm_provider_selection_2026-08-30.md`。`llm_connections`(DB)に
+`docs/ui_llm_provider_selection_2026-08-30.md`。`llm_connections`(DB)に
 `is_active = true` の行があれば、`config/collection.yaml` / `.env` の上に
 その provider / base_url / model / effort / send_effort / api_key を重ねる。
 **アクティブが無い・テーブルが無い・DBに繋がらない、はすべて「上書き無し」
