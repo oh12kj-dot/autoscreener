@@ -39,6 +39,11 @@ _MAX_STALE_RATIO = 0.25
 _RATIO_GUARD_MIN_TRACKED = 100
 
 
+def _stale_tickers(tracked: list[Ticker], candidate_symbols: set[str]) -> list[Ticker]:
+    """Return tracked rows absent from a complete candidate-symbol snapshot."""
+    return [ticker for ticker in tracked if ticker.symbol not in candidate_symbols]
+
+
 def refresh_universe(snapshot_date: date | None = None) -> int:
     snapshot_date = snapshot_date or utc_today()
     candidates = fetch_universe_candidates()
@@ -82,18 +87,16 @@ def refresh_universe(snapshot_date: date | None = None) -> int:
             logger.warning("universe candidate list is empty — skipping the stale-ticker sweep")
             return len(candidates)
 
-        tracked_count = (
-            session.query(Ticker).filter(Ticker.market == "US", Ticker.is_quarantined.is_(False)).count()
-        )
-        stale = (
+        tracked = (
             session.query(Ticker)
             .filter(
                 Ticker.market == "US",
                 Ticker.is_quarantined.is_(False),
-                ~Ticker.symbol.in_(candidate_symbols),
             )
             .all()
         )
+        tracked_count = len(tracked)
+        stale = _stale_tickers(tracked, candidate_symbols)
         if (
             tracked_count >= _RATIO_GUARD_MIN_TRACKED
             and len(stale) > tracked_count * _MAX_STALE_RATIO

@@ -4,12 +4,9 @@
 
 .DESCRIPTION
     タスクスケジューラの Action は標準ではstdout/stderrをファイルに落とせないため、
-    このPowerShellスクリプトでラップしてリダイレクトする(scripts/run_daily_pipeline.bat の
-    既存パターンと同じ理由。あちらは cmd.exe 版、これはタスクスケジューラ登録を
-    scripts/register_scheduled_task.ps1 で完結させるためのPowerShell版)。
-
-    register_scheduled_task.ps1 はこのファイルを直接指す Action を登録する
-    (このファイル自体をユーザーが手動編集する必要は無い)。
+    このPowerShellスクリプトでラップしてリダイレクトする
+    (scripts/run_daily_pipeline.bat の既存パターンと同じ理由)。現在登録済みの
+    AutoScreenerDailyPipeline は bat 版を使うが、こちらも同じ終了コードを返す。
 #>
 
 $ErrorActionPreference = "Continue"

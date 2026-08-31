@@ -74,6 +74,7 @@ def test_list_and_detail_reflect_a_seeded_run():
         assert entry["headline"]["universe_size"] == 10
         assert entry["stage_summary"]["succeeded"] == 3
         assert entry["stage_summary"]["skipped"] == 1
+        assert entry["expected_stage_count"] > sum(entry["stage_summary"].values())
 
         detail_body = client.get(f"/api/v1/pipeline/runs/{run_id}").json()
         assert detail_body["run"]["run_id"] == run_id

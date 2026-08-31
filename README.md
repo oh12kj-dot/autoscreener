@@ -1,12 +1,12 @@
 # TENX
 
-> **2026-08-30 operation record:** L-0 was run (quarantine recovery, delisting
-> collection, benchmark registration/history, and backtest). The latest saved
-> backtest has `delisted_settlement_rate = 0.0`; its KPI verdict includes FAIL,
-> so it is not decision-grade evidence. L-10 input coverage was also run:
-> 2,008 filing sections and 384 guidance records are stored. Customer
-> concentration and litigation currently have zero detected records for the
-> tracked universe; the UI represents this as no findings, not proof of absence.
+> **2026-08-31 operation record:** the scheduled pipeline finished `degraded`.
+> Collection produced 303 successful and 109 sanitized results, but 5,481 of
+> 5,893 tickers remained quarantined and scoring was skipped because only 1.8%
+> of the 1,188 gated tickers had a latest-date price row. The consensus and
+> investment-intelligence stages also failed; their collector bugs are fixed in
+> code, but a complete scheduled rerun has not yet verified the full pipeline.
+> Quarantine recovery remains an explicit operational step (see J-0 below).
 
 yfinanceの定量データから、小型〜中型の米国株を対象に将来10倍株(10バガー)になる可能性が相対的に高い銘柄をスクリーニング・スコアリングするアプリです。詳細な設計・実装の経緯は [`docs/10bagger_app_requirements.md`](docs/10bagger_app_requirements.md)、文書全体の案内は [`docs/README.md`](docs/README.md) を参照してください。
 

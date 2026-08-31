@@ -2,12 +2,13 @@
 
 docs/daily_job_status_screen_2026-08-30.md §7。`docker compose up -d` で起動済みの
 ローカル開発用Postgresに対して実行する(他の多くのバッチ系テストと同じ)。
-実データと衝突しない未来日付(2098年以降)でテスト行を作り、終了時に削除する。
+実データより前の隔離日付(1900年)でテスト行を作り、終了時にその年だけ削除する。
 """
 
 from __future__ import annotations
 
 import datetime
+from unittest.mock import patch
 
 import pytest
 
@@ -16,13 +17,17 @@ from autoscreener.db.models import PipelineRun, PipelineStageRun
 from autoscreener.db.session import session_scope
 from autoscreener.monitoring import HealthFinding
 
-_TEST_RUN_DATE = datetime.date(2099, 1, 1)
-_CLEANUP_FLOOR = datetime.date(2098, 1, 1)  # 前回実行系のテストが使う過去日も含めて掃除する
+_TEST_RUN_DATE = datetime.date(1900, 1, 2)
+_CLEANUP_START = datetime.date(1900, 1, 1)  # 前回実行系テストの1日前を含む
+_CLEANUP_END = datetime.date(1900, 12, 31)
 
 
 def _cleanup() -> None:
     with session_scope() as session:
-        session.query(PipelineRun).filter(PipelineRun.run_date >= _CLEANUP_FLOOR).delete(synchronize_session=False)
+        session.query(PipelineRun).filter(
+            PipelineRun.run_date >= _CLEANUP_START,
+            PipelineRun.run_date <= _CLEANUP_END,
+        ).delete(synchronize_session=False)
 
 
 @pytest.fixture(autouse=True)
@@ -177,15 +182,14 @@ def test_non_core_failed_stages_excludes_core_stages():
     assert recorder.non_core_failed_stages() == ["filings"]
 
 
-def test_prune_old_runs_deletes_beyond_retention_but_keeps_recent():
-    old_date = _TEST_RUN_DATE - datetime.timedelta(days=200)
-    old_recorder = PipelineRecorder(old_date, is_weekly=False)
-    old_recorder.finish([])
+@patch("autoscreener.batch.pipeline_recorder.session_scope")
+def test_prune_old_runs_uses_retention_cutoff_without_touching_shared_history(mock_scope):
+    """未来日テストから共有DBの実運用履歴を削除しない。"""
+    session = mock_scope.return_value.__enter__.return_value
+    delete = session.query.return_value.filter.return_value.delete
+    delete.return_value = 3
+    recorder = object.__new__(PipelineRecorder)
+    recorder.run_date = _TEST_RUN_DATE
 
-    recorder = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
-    recorder.prune_old_runs()
-
-    with session_scope() as session:
-        assert session.query(PipelineRun).filter_by(run_id=old_recorder.run_id).one_or_none() is None
-        # pipeline_stage_runs はCASCADEで一緒に消えているはず(§3.2)。
-        assert session.query(PipelineRun).filter_by(run_id=recorder.run_id).one_or_none() is not None
+    assert recorder.prune_old_runs() == 3
+    delete.assert_called_once_with(synchronize_session=False)

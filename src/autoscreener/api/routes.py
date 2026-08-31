@@ -180,6 +180,7 @@ from autoscreener.db.models import (
     LiveDatasetCoverage,
 )
 from autoscreener.research.notes import load_all_notes, load_note
+from autoscreener.pipeline_stages import PIPELINE_STAGE_COUNT
 from autoscreener.screening.dilution_outlook import (
     FilingRefView,
     NoteDilutionInputs,
@@ -1945,6 +1946,7 @@ def _pipeline_run_summary(run: PipelineRun, stages: list[PipelineStageRun]) -> P
         health=[PipelineHealthFinding(**f) for f in health],
         headline=_pipeline_headline(stage_results),
         stage_summary=_pipeline_stage_summary(stages),
+        expected_stage_count=PIPELINE_STAGE_COUNT,
     )
 
 

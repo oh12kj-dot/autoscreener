@@ -15,4 +15,6 @@ REM scheduler fires) before running the pipeline itself.
 docker compose up -d --wait >> "%LOGFILE%" 2>&1
 
 "C:\Users\oh12k\AppData\Local\Programs\Python\Python310\Scripts\uv.exe" run python -m autoscreener.cli run-daily-pipeline >> "%LOGFILE%" 2>&1
-echo ==== %date% %time% end (exit code %errorlevel%) ==== >> "%LOGFILE%"
+set "PIPELINE_EXIT=%ERRORLEVEL%"
+echo ==== %date% %time% end (exit code %PIPELINE_EXIT%) ==== >> "%LOGFILE%"
+exit /b %PIPELINE_EXIT%

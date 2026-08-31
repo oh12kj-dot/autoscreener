@@ -58,8 +58,14 @@ class YfinanceConsensusProvider:
             return rows
         for label, row in revenue.iterrows():
             label_text = str(label)
-            # yfinance labels are +1y/+2y or current year. Persist the exact
-            # label in raw_payload while using a deterministic approximate end.
+            # revenue_estimate contains quarterly (0q/+1q) and annual
+            # (0y/+1y) rows.  This collector stores annual consensus for the
+            # reverse-valuation horizon; treating 0q as FY created the same
+            # (source, period_end) key as 0y and aborted the whole batch.
+            if not label_text.lower().endswith("y"):
+                continue
+            # Persist the provider label while using a deterministic
+            # approximate calendar-year end.
             years = 2 if "+2" in label_text else 1 if "+1" in label_text else 0
             period_end = datetime.date(as_of.year + years, 12, 31)
             eps_row = earnings.loc[label] if earnings is not None and label in earnings.index else {}

@@ -498,6 +498,8 @@ export interface PipelineRunSummary {
   /** collected/gated_in/scored/quarantined/universe_size。値が無いキーはnull(0で埋めない)。 */
   headline: Record<string, number | null>;
   stage_summary: Record<string, number>;
+  /** 現行ランナーが予定する工程数。実行中の進捗分母に使う。 */
+  expected_stage_count: number;
 }
 
 export interface PipelineRunListResponse {

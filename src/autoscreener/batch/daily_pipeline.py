@@ -45,6 +45,7 @@ from autoscreener.dates import utc_today
 from autoscreener.db.models import Ticker
 from autoscreener.db.session import session_scope
 from autoscreener.monitoring import HealthFinding, check_collection_health, check_pipeline_health, check_quarantine_health
+from autoscreener.pipeline_stages import PIPELINE_STAGE_SEQUENCE
 from autoscreener.scoring.engine import run_scoring
 from autoscreener.scoring.forward_validation import run_forward_validation
 
@@ -64,7 +65,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
 
     if is_weekly:
         logger.info("weekly universe refresh (weekday=%s)", today.weekday())
-        with recorder.stage("universe_refresh", 1) as st:
+        with recorder.stage("universe_refresh", PIPELINE_STAGE_SEQUENCE["universe_refresh"]) as st:
             count = refresh_universe(today)
             st.result = results["universe_refresh"] = {"candidates": count}
 
@@ -74,7 +75,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # パイプライン全体は止めない(backupと同じ扱い)。
         logger.info("weekly CIK map refresh")
         try:
-            with recorder.stage("cik_map_refresh", 2) as st:
+            with recorder.stage("cik_map_refresh", PIPELINE_STAGE_SEQUENCE["cik_map_refresh"]) as st:
                 st.result = results["cik_map_refresh"] = refresh_cik_map()
         except Exception:
             logger.exception("weekly CIK map refresh failed (EDGAR_USER_AGENT not set?)")
@@ -82,7 +83,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # 30.8.2:財務データと同じく、マクロ系列も日々変わるものではないので週次で足りる。
         logger.info("weekly macro collection")
         try:
-            with recorder.stage("macro", 3) as st:
+            with recorder.stage("macro", PIPELINE_STAGE_SEQUENCE["macro"]) as st:
                 st.result = results["macro"] = collect_macro()
         except Exception:
             logger.exception("weekly macro collection failed (FRED_API_KEY not set?)")
@@ -90,7 +91,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # 30.5.5:XBRL実績値も財務データなので四半期に1回しか変わらない。週次で足りる。
         logger.info("weekly XBRL facts collection")
         try:
-            with recorder.stage("xbrl_facts", 4) as st:
+            with recorder.stage("xbrl_facts", PIPELINE_STAGE_SEQUENCE["xbrl_facts"]) as st:
                 st.result = results["xbrl_facts"] = collect_xbrl_facts()
         except Exception:
             logger.exception("weekly XBRL facts collection failed (EDGAR_USER_AGENT not set?)")
@@ -102,7 +103,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         try:
             from autoscreener.batch.collect_events import collect_events
 
-            with recorder.stage("events", 5) as st:
+            with recorder.stage("events", PIPELINE_STAGE_SEQUENCE["events"]) as st:
                 st.result = results["events"] = collect_events()
         except Exception:
             logger.exception("weekly event calendar collection failed")
@@ -120,7 +121,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         try:
             from autoscreener.batch.collect_supply import collect_insider
 
-            with recorder.stage("insider", 6) as st:
+            with recorder.stage("insider", PIPELINE_STAGE_SEQUENCE["insider"]) as st:
                 st.result = results["insider"] = collect_insider()
         except Exception:
             logger.exception("weekly insider transactions collection failed")
@@ -129,7 +130,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         try:
             from autoscreener.batch.collect_supply import collect_short_interest
 
-            with recorder.stage("short_interest", 7) as st:
+            with recorder.stage("short_interest", PIPELINE_STAGE_SEQUENCE["short_interest"]) as st:
                 st.result = results["short_interest"] = collect_short_interest()
         except Exception:
             logger.exception("weekly short interest collection failed")
@@ -137,13 +138,13 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # 火〜日は週次工程の対象外(§3.3)。`skipped` を `failed` と混ぜないための
         # 明示的な記録——これが無いと画面が毎日8件の「失敗」を出し、誰も見なく
         # なる。
-        recorder.skip("universe_refresh", 1, "not_weekly")
-        recorder.skip("cik_map_refresh", 2, "not_weekly")
-        recorder.skip("macro", 3, "not_weekly")
-        recorder.skip("xbrl_facts", 4, "not_weekly")
-        recorder.skip("events", 5, "not_weekly")
-        recorder.skip("insider", 6, "not_weekly")
-        recorder.skip("short_interest", 7, "not_weekly")
+        recorder.skip("universe_refresh", PIPELINE_STAGE_SEQUENCE["universe_refresh"], "not_weekly")
+        recorder.skip("cik_map_refresh", PIPELINE_STAGE_SEQUENCE["cik_map_refresh"], "not_weekly")
+        recorder.skip("macro", PIPELINE_STAGE_SEQUENCE["macro"], "not_weekly")
+        recorder.skip("xbrl_facts", PIPELINE_STAGE_SEQUENCE["xbrl_facts"], "not_weekly")
+        recorder.skip("events", PIPELINE_STAGE_SEQUENCE["events"], "not_weekly")
+        recorder.skip("insider", PIPELINE_STAGE_SEQUENCE["insider"], "not_weekly")
+        recorder.skip("short_interest", PIPELINE_STAGE_SEQUENCE["short_interest"], "not_weekly")
 
     # 18.1:隔離中でも再挑戦期限が来た銘柄は対象に含める(`select_collectable_symbols`)。
     # 設定を1度だけ読んで収集本体にも渡す——対象の選定と `collect_one` の再挑戦判定が
@@ -153,7 +154,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         symbols = select_collectable_symbols(session, collection_config)
 
     logger.info("daily collection: %d symbols", len(symbols))
-    with recorder.stage("collection", 8) as st:
+    with recorder.stage("collection", PIPELINE_STAGE_SEQUENCE["collection"]) as st:
         results["collection"] = run_daily_collection(
             symbols, collection_config=collection_config, snapshot_date=today
         )
@@ -171,13 +172,13 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     # layer and failures must not prevent the deterministic core score.
     logger.info("collecting analyst consensus snapshots")
     try:
-        with recorder.stage("consensus", 16) as st:
+        with recorder.stage("consensus", PIPELINE_STAGE_SEQUENCE["consensus"]) as st:
             st.result = results["consensus"] = collect_consensus()
     except Exception:
         logger.exception("consensus collection failed")
 
     logger.info("applying gates")
-    with recorder.stage("gates", 9) as st:
+    with recorder.stage("gates", PIPELINE_STAGE_SEQUENCE["gates"]) as st:
         st.result = results["gates"] = apply_gates(today)
 
     if is_weekly:
@@ -187,20 +188,20 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # スコアは未較正のまま保存され、UIがその状態を明示する)。
         logger.info("weekly backtest (recalibration)")
         try:
-            with recorder.stage("backtest", 10) as st:
+            with recorder.stage("backtest", PIPELINE_STAGE_SEQUENCE["backtest"]) as st:
                 metrics = run_backtest()
                 st.result = results["backtest"] = {"observations": metrics.observation_count}
         except Exception:
             logger.exception("weekly backtest failed — scores will use the previous calibration map")
     else:
-        recorder.skip("backtest", 10, "not_weekly")
+        recorder.skip("backtest", PIPELINE_STAGE_SEQUENCE["backtest"], "not_weekly")
 
     logger.info("running scoring")
-    with recorder.stage("scoring", 11) as st:
+    with recorder.stage("scoring", PIPELINE_STAGE_SEQUENCE["scoring"]) as st:
         st.result = results["scoring"] = run_scoring(today)
 
     logger.info("running forward validation")
-    with recorder.stage("forward_validation", 12) as st:
+    with recorder.stage("forward_validation", PIPELINE_STAGE_SEQUENCE["forward_validation"]) as st:
         st.result = results["forward_validation"] = run_forward_validation(today)
 
     # 30.3.6:追跡対象の選定に当日のランキングを使うため、スコアが確定してから
@@ -210,34 +211,34 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     # 正常状態でありうる。
     logger.info("collecting SEC filings for tracked tickers")
     try:
-        with recorder.stage("filings", 13) as st:
+        with recorder.stage("filings", PIPELINE_STAGE_SEQUENCE["filings"]) as st:
             st.result = results["filings"] = collect_filings()
     except Exception:
         logger.exception("collect_filings failed (EDGAR_USER_AGENT not set, or SEC unavailable?)")
 
     logger.info("extracting source sections from new SEC filings")
     try:
-        with recorder.stage("filing_sections", 14) as st:
+        with recorder.stage("filing_sections", PIPELINE_STAGE_SEQUENCE["filing_sections"]) as st:
             st.result = results["filing_sections"] = collect_filing_sections()
     except Exception:
         logger.exception("filing section extraction failed")
 
     disclosure_jobs = (
-        ("guidance", 15, collect_guidance),
-        ("customer_concentration", 16, collect_concentration),
-        ("dilution", 17, collect_dilution),
-        ("litigation", 18, collect_litigation),
+        ("guidance", collect_guidance),
+        ("customer_concentration", collect_concentration),
+        ("dilution", collect_dilution),
+        ("litigation", collect_litigation),
     )
-    for stage_name, sequence, job in disclosure_jobs:
+    for stage_name, job in disclosure_jobs:
         try:
-            with recorder.stage(stage_name, sequence) as st:
+            with recorder.stage(stage_name, PIPELINE_STAGE_SEQUENCE[stage_name]) as st:
                 st.result = results[stage_name] = job()
         except Exception:
             logger.exception("%s extraction failed", stage_name)
 
     logger.info("extracting investment intelligence from stored filing sections")
     try:
-        with recorder.stage("investment_intelligence", 19) as st:
+        with recorder.stage("investment_intelligence", PIPELINE_STAGE_SEQUENCE["investment_intelligence"]) as st:
             st.result = results["investment_intelligence"] = collect_investment_intelligence()
     except Exception:
         logger.exception("investment intelligence extraction failed")
@@ -252,14 +253,14 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     # 当日のスコア計算・収集の成果を無駄にする理由にはならない(18.4と同じ扱い)。
     logger.info("running quarterly monitoring")
     try:
-        with recorder.stage("monitoring", 20) as st:
+        with recorder.stage("monitoring", PIPELINE_STAGE_SEQUENCE["monitoring"]) as st:
             st.result = results["monitoring"] = run_monitoring(today)
     except Exception:
         logger.exception("run_monitoring failed")
 
     logger.info("running backup")
     try:
-        with recorder.stage("backup", 21) as st:
+        with recorder.stage("backup", PIPELINE_STAGE_SEQUENCE["backup"]) as st:
             backup_path = run_backup()
             st.result = {"path": str(backup_path)}
     except Exception:

@@ -855,6 +855,7 @@ class PipelineRunSummary(BaseModel):
     # 記録が無いキーはNone(0で埋めない。§2「やらないこと」と同じ判断)。
     headline: dict[str, int | None] = {}
     stage_summary: dict[str, int] = {}
+    expected_stage_count: int
 
 
 class PipelineRunListResponse(BaseModel):

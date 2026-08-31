@@ -5,6 +5,15 @@ from unittest.mock import ANY, patch
 import pytest
 
 from autoscreener.batch.daily_pipeline import run_daily_pipeline
+from autoscreener.pipeline_stages import PIPELINE_STAGE_COUNT, PIPELINE_STAGE_SEQUENCE
+
+
+def test_pipeline_stage_sequence_is_unique_contiguous_and_matches_execution_order():
+    sequences = list(PIPELINE_STAGE_SEQUENCE.values())
+    assert len(sequences) == PIPELINE_STAGE_COUNT == len(set(sequences))
+    assert sorted(sequences) == list(range(1, PIPELINE_STAGE_COUNT + 1))
+    assert PIPELINE_STAGE_SEQUENCE["collection"] < PIPELINE_STAGE_SEQUENCE["consensus"]
+    assert PIPELINE_STAGE_SEQUENCE["consensus"] < PIPELINE_STAGE_SEQUENCE["gates"]
 
 
 class _FakeRecorder:

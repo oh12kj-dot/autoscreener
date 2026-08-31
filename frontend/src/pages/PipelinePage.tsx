@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { fetchPipelineRun, fetchPipelineRuns, fetchScoreDates } from "../api/client";
 import type { PipelineRunDetail, PipelineRunListResponse, PipelineStageView } from "../api/types";
@@ -98,6 +98,7 @@ export function PipelinePage() {
   const [loading, setLoading] = useState(true);
   const [weeklyExpanded, setWeeklyExpanded] = useState(false);
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
+  const displayedRunId = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -106,6 +107,12 @@ export function PipelinePage() {
         fetchPipelineRun(selectedRunId ?? "latest"),
         fetchScoreDates(1).catch(() => null),
       ]);
+      const nextRunId = detailResp.run?.run_id ?? null;
+      if (displayedRunId.current !== nextRunId) {
+        displayedRunId.current = nextRunId;
+        setWeeklyExpanded(Boolean(detailResp.run?.is_weekly));
+        setExpandedStage(null);
+      }
       setList(listResp);
       setDetail(detailResp);
       setLatestScoreDate(scoreDatesResp?.dates[0] ?? null);
@@ -119,21 +126,8 @@ export function PipelinePage() {
   }, [selectedRunId]);
 
   useEffect(() => {
-    setLoading(true);
     load();
   }, [load]);
-
-  // 月曜(is_weekly)の実行を見ているときは既定で週次工程を展開する(§6.3)。
-  //
-  // 依存配列を `run_id` だけに絞るのは意図的。`detail` を入れると、実行中の
-  // 15秒ポーリング(§6.4)でオブジェクトの同一性が変わるたびにこの効果が再走し、
-  // 利用者が読んでいる最中のトレースバックを勝手に畳んでしまう。「見ている実行が
-  // 切り替わったとき」だけが展開状態をリセットしてよい契機である。
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (detail?.run) setWeeklyExpanded(detail.run.is_weekly);
-    setExpandedStage(null);
-  }, [detail?.run?.run_id]);
 
   useEffect(() => {
     if (detail?.run?.status !== "running") return;
@@ -144,6 +138,7 @@ export function PipelinePage() {
   }, [detail?.run?.status, load]);
 
   const selectRun = (runId: string) => {
+    setLoading(true);
     const next = new URLSearchParams(searchParams);
     next.set("run", runId);
     setSearchParams(next);
@@ -179,7 +174,7 @@ export function PipelinePage() {
     scoringStage?.status === "succeeded" &&
     !(scoringStage.result && typeof scoringStage.result === "object" && "skipped_reason" in scoringStage.result);
 
-  const totalStagesCount = 15;
+  const totalStagesCount = run?.expected_stage_count ?? stages.length;
   const completedStagesCount = run
     ? (run.stage_summary.succeeded ?? 0) + (run.stage_summary.failed ?? 0) + (run.stage_summary.skipped ?? 0)
     : 0;

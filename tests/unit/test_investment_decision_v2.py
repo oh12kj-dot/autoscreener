@@ -4,6 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from autoscreener.api.main import app
+from autoscreener.batch.collect_consensus import collect_consensus
+from autoscreener.collectors.consensus import ConsensusSnapshot, YfinanceConsensusProvider
 from autoscreener.config import load_scoring_config
 from autoscreener.db.models import AnalystConsensusSnapshot, Ticker
 from autoscreener.db.session import session_scope
@@ -89,6 +91,79 @@ def test_filing_extractors_keep_source_excerpt():
     debts = extract_debt_maturities("$190 million of senior notes mature in 2028.")
     assert debts[0].principal == 190_000_000
     assert debts[0].maturity_year == 2028
+
+
+def test_filing_extractors_ignore_punctuation_that_is_not_a_number():
+    assert extract_operating_kpis("We serve enterprise, customers across many markets.") == []
+
+
+def test_yfinance_consensus_uses_annual_rows_only():
+    class EstimateTable:
+        empty = False
+
+        def iterrows(self):
+            return iter((
+                ("0q", {"avg": 10, "low": 9, "high": 11, "numberOfAnalysts": 3}),
+                ("+1q", {"avg": 12, "low": 11, "high": 13, "numberOfAnalysts": 3}),
+                ("0y", {"avg": 40, "low": 38, "high": 42, "numberOfAnalysts": 5}),
+                ("+1y", {"avg": 50, "low": 48, "high": 52, "numberOfAnalysts": 5}),
+            ))
+
+    class ProviderTicker:
+        revenue_estimate = EstimateTable()
+        earnings_estimate = None
+        info = {}
+
+    observed_at = datetime.datetime(2026, 8, 31, tzinfo=datetime.timezone.utc)
+    rows = YfinanceConsensusProvider(lambda _: ProviderTicker()).fetch("TEST", observed_at)
+
+    assert [row.raw_payload["provider_period"] for row in rows] == ["0y", "+1y"]
+    assert len({(row.source, row.period_end) for row in rows}) == len(rows)
+
+
+def test_consensus_conflict_is_isolated_and_recorded():
+    symbol = "ZZCONFLICT"
+    observed_at = datetime.datetime(2097, 7, 1, tzinfo=datetime.timezone.utc)
+
+    class ConflictingProvider:
+        name = "test-conflict"
+
+        def fetch(self, ticker, as_of):
+            common = dict(
+                observed_at=as_of,
+                source=self.name,
+                period_type="FY",
+                period_end=datetime.date(2097, 12, 31),
+            )
+            return [
+                ConsensusSnapshot(**common, revenue_mean=100),
+                ConsensusSnapshot(**common, revenue_mean=200),
+            ]
+
+    with session_scope() as session:
+        old = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+        if old:
+            session.query(AnalystConsensusSnapshot).filter_by(ticker_id=old.id).delete()
+            session.delete(old)
+        session.add(Ticker(symbol=symbol, market="US", sector="Technology"))
+
+    try:
+        stats = collect_consensus(ConflictingProvider(), as_of=observed_at, symbols=[symbol])
+        assert stats["processed"] == 1
+        assert stats["failed"] == 1
+        assert stats["inserted"] == 0
+        with session_scope() as session:
+            ticker = session.query(Ticker).filter_by(symbol=symbol).one()
+            rows = session.query(AnalystConsensusSnapshot).filter_by(ticker_id=ticker.id).all()
+            assert len(rows) == 1
+            assert rows[0].coverage_status == "collection_failed"
+            assert rows[0].raw_payload["error_type"] == "ValueError"
+    finally:
+        with session_scope() as session:
+            ticker = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+            if ticker:
+                session.query(AnalystConsensusSnapshot).filter_by(ticker_id=ticker.id).delete()
+                session.delete(ticker)
 
 
 def test_consensus_endpoint_is_point_in_time():

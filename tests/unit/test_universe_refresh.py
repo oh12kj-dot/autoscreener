@@ -1,9 +1,10 @@
 """週次ユニバース更新のテスト(B-8、docs/model_audit_v4_2026-08-26.md)。"""
 
 import datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from autoscreener.batch.universe_refresh import refresh_universe
+from autoscreener.batch.universe_refresh import _stale_tickers, refresh_universe
 from autoscreener.collectors.universe_source import CandidateTicker
 from autoscreener.db.models import Ticker, UniverseSnapshot
 from autoscreener.db.session import session_scope
@@ -18,43 +19,17 @@ def _cleanup(symbols: list[str]) -> None:
                 session.delete(ticker)
 
 
-@patch("autoscreener.batch.universe_refresh._RATIO_GUARD_MIN_TRACKED", float("inf"))
-@patch("autoscreener.batch.universe_refresh.fetch_universe_candidates")
-def test_tickers_missing_from_the_candidate_list_are_quarantined(mock_fetch):
-    """B-8: フィルタ実装前に登録された残骸(優先株等)が、候補リストから
-    消えた次の週次更新で隔離され、日次収集の対象から外れること。
+def test_tickers_missing_from_the_candidate_list_are_identified_without_touching_shared_db():
+    """B-8 の集合差を純粋関数で検証し、共有DBの実銘柄を変更しない。
 
-    **`_RATIO_GUARD_MIN_TRACKED` を無効化している。** `refresh_universe` の
-    掃引比率ガードは `market == "US" かつ is_quarantined=False` の**全ティッカー**
-    を分母にする(symbolで絞り込まない)。開発DBには本番相当のティッカーが
-    数千件あり、このテストが作る候補は1件だけなので、ガードを有効なままにすると
-    「追跡中の97%超を隔離しようとしている」と判定されて掃引ごと見送られ、
-    本テストが検証したい「候補から消えた銘柄は隔離される」という本筋の挙動が
-    確認できなくなる(実際に2026-08-30、開発DBの実データで発生した)。
-    ガードそのものの動作は下の `test_sweep_is_skipped_when_it_would_quarantine_too_many`
-    が(逆方向に、値を`1`にして)別途検証している。
+    以前のテストは比率ガードを無効化した状態で候補を1件だけ返し、共有DBにある
+    数千銘柄をすべて隔離したまま戻していた。運用DBを使うテストでは大量更新を
+    発生させないこと自体がこの回帰テストの要件である。
     """
-    stale_symbol = "ZZSTALEPREF$D"
-    fresh_symbol = "ZZFRESHCOMMON1"
-    _cleanup([stale_symbol, fresh_symbol])
-    try:
-        with session_scope() as session:
-            session.add(Ticker(symbol=stale_symbol, market="US", is_quarantined=False))
-            session.flush()
+    stale = SimpleNamespace(symbol="ZZSTALEPREF$D")
+    fresh = SimpleNamespace(symbol="ZZFRESHCOMMON1")
 
-        mock_fetch.return_value = [
-            CandidateTicker(symbol=fresh_symbol, security_name="Fresh Co", exchange="NASDAQ", is_etf=False, is_test_issue=False)
-        ]
-
-        refresh_universe(snapshot_date=datetime.date.today())
-
-        with session_scope() as session:
-            stale = session.query(Ticker).filter_by(symbol=stale_symbol).one()
-            fresh = session.query(Ticker).filter_by(symbol=fresh_symbol).one()
-            assert stale.is_quarantined is True
-            assert fresh.is_quarantined is False
-    finally:
-        _cleanup([stale_symbol, fresh_symbol])
+    assert _stale_tickers([stale, fresh], {fresh.symbol}) == [stale]
 
 
 @patch("autoscreener.batch.universe_refresh.fetch_universe_candidates")
