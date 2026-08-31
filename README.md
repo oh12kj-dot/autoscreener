@@ -376,6 +376,7 @@ Windows Task Scheduler にタスク `AutoScreenerDailyPipeline` が登録済み�
 - ログは `logs/daily_pipeline_YYYYMMDD.log` に日付ごとに保存されます
 - DBバックアップは `backups/` に日付ごとに保存され、直近14日分が自動的に保持されます(gzip圧縮)
 - タスクの状態確認: PowerShellで `Get-ScheduledTask -TaskName "AutoScreenerDailyPipeline"`
+- プロセスが異常終了した場合は15分間隔で最大2回再試行します。既存タスクへこの設定を再適用する場合は PowerShell で `./scripts/configure_daily_pipeline_retries.ps1` を実行してください。`degraded` は監視画面/APIに保存されますが、データを重複更新し得る全パイプラインの自動再実行は行いません
 
 ### バックアップからの復元手順(四半期に1回は実際に試すこと)
 
