@@ -110,7 +110,7 @@ export function InvestmentIntelligenceSections({ ticker, horizonYears, expectedM
         <div className="decision-live-grid">
           <div className="decision-live-metric">
             <span className="decision-live-label">Validation</span>
-            <strong className={`decision-live-value ${validationStatus !== "VALIDATED" ? "is-warning" : ""}`}>{validationStatus}</strong>
+            <strong className={`decision-live-value ${validationStatus !== "PASS" ? "is-warning" : ""}`}>{validationStatus}</strong>
           </div>
           <div className="decision-live-metric">
             <span className="decision-live-label">Data coverage</span>
