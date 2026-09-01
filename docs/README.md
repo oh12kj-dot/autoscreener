@@ -7,6 +7,7 @@
 
 - [`10bagger_app_requirements.md`](10bagger_app_requirements.md): TENX の要件定義と設計判断
 - [`TENX_investment_decision_v2_implementation_plan.md`](TENX_investment_decision_v2_implementation_plan.md): Live Investment Intelligence を含む v2 実装計画
+- [`live_intelligence_missing_data_remediation_plan_2026-09-01.md`](live_intelligence_missing_data_remediation_plan_2026-09-01.md): 詳細画面の「未取得」をUI・API・収集・DB・運用まで是正する完全実装計画
 - [`outside_tenx_implementation_plan_2026-08-28.md`](outside_tenx_implementation_plan_2026-08-28.md): EDGAR、マクロ、保有管理などの実装計画
 - [`daily_job_status_screen_2026-08-30.md`](daily_job_status_screen_2026-08-30.md): 日次ジョブ実行状況画面の設計
 - [`ui_llm_provider_selection_2026-08-30.md`](ui_llm_provider_selection_2026-08-30.md): UI からの LLM 接続・モデル選択の設計と実装記録
