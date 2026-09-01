@@ -6,6 +6,10 @@
   --bg: #f6f7fb;
   --surface: #ffffff;
   --surface-hover: #f9fafc;
+  /* 通常のsurfaceよりわずかに沈めた面。未着手のチェック項目やレンジバーの溝など、
+     「枠の中の一段奥」を表す。以前は各所で var(--surface-alt, #f8fafc) と
+     ライト前提のフォールバックだけ書いていたため、ダークテーマで白背景になっていた。 */
+  --surface-alt: #f1f2f6;
   --border: #e5e7ef;
   --text: #14151a;
   --text-muted: #6b7280;
@@ -37,6 +41,7 @@
     --bg: #0f1115;
     --surface: #171921;
     --surface-hover: #1d202b;
+    --surface-alt: #1d202b;
     --border: #2a2d38;
     --text: #f1f2f6;
     --text-muted: #9aa0ae;
@@ -480,7 +485,7 @@ a {
 }
 .dd-checklist-item.dd-state-todo {
   border-left-color: #9ca3af;
-  background: var(--surface-alt, #f8fafc);
+  background: var(--surface-alt);
 }
 .dd-checklist-item.dd-warn {
   border-left-color: #dc2626;
@@ -511,7 +516,7 @@ a {
   position: relative;
   height: 22px;
   margin: 0.6rem 0;
-  background: var(--surface-alt, #f1f5f9);
+  background: var(--surface-alt);
   border: 1px solid var(--border);
   border-radius: 4px;
 }
@@ -1920,4 +1925,47 @@ td.negative {
   margin-top: 0.6rem;
   color: var(--text-faint);
   font-size: 0.8rem;
+}
+
+/* ============================================================
+   recharts のテーマ対応(J-2 / J-4 / 27章のチャート群)
+   recharts は既定でツールチップを白背景・軸ラベルを #666 で描く。
+   ダークテーマだと「白い箱に薄い文字」「地に沈む軸」になって
+   判読不能だったため、生成される .recharts-* をテーマ変数で上書きする
+   (個々の <Tooltip>/<XAxis> に props を配らずに済む)。
+   ============================================================ */
+.recharts-cartesian-axis-tick-value,
+.recharts-text {
+  fill: var(--text-muted);
+}
+
+.recharts-cartesian-grid line,
+.recharts-cartesian-axis line,
+.recharts-cartesian-axis-tick line {
+  stroke: var(--border);
+}
+
+.recharts-curve.recharts-tooltip-cursor,
+.recharts-rectangle.recharts-tooltip-cursor {
+  stroke: var(--border);
+  fill: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.recharts-default-tooltip {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 0.55rem 0.75rem !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* 系列名/値は recharts が系列色をインラインで載せるので触らない。
+   凡例テキストだけは既定が真っ黒(#333 相当)でダークだと沈むため上書きする。 */
+.recharts-legend-item-text {
+  color: var(--text-muted) !important;
 }
