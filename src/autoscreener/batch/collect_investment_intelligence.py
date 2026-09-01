@@ -41,27 +41,52 @@ def collect_investment_intelligence(*, symbols: list[str] | None = None,
                 session.add(row); session.flush()
             definitions[code] = row
 
+        normalized_symbols = {symbol.upper() for symbol in symbols} if symbols else None
+        selected_ticker_ids: set[int] | None = None
         query = session.query(FilingSection)
         if symbols:
-            ids = [id_ for (id_,) in session.query(Ticker.id).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()]
-            query = query.filter(FilingSection.ticker_id.in_(ids))
-        section_rows = query.order_by(FilingSection.filed_date.asc()).all()
+            selected_ticker_ids = {
+                id_
+                for (id_,) in session.query(Ticker.id)
+                .filter(Ticker.symbol.in_(normalized_symbols))
+                .all()
+            }
+            query = query.filter(FilingSection.ticker_id.in_(selected_ticker_ids))
+        section_rows = query.order_by(FilingSection.filed_date.asc(), FilingSection.id.asc()).all()
         processed_ticker_ids = {section.ticker_id for section in section_rows}
+        # uq_kpi_observation は source_accession ではなくこの4列を一意キーにする。
+        # 同一日に提出された複数section/accessionから同じKPIが抽出される場合、
+        # DB照会だけでは同じトランザクション内の未flush行を判定できず、後続照会の
+        # autoflushでUniqueViolationになる。DBの一意キーと同じキーを実行内でも
+        # 予約し、最初の根拠行だけを採用する。
+        seen_kpi_observation_keys: set[tuple[int, int, datetime.date, datetime.datetime]] = set()
         for section in section_rows:
             counts["sections"] += 1
             source = "sec_edgar"
             for item in extract_operating_kpis(section.text):
                 definition = definitions[item.code]
+                observation_key = (
+                    section.ticker_id,
+                    definition.id,
+                    section.filed_date,
+                    observed_at,
+                )
+                if observation_key in seen_kpi_observation_keys:
+                    continue
                 exists = session.query(OperatingKpiObservation.id).filter_by(
                     ticker_id=section.ticker_id, kpi_definition_id=definition.id,
                     period_end=section.filed_date, source_accession=section.accession_number,
                 ).first()
-                if exists: continue
+                if exists:
+                    seen_kpi_observation_keys.add(observation_key)
+                    continue
                 session.add(OperatingKpiObservation(ticker_id=section.ticker_id,kpi_definition_id=definition.id,
                     period_end=section.filed_date,reported_at=observed_at,observed_at=observed_at,value=item.value,
                     company_definition=item.excerpt,source=source,source_accession=section.accession_number,
                     source_url=section.source_url,source_excerpt=item.excerpt,extraction_method="regex",confidence="medium",
-                    coverage_status="collected_with_data")); counts["kpis"] += 1
+                    coverage_status="collected_with_data"))
+                seen_kpi_observation_keys.add(observation_key)
+                counts["kpis"] += 1
             for index, item in enumerate(extract_debt_maturities(section.text)):
                 instrument_id = f"{section.accession_number}:{item.maturity_year}:{index}"
                 if session.query(DebtInstrument.id).filter_by(ticker_id=section.ticker_id,instrument_id=instrument_id,as_of=section.filed_date).first(): continue
@@ -88,7 +113,10 @@ def collect_investment_intelligence(*, symbols: list[str] | None = None,
                         source_url=section.source_url,coverage_status="collected_with_data",confidence="low")); counts["incentives"] += 1
 
         # Existing guidance extraction becomes an append-only PIT history.
-        for row in session.query(Guidance).order_by(Guidance.filed_date.asc()).all():
+        guidance_query = session.query(Guidance)
+        if selected_ticker_ids is not None:
+            guidance_query = guidance_query.filter(Guidance.ticker_id.in_(selected_ticker_ids))
+        for row in guidance_query.order_by(Guidance.filed_date.asc()).all():
             announced = datetime.datetime.combine(row.filed_date, datetime.time.min, tzinfo=datetime.timezone.utc)
             if session.query(ManagementGuidanceSnapshot.id).filter_by(ticker_id=row.ticker_id,
                 source_accession=row.accession_number,metric=row.metric).first(): continue
@@ -99,6 +127,8 @@ def collect_investment_intelligence(*, symbols: list[str] | None = None,
                 coverage_status="collected_with_data",confidence="medium")); counts["guidance"] += 1
 
         for symbol, note in load_all_notes().items():
+            if normalized_symbols is not None and symbol.upper() not in normalized_symbols:
+                continue
             ticker = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
             if ticker is None:
                 continue
