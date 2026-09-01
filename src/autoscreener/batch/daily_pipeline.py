@@ -37,12 +37,15 @@ from autoscreener.batch.collect_dilution import collect_dilution
 from autoscreener.batch.collect_litigation import collect_litigation
 from autoscreener.batch.pipeline_recorder import PipelineRecorder
 from autoscreener.batch.refresh_cik_map import refresh_cik_map
-from autoscreener.batch.run_daily_collection import run_daily_collection, select_collectable_symbols
+from autoscreener.batch.run_daily_collection import (
+    collection_population_counts,
+    run_daily_collection,
+    select_collectable_symbols,
+)
 from autoscreener.batch.run_monitoring import run_monitoring
 from autoscreener.batch.universe_refresh import refresh_universe
 from autoscreener.config import load_collection_config
 from autoscreener.dates import utc_today
-from autoscreener.db.models import Ticker
 from autoscreener.db.session import session_scope
 from autoscreener.monitoring import HealthFinding, check_collection_health, check_pipeline_health, check_quarantine_health
 from autoscreener.pipeline_stages import PIPELINE_STAGE_SEQUENCE
@@ -163,8 +166,7 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # 「隔離率」タイル(§6.3)の両方に使う。`results["collection"]`(戻り値・
         # CLI出力に使われる)自体は汚さず、記録用の `st.result` にだけ添える。
         with session_scope() as session:
-            quarantined_count = session.query(Ticker).filter(Ticker.is_quarantined.is_(True)).count()
-            universe_size = session.query(Ticker).count()
+            quarantined_count, universe_size = collection_population_counts(session)
         st.result = {**results["collection"], "quarantined": quarantined_count, "universe_size": universe_size}
     health.extend(check_collection_health(results["collection"]))  # 18.7
 

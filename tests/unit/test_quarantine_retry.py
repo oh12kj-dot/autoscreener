@@ -14,7 +14,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from autoscreener.batch.run_daily_collection import select_collectable_symbols
+from autoscreener.batch.run_daily_collection import (
+    collection_population_counts,
+    select_collectable_symbols,
+)
 from autoscreener.config import (
     CircuitBreakerConfig,
     CollectionConfig,
@@ -92,3 +95,16 @@ def test_quarantined_ticker_without_an_attempt_timestamp_is_retried(session):
     session.flush()
 
     assert select_collectable_symbols(session, _config()) == ["NEVER"]
+
+
+def test_delisted_ticker_is_not_retried_or_counted_as_live_quarantine(session):
+    live = _ticker("LIVE", quarantined=False, days_since_attempt=0.1)
+    delisted = _ticker(
+        "DEAD", quarantined=True, days_since_attempt=RETRY_INTERVAL_DAYS + 1
+    )
+    delisted.delisted_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=30)
+    session.add_all([live, delisted])
+    session.flush()
+
+    assert select_collectable_symbols(session, _config()) == ["LIVE"]
+    assert collection_population_counts(session) == (0, 1)

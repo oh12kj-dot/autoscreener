@@ -42,6 +42,9 @@ def select_collectable_symbols(session: Session, collection_config: CollectionCo
     rows = (
         session.query(Ticker.symbol)
         .filter(
+            # 上場廃止は一時的な隔離ではなく永続的な取引不能状態。隔離の
+            # 再挑戦期限が来ても収集対象へ戻してはいけない。
+            Ticker.delisted_at.is_(None),
             or_(
                 Ticker.is_quarantined.is_(False),
                 Ticker.last_attempted_at.is_(None),
@@ -51,6 +54,23 @@ def select_collectable_symbols(session: Session, collection_config: CollectionCo
         .all()
     )
     return [row[0] for row in rows]
+
+
+def collection_population_counts(session: Session) -> tuple[int, int]:
+    """Return quarantined and total counts for the live collection population.
+
+    Delisted rows are retained for point-in-time validation, but they are not
+    candidates for daily collection and must not make quarantine health look
+    degraded permanently.
+    """
+    query = session.query(Ticker)
+    quarantined = query.filter(
+        Ticker.is_quarantined.is_(True),
+        Ticker.delisted_at.is_(None),
+    ).count()
+    total = query.count()
+    delisted = query.filter(Ticker.delisted_at.is_not(None)).count()
+    return quarantined, total - delisted
 
 
 def run_daily_collection(
