@@ -71,6 +71,17 @@ fred:
     - DGS10          # 米10年債利回り
     - DFII10         # 米10年実質金利
     - BAMLH0A0HYM2   # ハイイールドOAS
+    - DEXJPUS        # USD/JPY（JPYシナリオ・マクロ感応度）
+
+macro_exposure:
+  frequency: weekly
+  minimum_weeks: 52
+  recommended_weeks: 104
+  transforms:
+    DGS10: difference
+    DFII10: difference
+    BAMLH0A0HYM2: difference
+    DEXJPUS: return
 
 # K-9:Claude API(定性分析)。`api_key` は .env の ANTHROPIC_API_KEY から読む。
 # キー未設定ならLLM機能全体を無効として扱う(FREDと同じ方針)。

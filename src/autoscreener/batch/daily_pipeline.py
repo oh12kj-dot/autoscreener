@@ -25,8 +25,10 @@ import logging
 from autoscreener.backtest.runner import run_backtest
 from autoscreener.batch.apply_gates import apply_gates
 from autoscreener.batch.backup import run_backup
-from autoscreener.batch.collect_filings import collect_filings
+from autoscreener.batch.collect_filings import collect_filings, select_tracked_tickers
 from autoscreener.batch.collect_macro import collect_macro
+from autoscreener.batch.collect_macro_exposure import collect_macro_exposure
+from autoscreener.batch.collect_market_opportunity import collect_market_opportunity
 from autoscreener.batch.collect_xbrl_facts import collect_xbrl_facts
 from autoscreener.batch.collect_consensus import collect_consensus
 from autoscreener.batch.collect_investment_intelligence import collect_investment_intelligence
@@ -44,7 +46,7 @@ from autoscreener.batch.run_daily_collection import (
 )
 from autoscreener.batch.run_monitoring import run_monitoring
 from autoscreener.batch.universe_refresh import refresh_universe
-from autoscreener.config import load_collection_config
+from autoscreener.config import load_collection_config, load_edgar_config
 from autoscreener.dates import utc_today
 from autoscreener.db.session import session_scope
 from autoscreener.monitoring import HealthFinding, check_collection_health, check_pipeline_health, check_quarantine_health
@@ -211,17 +213,23 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     # ValueError で落ちるが、それでパイプライン全体を止めない(バックアップと
     # 同じ扱い)——EDGAR連携は本計画のオプション機能であり、未設定は運用上の
     # 正常状態でありうる。
-    logger.info("collecting SEC filings for tracked tickers")
+    # Freeze this target universe once so every filing-derived stage and its
+    # coverage ledger describe the same population.
+    with session_scope() as session:
+        tracked_symbols = [ticker.symbol for ticker in select_tracked_tickers(
+            session, limit=load_edgar_config().max_tracked_tickers
+        )]
+    logger.info("collecting SEC filings for %d frozen tracked tickers", len(tracked_symbols))
     try:
         with recorder.stage("filings", PIPELINE_STAGE_SEQUENCE["filings"]) as st:
-            st.result = results["filings"] = collect_filings()
+            st.result = results["filings"] = collect_filings(symbols=tracked_symbols)
     except Exception:
         logger.exception("collect_filings failed (EDGAR_USER_AGENT not set, or SEC unavailable?)")
 
     logger.info("extracting source sections from new SEC filings")
     try:
         with recorder.stage("filing_sections", PIPELINE_STAGE_SEQUENCE["filing_sections"]) as st:
-            st.result = results["filing_sections"] = collect_filing_sections()
+            st.result = results["filing_sections"] = collect_filing_sections(symbols=tracked_symbols)
     except Exception:
         logger.exception("filing section extraction failed")
 
@@ -234,16 +242,40 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     for stage_name, job in disclosure_jobs:
         try:
             with recorder.stage(stage_name, PIPELINE_STAGE_SEQUENCE[stage_name]) as st:
-                st.result = results[stage_name] = job()
+                st.result = results[stage_name] = job(symbols=tracked_symbols)
         except Exception:
             logger.exception("%s extraction failed", stage_name)
 
     logger.info("extracting investment intelligence from stored filing sections")
     try:
         with recorder.stage("investment_intelligence", PIPELINE_STAGE_SEQUENCE["investment_intelligence"]) as st:
-            st.result = results["investment_intelligence"] = collect_investment_intelligence()
+            st.result = results["investment_intelligence"] = collect_investment_intelligence(symbols=tracked_symbols)
     except Exception:
         logger.exception("investment intelligence extraction failed")
+
+    try:
+        with recorder.stage("market_opportunity", PIPELINE_STAGE_SEQUENCE["market_opportunity"]) as st:
+            st.result = results["market_opportunity"] = collect_market_opportunity(symbols=tracked_symbols)
+    except Exception:
+        logger.exception("market opportunity collection failed")
+
+    try:
+        with recorder.stage("macro_exposure", PIPELINE_STAGE_SEQUENCE["macro_exposure"]) as st:
+            st.result = results["macro_exposure"] = collect_macro_exposure(symbols=tracked_symbols)
+    except Exception:
+        logger.exception("macro exposure calculation failed")
+
+    for stage_name in ("investment_intelligence", "market_opportunity", "macro_exposure"):
+        stage_result = results.get(stage_name) or {}
+        failed = int(stage_result.get("failed", 0))
+        targets = int(stage_result.get("targets", 0))
+        attempted = int(stage_result.get("succeeded", 0)) + int(stage_result.get("no_finding", 0)) + failed + int(stage_result.get("with_data", 0))
+        if failed:
+            health.append(HealthFinding(code="live_intelligence_collection_failed", severity="warning",
+                message=f"{stage_name} recorded {failed} failed collection attempts", detail={"stage": stage_name, "failed": failed, "targets": targets}))
+        if targets and attempted == 0:
+            health.append(HealthFinding(code="live_intelligence_silent_failure", severity="warning",
+                message=f"{stage_name} had {targets} targets but recorded no attempts", detail={"stage": stage_name, "targets": targets}))
 
     # 隔離状態はcollection工程でのみ変わる(is_quarantinedを更新するのは
     # collect_oneのみ。以降のgates/scoring/forward_validation/filingsは読むだけ)。

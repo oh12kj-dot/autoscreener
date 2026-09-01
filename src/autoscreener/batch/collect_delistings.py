@@ -13,6 +13,9 @@ from __future__ import annotations
 import datetime
 import logging
 
+from autoscreener.db.models import DelistingEvent, Ticker
+from autoscreener.db.session import session_scope
+
 from autoscreener.collectors.delisting_source import (
     collect_delisting_events,
     register_delisting_events,
@@ -31,4 +34,27 @@ def collect_delistings(
     logger.info("collected %d delisting filings", len(events))
     counts = register_delisting_events(events)
     counts["events"] = len(events)
+    return counts
+
+
+def backfill_delisting_events_from_tickers(*, observed_at: datetime.datetime | None = None) -> dict[str, int]:
+    """Create conservative unknown-classification events from existing master data.
+
+    `Ticker.delisted_at` proves only that listing ceased.  It is intentionally
+    not used to infer acquisition, bankruptcy, or settlement economics.
+    """
+    observed_at = observed_at or datetime.datetime.now(datetime.timezone.utc)
+    counts = {"eligible": 0, "inserted": 0, "existing": 0}
+    with session_scope() as session:
+        tickers = session.query(Ticker).filter(Ticker.delisted_at.isnot(None)).all()
+        counts["eligible"] = len(tickers)
+        for ticker in tickers:
+            event_date = ticker.delisted_at.date()
+            existing = session.query(DelistingEvent.id).filter_by(ticker_id=ticker.id, event_date=event_date, event_type="unknown").first()
+            if existing:
+                counts["existing"] += 1
+                continue
+            session.add(DelistingEvent(ticker_id=ticker.id, event_date=event_date, event_type="unknown", source="ticker_master_backfill",
+                source_url=None, observed_at=observed_at, confidence="low"))
+            counts["inserted"] += 1
     return counts

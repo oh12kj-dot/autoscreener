@@ -24,8 +24,10 @@ PIPELINE_STAGE_SEQUENCE = {
     "dilution": 18,
     "litigation": 19,
     "investment_intelligence": 20,
-    "monitoring": 21,
-    "backup": 22,
+    "market_opportunity": 21,
+    "macro_exposure": 22,
+    "monitoring": 23,
+    "backup": 24,
 }
 
 PIPELINE_STAGE_COUNT = len(PIPELINE_STAGE_SEQUENCE)

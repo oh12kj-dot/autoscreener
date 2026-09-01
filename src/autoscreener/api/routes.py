@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from autoscreener.api.dependencies import get_session
 from autoscreener.api.metric_explain import build_factor_breakdown
+from autoscreener.coverage import CoverageReasonCode, CoverageStatus, latest_dataset_coverage
 # K-9(ui_llm_provider_selection):UIから唯一の書き込み(レポート生成・LLM設定)は、
 # 読み取り専用の API セッションではなくバッチ層の書き込みエンジンを通す。
 from autoscreener.db.session import session_scope as _write_session_scope
@@ -3406,29 +3407,38 @@ def _model_row_dict(row) -> dict:
 
 
 def _intelligence_response(ticker: str, as_of: datetime.date, rows: list, *, source: str | None = None,
-                           data=None, coverage_status: str | None = None) -> InvestmentIntelligenceResponse:
+                           data=None, coverage_status: CoverageStatus | str | None = None,
+                           coverage=None, reason_code: CoverageReasonCode | str | None = None,
+                           reason_detail: str | None = None, retryable: bool | None = None) -> InvestmentIntelligenceResponse:
+    """Build a PIT-safe response without mistaking an empty result for zero."""
     observed = [getattr(row, "observed_at", None) for row in rows]
     observed = [value for value in observed if value is not None]
     statuses = [getattr(row, "coverage_status", None) for row in rows]
-    status = coverage_status or "not_collected"
-    if rows:
-        status = "collected_with_data" if any(s == "collected_with_data" for s in statuses) else (statuses[0] or "collected_with_data")
-    latest = max(observed) if observed else None
+    status = coverage_status or getattr(coverage, "coverage_status", None)
+    if status is None and rows:
+        status = CoverageStatus.COLLECTED_WITH_DATA if any(
+            item == CoverageStatus.COLLECTED_WITH_DATA for item in statuses
+        ) else (statuses[0] or CoverageStatus.COLLECTED_WITH_DATA)
+    status = CoverageStatus(status or CoverageStatus.NOT_COLLECTED)
+    latest = getattr(coverage, "observed_at", None) or (max(observed) if observed else None)
+    if latest is not None and latest.date() > as_of:
+        latest = None
+    resolved_source = source or getattr(coverage, "source", None) or (getattr(rows[0], "source", None) if rows else None)
+    resolved_source_url = getattr(coverage, "source_url", None) or (getattr(rows[0], "source_url", None) if rows else None)
     return InvestmentIntelligenceResponse(
         ticker=ticker, as_of=as_of, coverage_status=status,
-        source=source or (getattr(rows[0], "source", None) if rows else None),
+        reason_code=str(reason_code or getattr(coverage, "reason_code", None) or "") or None,
+        reason_detail=reason_detail or getattr(coverage, "reason_detail", None),
+        observed_at=latest,
+        source=resolved_source, source_url=resolved_source_url,
         data_age_days=(as_of - latest.date()).days if latest else None,
+        retryable=retryable if retryable is not None else getattr(coverage, "retryable", None),
         data=data if data is not None else [_model_row_dict(row) for row in rows],
     )
 
 
-def _dataset_status(session: Session, ticker_id: int, dataset: str, as_of: datetime.date) -> str:
-    row = session.query(LiveDatasetCoverage).filter(
-        LiveDatasetCoverage.ticker_id == ticker_id,
-        LiveDatasetCoverage.dataset == dataset,
-        LiveDatasetCoverage.observed_at < _pit_cutoff(as_of),
-    ).order_by(LiveDatasetCoverage.observed_at.desc()).first()
-    return row.coverage_status if row else "not_collected"
+def _dataset_coverage(session: Session, ticker_id: int, dataset: str, as_of: datetime.date):
+    return latest_dataset_coverage(session, ticker_id, dataset, as_of)
 
 
 @router.get("/candidates/{ticker}/reverse-valuation", response_model=ReverseValuationResponse)
@@ -3509,11 +3519,12 @@ def get_reinvestment_quality(ticker: str = Path(..., pattern=TICKER_PATTERN), as
         RawSnapshot.ticker_id == t.id, RawSnapshot.available_from <= date
     ).order_by(RawSnapshot.available_from.desc()).first()
     if raw is None:
-        return _intelligence_response(t.symbol, date, [])
+        return _intelligence_response(t.symbol, date, [], reason_code=CoverageReasonCode.NO_RAW_SNAPSHOT)
     history = build_financial_history(raw.payload)
     annual = [p for p in history.annual if p.period_end <= date]
     if len(annual) < 2:
-        return InvestmentIntelligenceResponse(ticker=t.symbol, as_of=date, coverage_status="collected_no_finding", source=raw.source, data=[])
+        return InvestmentIntelligenceResponse(ticker=t.symbol, as_of=date, coverage_status=CoverageStatus.NOT_COLLECTED,
+            reason_code=CoverageReasonCode.INSUFFICIENT_ANNUAL_HISTORY, source=raw.source, data=[])
     start, end = annual[0], annual[-1]
     years = max(1.0, (end.period_end - start.period_end).days / 365.25)
     nopat_start = start.operating_income * 0.79 if start.operating_income is not None and start.operating_income > 0 else None
@@ -3548,12 +3559,13 @@ def _rows_endpoint(session: Session, ticker: str, as_of: datetime.date, model, *
 @router.get("/candidates/{ticker}/market-opportunity", response_model=InvestmentIntelligenceResponse)
 def get_market_opportunity(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
     date=as_of or utc_today(); t, rows=_rows_endpoint(session,ticker,date,MarketOpportunityEstimate,limit=10)
+    rows = [row for row in rows if row.as_of <= date]
     data=[]
     for row in rows:
         item=_model_row_dict(row)
         item["components"]=[_model_row_dict(c) for c in session.query(MarketOpportunityComponent).filter_by(estimate_id=row.id).all()]
         data.append(item)
-    return _intelligence_response(t.symbol,date,rows,data=data)
+    return _intelligence_response(t.symbol,date,rows,data=data,coverage=_dataset_coverage(session,t.id,"market_opportunity",date))
 
 
 @router.get("/candidates/{ticker}/operating-kpis", response_model=InvestmentIntelligenceResponse)
@@ -3565,7 +3577,7 @@ def get_operating_kpis(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: d
         item=_model_row_dict(row); definition=labels.get(row.kpi_definition_id)
         item.update({"code":definition.code if definition else None,"label":definition.label if definition else None,"unit":definition.unit if definition else None})
         data.append(item)
-    return _intelligence_response(t.symbol,date,rows,data=data,coverage_status=_dataset_status(session,t.id,"operating_kpis",date))
+    return _intelligence_response(t.symbol,date,rows,data=data,coverage=_dataset_coverage(session,t.id,"operating_kpis",date))
 
 
 @router.get("/candidates/{ticker}/capital-allocation", response_model=InvestmentIntelligenceResponse)
@@ -3573,14 +3585,15 @@ def get_capital_allocation(ticker: str = Path(..., pattern=TICKER_PATTERN), as_o
     date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,CapitalAllocationEvent)
     totals={}
     for row in rows:
-        if row.amount is not None: totals[row.event_type]=totals.get(row.event_type,0.0)+float(row.amount)
-    return _intelligence_response(t.symbol,date,rows,data={"three_year_totals":totals,"events":[_model_row_dict(r) for r in rows]},coverage_status=_dataset_status(session,t.id,"capital_allocation",date))
+        if row.announced_at.date() >= date - datetime.timedelta(days=365 * 3) and row.amount is not None:
+            totals[row.event_type]=totals.get(row.event_type,0.0)+float(row.amount)
+    return _intelligence_response(t.symbol,date,rows,data={"three_year_totals":totals,"events":[_model_row_dict(r) for r in rows]},coverage=_dataset_coverage(session,t.id,"capital_allocation",date))
 
 
 @router.get("/candidates/{ticker}/management-incentives", response_model=InvestmentIntelligenceResponse)
 def get_management_incentives(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
     date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,ManagementIncentiveSnapshot)
-    return _intelligence_response(t.symbol,date,rows,coverage_status=_dataset_status(session,t.id,"management_incentives",date))
+    return _intelligence_response(t.symbol,date,rows,coverage=_dataset_coverage(session,t.id,"management_incentives",date))
 
 
 @router.get("/candidates/{ticker}/debt-profile", response_model=InvestmentIntelligenceResponse)
@@ -3592,19 +3605,22 @@ def get_debt_profile(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: dat
         if row.maturity_date and row.principal is not None: maturity[str(row.maturity_date.year)]=maturity.get(str(row.maturity_date.year),0.0)+float(row.principal)
     cash=float(facilities[0].cash_balance) if facilities and facilities[0].cash_balance is not None else None
     available=float(facilities[0].revolver_available) if facilities and facilities[0].revolver_available is not None else None
-    due_12m=sum(float(r.principal) for r in rows if r.principal is not None and r.maturity_date and r.maturity_date <= date+datetime.timedelta(days=365))
+    debt_coverage = _dataset_coverage(session,t.id,"debt_profile",date)
+    maturity_scanned = debt_coverage is not None and debt_coverage.coverage_status in {CoverageStatus.COLLECTED_NO_FINDING, CoverageStatus.COLLECTED_WITH_DATA}
+    due_12m=sum(float(r.principal) for r in rows if r.principal is not None and r.maturity_date and r.maturity_date <= date+datetime.timedelta(days=365)) if maturity_scanned else None
     return _intelligence_response(t.symbol,date,rows or facilities,data={"maturity_ladder":maturity,"cash_balance":cash,"revolver_available":available,
-        "debt_due_12m":due_12m,"financing_review_required":bool(due_12m and cash is not None and due_12m > cash+(available or 0)),
-        "instruments":[_model_row_dict(r) for r in rows]},coverage_status=_dataset_status(session,t.id,"debt_profile",date))
+        "debt_due_12m":due_12m,"financing_review_required":(due_12m > cash+(available or 0)) if due_12m is not None and cash is not None else None,
+        "instruments":[_model_row_dict(r) for r in rows]},coverage=debt_coverage)
 
 
 @router.get("/candidates/{ticker}/accounting-quality", response_model=InvestmentIntelligenceResponse)
 def get_accounting_quality(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
     date=as_of or utc_today(); t=_intelligence_ticker(session,ticker)
     raw=session.query(RawSnapshot).filter(RawSnapshot.ticker_id==t.id,RawSnapshot.available_from<=date).order_by(RawSnapshot.available_from.desc()).first()
-    if raw is None: return _intelligence_response(t.symbol,date,[])
+    if raw is None: return _intelligence_response(t.symbol,date,[],reason_code=CoverageReasonCode.NO_RAW_SNAPSHOT)
     history=build_financial_history(raw.payload); annual=history.annual
-    if not annual: return InvestmentIntelligenceResponse(ticker=t.symbol,as_of=date,coverage_status="collected_no_finding",source=raw.source,data=[])
+    if not annual: return InvestmentIntelligenceResponse(ticker=t.symbol,as_of=date,coverage_status=CoverageStatus.NOT_COLLECTED,
+        reason_code=CoverageReasonCode.INSUFFICIENT_ANNUAL_HISTORY,source=raw.source,data=[])
     latest=annual[-1]; prior=annual[-2] if len(annual)>1 else None
     revenue_growth=(latest.revenue/prior.revenue-1) if prior and latest.revenue is not None and prior.revenue else None
     quality=calculate_accounting_quality(net_income=latest.net_income,operating_cash_flow=latest.operating_cash_flow,
@@ -3620,13 +3636,13 @@ def get_thesis_milestones(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of
     data=[]
     for row in rows:
         item=_model_row_dict(row); item["days_until"]=(row.due_date-date).days; data.append(item)
-    return _intelligence_response(t.symbol,date,rows,data=data)
+    return _intelligence_response(t.symbol,date,rows,data=data,coverage=_dataset_coverage(session,t.id,"thesis_milestones",date))
 
 
 @router.get("/candidates/{ticker}/macro-exposure", response_model=InvestmentIntelligenceResponse)
 def get_macro_exposure(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
     date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,MacroExposureSnapshot)
-    return _intelligence_response(t.symbol,date,rows)
+    return _intelligence_response(t.symbol,date,rows,coverage=_dataset_coverage(session,t.id,"macro_exposure",date))
 
 
 @router.get("/candidates/{ticker}/mna-history", response_model=InvestmentIntelligenceResponse)
@@ -3634,9 +3650,13 @@ def get_mna_history(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: date
     date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,DelistingEvent,order_column=DelistingEvent.event_date)
     peers=session.query(DelistingEvent).filter(DelistingEvent.event_date<=date).all()
     acquisition=[r for r in peers if r.event_type in {"cash_acquisition","stock_acquisition"}]
-    data={"historical_acquisition_count":len(acquisition),"historical_delisting_count":len(peers),
-          "acquisition_share":len(acquisition)/len(peers) if peers else None,"ticker_events":[_model_row_dict(r) for r in rows]}
-    return _intelligence_response(t.symbol,date,rows,source="delisting_events",data=data)
+    data={"population_statistics":{"historical_acquisition_count":len(acquisition),"historical_delisting_count":len(peers),
+          "acquisition_share":len(acquisition)/len(peers) if peers else None,
+          "coverage_status": CoverageStatus.COLLECTED_WITH_DATA if peers else CoverageStatus.NOT_COLLECTED},
+          "ticker_events":[_model_row_dict(r) for r in rows]}
+    return _intelligence_response(t.symbol,date,rows,source="delisting_events",data=data,
+        coverage_status=CoverageStatus.COLLECTED_WITH_DATA if peers else CoverageStatus.NOT_COLLECTED,
+        reason_code=None if peers else CoverageReasonCode.SOURCE_NOT_SCANNED)
 
 
 @router.get("/positions/risk-sizing", response_model=InvestmentIntelligenceResponse)
@@ -3667,8 +3687,9 @@ def get_data_coverage(session: Session = Depends(get_session)) -> DataCoverageRe
     tables=[("Consensus",AnalystConsensusSnapshot),("Guidance",ManagementGuidanceSnapshot),("TAM",MarketOpportunityEstimate),
         ("Operating KPI",OperatingKpiObservation),("Capital allocation",CapitalAllocationEvent),("Management incentives",ManagementIncentiveSnapshot),
         ("Debt",DebtInstrument),("Milestones",ThesisMilestone),("Macro exposure",MacroExposureSnapshot)]
-    generic_names = {"Operating KPI": "operating_kpis", "Capital allocation": "capital_allocation",
-                     "Management incentives": "management_incentives", "Debt": "debt_profile"}
+    generic_names = {"TAM": "market_opportunity", "Operating KPI": "operating_kpis", "Capital allocation": "capital_allocation",
+                     "Management incentives": "management_incentives", "Debt": "debt_profile", "Milestones": "thesis_milestones",
+                     "Macro exposure": "macro_exposure"}
     datasets=[]
     for label,model in tables:
         status_model = LiveDatasetCoverage if label in generic_names else model
@@ -3683,13 +3704,26 @@ def get_data_coverage(session: Session = Depends(get_session)) -> DataCoverageRe
             current = latest_by_ticker.get(item.ticker_id)
             if current is None or item.observed_at > current.observed_at:
                 latest_by_ticker[item.ticker_id] = item
-        successful = [item for item in latest_by_ticker.values() if item.coverage_status in {"collected_with_data", "collected_no_finding"}]
+        latest_rows = list(latest_by_ticker.values())
+        successful = [item for item in latest_rows if item.coverage_status in {CoverageStatus.COLLECTED_WITH_DATA, CoverageStatus.COLLECTED_NO_FINDING}]
+        with_data = sum(item.coverage_status == CoverageStatus.COLLECTED_WITH_DATA for item in latest_rows)
+        no_finding = sum(item.coverage_status == CoverageStatus.COLLECTED_NO_FINDING for item in latest_rows)
+        failed = sum(item.coverage_status == CoverageStatus.COLLECTION_FAILED for item in latest_rows)
+        not_applicable = sum(item.coverage_status == CoverageStatus.NOT_APPLICABLE for item in latest_rows)
+        not_collected = sum(item.coverage_status == CoverageStatus.NOT_COLLECTED for item in latest_rows)
         covered = len(successful)
-        failed = sum(item.coverage_status == "collection_failed" for item in latest_by_ticker.values())
         latest_item = max(successful, key=lambda item: item.observed_at) if successful else None
         latest = latest_item.observed_at if latest_item else None
         source = latest_item.source if latest_item else None
         stale = sum(item.observed_at.date() < date - datetime.timedelta(days=90) for item in successful)
         denominator=max(ticker_count,1)
-        datasets.append(DataCoverageRow(dataset=label,coverage=covered/denominator,stale=stale/denominator,failed=failed/denominator,last_successful=latest,source=source))
+        targeted = len(latest_rows)
+        attempted = targeted - not_collected
+        operational_denominator = max(targeted - not_applicable, 1)
+        last_attempted = max((item.observed_at for item in latest_rows), default=None)
+        datasets.append(DataCoverageRow(dataset=label,coverage=covered/denominator,stale=stale/denominator,failed=failed/denominator,
+            universe_count=ticker_count, eligible_count=ticker_count, targeted_count=targeted, attempted_count=attempted,
+            with_data_count=with_data, no_finding_count=no_finding, failed_count=failed, not_applicable_count=not_applicable,
+            not_collected_count=not_collected, stale_count=stale, operational_coverage=covered/operational_denominator,
+            universe_coverage=with_data/denominator, last_successful=latest, last_attempted=last_attempted, source=source))
     return DataCoverageResponse(as_of=date,ticker_count=ticker_count,datasets=datasets)
