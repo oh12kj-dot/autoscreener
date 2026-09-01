@@ -14,6 +14,7 @@ import uuid
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -957,6 +958,7 @@ class OperatingKpiObservation(Base):
 
 class CapitalAllocationEvent(Base):
     __tablename__ = "capital_allocation_events"
+    __table_args__ = (UniqueConstraint("ticker_id", "source_accession", "event_type", "content_hash", name="uq_capital_allocation_event_evidence"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
     announced_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -970,6 +972,8 @@ class CapitalAllocationEvent(Base):
     source: Mapped[str] = mapped_column(String(60))
     source_accession: Mapped[str | None] = mapped_column(String(25), nullable=True)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     coverage_status: Mapped[str] = mapped_column(String(30))
     confidence: Mapped[str] = mapped_column(String(20))
@@ -1089,7 +1093,14 @@ class MacroExposureSnapshot(Base):
 class LiveDatasetCoverage(Base):
     """Collection attempt state, including the important no-finding outcome."""
     __tablename__ = "live_dataset_coverage"
-    __table_args__ = (UniqueConstraint("ticker_id", "dataset", "observed_at", "source", name="uq_live_dataset_coverage"),)
+    __table_args__ = (
+        UniqueConstraint("ticker_id", "dataset", "observed_at", "source", name="uq_live_dataset_coverage"),
+        CheckConstraint(
+            "coverage_status IN ('not_collected', 'collected_no_finding', "
+            "'collected_with_data', 'collection_failed', 'not_applicable')",
+            name="ck_live_dataset_coverage_status",
+        ),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
     dataset: Mapped[str] = mapped_column(String(60), index=True)
@@ -1099,3 +1110,8 @@ class LiveDatasetCoverage(Base):
     raw_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     coverage_status: Mapped[str] = mapped_column(String(30))
     confidence: Mapped[str] = mapped_column(String(20))
+    reason_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reason_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

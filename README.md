@@ -408,7 +408,9 @@ Windows Task Scheduler にタスク `AutoScreenerDailyPipeline` が登録済み�
 
 Live Intelligence は既存の `P(horizon年でtarget_moic倍)` を変更しない表示・履歴層です。
 Consensus、Guidance、KPI、債務、資本配分、TAM、マイルストーン等には必ず取得時点と
-`coverage_status` を残し、`not_collected` と `collected_no_finding` を区別します。
+`coverage_status` を残します。数値の欠損を0には変換せず、`not_collected`（未試行・必要入力/原典不足）、
+`collected_no_finding`（原典を読み該当なし）、`collected_with_data`（根拠付きデータあり）、
+`collection_failed`（失敗、再試行可否あり）、`not_applicable`（対象外）を区別します。
 
 初回はマイグレーション後、次の順で収集します。
 
@@ -419,16 +421,36 @@ uv run python -m autoscreener.cli collect-filing-sections
 uv run python -m autoscreener.cli collect-guidance
 uv run python -m autoscreener.cli collect-consensus
 uv run python -m autoscreener.cli collect-investment-intelligence
+uv run python -m autoscreener.cli collect-market-opportunity
+uv run python -m autoscreener.cli collect-macro
+uv run python -m autoscreener.cli collect-macro-exposure
 ```
 
 `collect-investment-intelligence` は保存済みSEC本文だけを読み、KPI・債務満期・資本配分・
 DEF 14Aの所有情報と、研究ノートの `milestones` を再実行可能な形で保存します。
+`collect-market-opportunity` は `research/<TICKER>.md` のsource-backedな `market_opportunity` と保存済みSEC本文の
+明示TAM表現だけをappend-onlyで保存し、ノートを更新しません。`collect-macro-exposure` は保存済みの
+PIT価格とFRED系列を週次整列してbetaを計算します。FREDの改定vintageは未保存であり、betaは因果ではなく統計的関連です。
 日次パイプラインではこれらを提出書類収集後に自動実行します。Consensus の外部取得失敗は
 Coreスコアを止めず `collection_failed` として履歴化します。
 
 画面は銘柄詳細の意思決定順セクションと `/data-coverage` で確認できます。すべての
 Live Intelligence API は `as_of` を受け取り、その日より後に観測された値を返しません。
 `/validation` が FAIL / STALE の間、ランキング上部には `Research Only` が固定表示されます。
+
+### Live Intelligence の用途と運用境界
+
+| Dataset | なぜ必要か / どう使うか | どこで取得するか |
+|---|---|---|
+| 資本配分・KPI・債務・経営陣 | 希薄化、資金繰り、再投資、会社固有の先行指標を人間が検証する。ランキングには使わない。 | SEC 10-K/10-Q/8-K/DEF 14A、外国発行体は20-F/6-K/40-F |
+| TAM | 事業の到達可能性を仮説として検討する。会社の主張を自動的に真実とは扱わない。 | Git管理の研究ノート、または引用・URL付きのSEC明示開示 |
+| マクロ感応度 | 金利・信用スプレッド・為替の変化と価格の関連を確認する。予測/因果として使わない。 | 保存済み価格とFRED（DGS10、DFII10、BAMLH0A0HYM2、DEXJPUS） |
+| マイルストーン | テーゼが崩れた/進んだかを評価する。ノートなしは正常な`user_input_missing`であり取得失敗ではない。 | `research/<TICKER>.md` |
+
+本番相当DBのmigration・backfill・外部収集前には、バックアップと復元テスト、`alembic current`、
+対象数・SECリクエスト数・FRED系列数の見積りを確認してください。`backfill-delisting-events` は
+`--apply` が必要で、既存 `tickers.delisted_at` からは `unknown` 以外の原因や決済額を推測しません。
+本リリースではコードと使い捨てDBの検証までを完了としており、実DBの件数・scheduled rerunは実行後に別途記録します。
 
 ## 設定のカスタマイズ
 

@@ -36,6 +36,8 @@ from autoscreener.batch.collect_filing_sections import collect_filing_sections
 from autoscreener.batch.collect_guidance import collect_guidance
 from autoscreener.batch.collect_litigation import collect_litigation
 from autoscreener.batch.collect_macro import collect_macro
+from autoscreener.batch.collect_macro_exposure import collect_macro_exposure
+from autoscreener.batch.collect_market_opportunity import collect_market_opportunity
 from autoscreener.batch.collect_xbrl_facts import collect_xbrl_facts
 from autoscreener.batch.collect_consensus import collect_consensus
 from autoscreener.batch.collect_investment_intelligence import collect_investment_intelligence
@@ -565,6 +567,26 @@ def collect_investment_intelligence_cmd(
         typer.echo(f"  {key}: {count}")
 
 
+@app.command("collect-macro-exposure")
+def collect_macro_exposure_cmd(
+    symbols: str = typer.Option("", help="Comma-separated ticker symbols; defaults to the tracked universe."),
+) -> None:
+    """Compute display-only PIT macro betas from already-collected prices and FRED series."""
+    counts = collect_macro_exposure(symbols=_optional_symbols(symbols))
+    for key, count in counts.items():
+        typer.echo(f"  {key}: {count}")
+
+
+@app.command("collect-market-opportunity")
+def collect_market_opportunity_cmd(
+    symbols: str = typer.Option("", help="Comma-separated ticker symbols; defaults to the tracked universe."),
+) -> None:
+    """Append source-backed manual and company-disclosed TAM estimates without modifying research notes."""
+    counts = collect_market_opportunity(symbols=_optional_symbols(symbols))
+    for key, count in counts.items():
+        typer.echo(f"  {key}: {count}")
+
+
 @app.command("collect-filing-sections")
 def collect_filing_sections_cmd(
     symbols: str = typer.Option("", help="Comma-separated ticker symbols; defaults to tracked tickers."),
@@ -603,6 +625,19 @@ def collect_delistings_cmd(
     counts = collect_delistings(
         start=_parse_date(start), end=_parse_date(end)
     )
+    for key, count in counts.items():
+        typer.echo(f"  {key}: {count}")
+
+
+@app.command("backfill-delisting-events")
+def backfill_delisting_events_cmd(
+    apply: bool = typer.Option(False, "--apply", help="Actually write unknown-classification events to the configured DB."),
+) -> None:
+    """Backfill delisted master rows as unknown events; never guess a cause or settlement."""
+    if not apply:
+        raise typer.BadParameter("This is a DB backfill. Re-run with --apply after backup and target-count review.")
+    from autoscreener.batch.collect_delistings import backfill_delisting_events_from_tickers
+    counts = backfill_delisting_events_from_tickers()
     for key, count in counts.items():
         typer.echo(f"  {key}: {count}")
 

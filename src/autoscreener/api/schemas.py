@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 
+from autoscreener.coverage import CoverageStatus
 from pydantic import BaseModel, ConfigDict, Field
 
 # 18.5:ティッカー文字列のフォーマット検証。
@@ -1124,9 +1125,14 @@ class ReverseValuationScenarioView(BaseModel):
 class InvestmentIntelligenceResponse(BaseModel):
     ticker: str
     as_of: datetime.date
-    coverage_status: str
+    coverage_status: CoverageStatus
+    reason_code: str | None = None
+    reason_detail: str | None = None
+    observed_at: datetime.datetime | None = None
     source: str | None = None
+    source_url: str | None = None
     data_age_days: int | None = None
+    retryable: bool | None = None
     not_used_in_ranking: bool = True
     data: dict | list | None = None
 
@@ -1152,7 +1158,20 @@ class DataCoverageRow(BaseModel):
     coverage: float
     stale: float
     failed: float
+    universe_count: int
+    eligible_count: int
+    targeted_count: int
+    attempted_count: int
+    with_data_count: int
+    no_finding_count: int
+    failed_count: int
+    not_applicable_count: int
+    not_collected_count: int
+    stale_count: int
+    operational_coverage: float
+    universe_coverage: float
     last_successful: datetime.datetime | None = None
+    last_attempted: datetime.datetime | None = None
     source: str | None = None
 
 

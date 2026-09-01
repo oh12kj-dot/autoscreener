@@ -9,6 +9,11 @@ import {
 } from "../api/client";
 import type { BacktestSummary, InvestmentIntelligenceResponse, ReverseValuationResponse } from "../api/types";
 
+type SectionState =
+  | { state: "loading" }
+  | { state: "loaded"; response: InvestmentIntelligenceResponse }
+  | { state: "error"; message: string; status?: number };
+
 type Props = {
   ticker: string;
   horizonYears: number;
@@ -45,9 +50,43 @@ function valueText(value: unknown): string {
   return "詳細あり";
 }
 
-function DataBlock({ response }: { response: InvestmentIntelligenceResponse }) {
-  if (response.coverage_status === "not_collected") return <p className="intelligence-empty">未取得</p>;
-  if (response.coverage_status === "collected_no_finding") return <p>取得済み・該当なし</p>;
+export function CoverageMessage({ response }: { response: InvestmentIntelligenceResponse }) {
+  const detail = response.reason_detail ?? response.reason_code;
+  switch (response.coverage_status) {
+    case "not_collected":
+      if (response.reason_code === "user_input_missing") return <p className="intelligence-empty">ユーザー未設定 — research/{response.ticker}.md に入力してください。</p>;
+      if (response.reason_code === "outside_collection_scope") return <p className="intelligence-empty">現在の収集対象外です。</p>;
+      if (response.reason_code === "no_supported_filing") return <p className="intelligence-empty">対応する提出書類が未取得です。</p>;
+      return <p className="intelligence-empty">未試行・未取得{detail ? `（${detail}）` : ""}</p>;
+    case "collected_no_finding": return <p>取得済み・該当なし{detail ? `（${detail}）` : ""}</p>;
+    case "collection_failed": return <p className="error">取得失敗{detail ? `（${detail}）` : ""}{response.retryable ? " — 再試行可能です。" : ""}</p>;
+    case "not_applicable": return <p className="intelligence-empty">対象外{detail ? `（${detail}）` : ""}</p>;
+    case "collected_with_data": return null;
+    default: {
+      const unexpected: never = response.coverage_status;
+      return <p className="error">未知の取得状態: {String(unexpected)}</p>;
+    }
+  }
+}
+
+function CapitalAllocationSection({ response }: { response: InvestmentIntelligenceResponse }) {
+  const payload = response.data as { three_year_totals?: Record<string, number>; events?: Record<string, unknown>[] } | null;
+  if (!payload) return null;
+  const totals = Object.entries(payload.three_year_totals ?? {});
+  const events = payload.events ?? [];
+  return <>
+    {totals.length > 0 && <div className="table-scroll"><table className="data-table intelligence-table"><thead><tr><th>過去3年の種別</th><th>金額</th></tr></thead><tbody>
+      {totals.map(([kind, amount]) => <tr key={kind}><th>{kind}</th><td>{valueText(amount)}</td></tr>)}
+    </tbody></table></div>}
+    {events.length > 0 && <div className="table-scroll"><table className="data-table intelligence-table"><thead><tr><th>日付</th><th>種別</th><th>金額</th><th>原典</th></tr></thead><tbody>
+      {events.slice(0, 20).map((event, index) => <tr key={`${String(event.id ?? index)}`}><td>{valueText(event.announced_at)}</td><td>{valueText(event.event_type)}</td><td>{valueText(event.amount)}</td><td>{valueText(event.source_excerpt ?? event.counterparty_or_asset ?? event.source_url)}</td></tr>)}
+    </tbody></table></div>}
+  </>;
+}
+
+function DataBlock({ response, section }: { response: InvestmentIntelligenceResponse; section?: string }) {
+  if (response.coverage_status !== "collected_with_data") return <CoverageMessage response={response} />;
+  if (section === "capital-allocation") return <CapitalAllocationSection response={response} />;
   const records = Array.isArray(response.data) ? response.data : [response.data];
   const visible = records.filter(Boolean).slice(0, 8) as Record<string, unknown>[];
   if (!visible.length) return <p>取得済み・該当なし</p>;
@@ -67,20 +106,26 @@ function DataBlock({ response }: { response: InvestmentIntelligenceResponse }) {
 
 export function InvestmentIntelligenceSections({ ticker, horizonYears, expectedMoic, realizedVol, evidenceGrade }: Props) {
   const [reverse, setReverse] = useState<ReverseValuationResponse | null>(null);
-  const [data, setData] = useState<Record<string, InvestmentIntelligenceResponse>>({});
+  const [data, setData] = useState<Record<string, SectionState>>({});
   const [risk, setRisk] = useState<InvestmentIntelligenceResponse | null>(null);
   const [jpy, setJpy] = useState<InvestmentIntelligenceResponse[]>([]);
   const [validation, setValidation] = useState<BacktestSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setReverse(null); setData({}); setRisk(null); setJpy([]);
+    setReverse(null); setData(Object.fromEntries(sections.map(([key]) => [key, { state: "loading" }] as const))); setRisk(null); setJpy([]);
     fetchReverseValuation(ticker, horizonYears).then((value) => { if (!cancelled) setReverse(value); }).catch(() => undefined);
     fetchLatestBacktest().then((value) => { if (!cancelled) setValidation(value); }).catch(() => undefined);
     Promise.allSettled(sections.map(async ([key]) => [key, await fetchInvestmentIntelligence(ticker, key)] as const)).then((results) => {
       if (cancelled) return;
-      const next: Record<string, InvestmentIntelligenceResponse> = {};
-      for (const result of results) if (result.status === "fulfilled") next[result.value[0]] = result.value[1];
+      const next: Record<string, SectionState> = {};
+      for (let index = 0; index < results.length; index += 1) {
+        const result = results[index];
+        const key = sections[index][0];
+        next[key] = result.status === "fulfilled"
+          ? { state: "loaded", response: result.value[1] }
+          : { state: "error", message: result.reason instanceof Error ? result.reason.message : "不明なAPIエラー" };
+      }
       setData(next);
     });
     fetchRiskSizing(ticker, realizedVol, evidenceGrade ?? "C").then((value) => { if (!cancelled) setRisk(value); }).catch(() => undefined);
@@ -94,7 +139,7 @@ export function InvestmentIntelligenceSections({ ticker, horizonYears, expectedM
   }, [ticker, horizonYears, expectedMoic, realizedVol, evidenceGrade]);
 
   const reversePoints = useMemo(() => reverse?.scenarios.filter((s) => s.implied_revenue_cagr != null) ?? [], [reverse]);
-  const responses = Object.values(data);
+  const responses = Object.values(data).flatMap((item) => item.state === "loaded" ? [item.response] : []);
   const coverageRatio = responses.length ? responses.filter((item) => item.coverage_status === "collected_with_data" || item.coverage_status === "collected_no_finding").length / sections.length : 0;
   const coverageGrade = coverageRatio >= 0.8 ? "A" : coverageRatio >= 0.6 ? "B" : coverageRatio >= 0.3 ? "C" : "D";
   const liveAge = responses.length ? Math.max(0, ...responses.map((item) => item.data_age_days ?? 0)) : null;
@@ -146,8 +191,10 @@ export function InvestmentIntelligenceSections({ ticker, horizonYears, expectedM
       {sections.map(([key, title]) => (
         <div className={`dd-section intelligence-section ${wideSections.has(key) ? "intelligence-section--wide" : ""}`} key={key}>
           <h3>{title}</h3>
-          <p className="intelligence-section-kicker"><span className="th-badge">Not used in ranking</span> {data[key]?.source ?? "source未取得"} ・ as of {data[key]?.as_of ?? "—"}</p>
-          {data[key] ? <DataBlock response={data[key]} /> : <p className="intelligence-empty">未取得</p>}
+          <p className="intelligence-section-kicker"><span className="th-badge">Not used in ranking</span> {data[key]?.state === "loaded" ? data[key].response.source ?? "source未取得" : "source未取得"} ・ as of {data[key]?.state === "loaded" ? data[key].response.as_of : "—"}</p>
+          {data[key]?.state === "loading" && <p className="intelligence-empty">読み込み中...</p>}
+          {data[key]?.state === "error" && <p className="error">取得APIエラー{data[key].status ? ` (${data[key].status})` : ""}: {data[key].message}</p>}
+          {data[key]?.state === "loaded" && <><DataBlock response={data[key].response} section={key} /><p className="detail-cagr">観測 {data[key].response.observed_at ?? "—"} ・ 経過日数 {data[key].response.data_age_days ?? "—"}</p></>}
           {key === "macro-exposure" && <p className="detail-cagr">統計的な関連であり、因果関係を示しません。</p>}
         </div>
       ))}

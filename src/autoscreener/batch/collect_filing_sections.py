@@ -35,7 +35,7 @@ from autoscreener.db.session import session_scope
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TICKER_LIMIT = 300
-_DEFAULT_FORMS: frozenset[str] = frozenset({"10-K", "10-Q", "8-K", "DEF 14A"})
+_DEFAULT_FORMS: frozenset[str] = frozenset({"10-K", "10-Q", "8-K", "DEF 14A", "20-F", "40-F", "6-K"})
 
 # 決算発表(item 2.02)8-Kは四半期ごとに来るので、追跡開始から溜まった全件を
 # 処理すると際限が無い。直近N件に絞る(8件あれば約2年分:K-4がガイダンス
@@ -183,6 +183,34 @@ def _process_proxy_filing(session: Session, ticker: Ticker, filing: Filing,
     counts["new_sections"] += 1
 
 
+def foreign_form_section_names(form: str) -> set[str]:
+    """Stable source-scope mapping for foreign private issuer disclosures."""
+    normalized = form.upper().replace(" ", "")
+    if normalized.startswith("20-F") or normalized.startswith("40-F"):
+        return {"foreign_annual"}
+    if normalized.startswith("6-K"):
+        return {"foreign_report"}
+    return set()
+
+
+def _process_foreign_filing(session: Session, ticker: Ticker, filing: Filing,
+                             source: SectionSource, today: Any, counts: dict[str, int]) -> None:
+    names = foreign_form_section_names(filing.form)
+    if not names or names <= _existing_sections(session, filing.accession_number):
+        counts["existing"] += len(names)
+        return
+    if not filing.document_url:
+        counts["skipped_no_url"] += 1
+        return
+    text, _truncated = source.document_text(filing.document_url)
+    if not text.strip():
+        counts["not_found"] += 1
+        return
+    for name in names:
+        _save_section(session, ticker, filing, name, text, filing.document_url, today)
+        counts["new_sections"] += 1
+
+
 def collect_filing_sections(
     symbols: list[str] | None = None,
     *,
@@ -269,6 +297,14 @@ def collect_filing_sections(
                     )
                     if latest_proxy is not None:
                         _process_proxy_filing(session, ticker, latest_proxy, source, today, counts)
+
+                for foreign_form in ("20-F", "40-F", "6-K"):
+                    if foreign_form not in target_forms:
+                        continue
+                    filings = (session.query(Filing).filter_by(ticker_id=ticker.id, form=foreign_form)
+                        .order_by(Filing.filed_date.desc()).limit(_MAX_8K_PER_TICKER if foreign_form == "6-K" else 1).all())
+                    for filing in filings:
+                        _process_foreign_filing(session, ticker, filing, source, today, counts)
             except CollectionError:
                 logger.exception("%s: filing section collection failed", ticker.symbol)
                 counts["failures"] += 1

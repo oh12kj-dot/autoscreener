@@ -662,8 +662,13 @@ export interface InvestmentIntelligenceResponse {
   ticker: string;
   as_of: string;
   coverage_status: "not_collected" | "collected_no_finding" | "collected_with_data" | "collection_failed" | "not_applicable";
+  reason_code: string | null;
+  reason_detail: string | null;
+  observed_at: string | null;
   source: string | null;
+  source_url: string | null;
   data_age_days: number | null;
+  retryable: boolean | null;
   not_used_in_ranking: boolean;
   data: Record<string, unknown> | unknown[] | null;
 }
@@ -701,7 +706,20 @@ export interface DataCoverageRow {
   coverage: number;
   stale: number;
   failed: number;
+  universe_count: number;
+  eligible_count: number;
+  targeted_count: number;
+  attempted_count: number;
+  with_data_count: number;
+  no_finding_count: number;
+  failed_count: number;
+  not_applicable_count: number;
+  not_collected_count: number;
+  stale_count: number;
+  operational_coverage: number;
+  universe_coverage: number;
   last_successful: string | null;
+  last_attempted: string | null;
   source: string | null;
 }
 
