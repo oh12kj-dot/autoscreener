@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { fetchCandidateFinancials } from "../api/client";
 import type { FinancialHistoryResponse, FinancialPeriodView } from "../api/types";
+import { fittedDomain } from "../chartScale";
 
 /** J-2(docs/investment_decision_gap_2026-08-29.md):実績の推移。
  *  `raw_snapshots.payload` に既にある財務三表を整形して見せるだけ。順位計算には一切影響しない。 */
@@ -99,10 +100,11 @@ export function FinancialHistorySection({ ticker }: { ticker: string }) {
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="period" />
             <YAxis yAxisId="rev" tickFormatter={(v) => fmtMoney(Number(v))} width={70} />
+            {/* 粗利率は 0 基準に固定せず推移が見えるレンジに合わせる(下限は 0 で止める)。 */}
             <YAxis
               yAxisId="gm"
               orientation="right"
-              domain={[0, "auto"]}
+              domain={fittedDomain(chartData.map((d) => d.gross_margin_pct), { clampMin: 0 }) ?? [0, "auto"]}
               tickFormatter={(v) => `${Number(v).toFixed(0)}%`}
               width={50}
             />

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fetchMacro } from "../api/client";
 import type { MacroResponse } from "../api/types";
+import { fittedDomain, tickDecimals } from "../chartScale";
 
 /**
  * マクロ(FRED)ページ(30.8・30.9.1)。
@@ -63,17 +64,28 @@ export function MacroPage() {
                 <span className="th-badge">1年比 {s.change_1y >= 0 ? "+" : ""}{s.change_1y.toFixed(2)}pt</span>
               )}
             </p>
-            {s.history.length > 1 && (
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={s.history}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="observation_date" tick={{ fontSize: 10 }} />
-                  <YAxis width={50} tick={{ fontSize: 10 }} />
-                  <Tooltip />
-                  <Line type="monotone" dataKey="value" stroke="#2563eb" dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
+            {s.history.length > 1 && (() => {
+              const values = s.history.map((h) => h.value);
+              const decimals = tickDecimals(values);
+              return (
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={s.history}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="observation_date" tick={{ fontSize: 10 }} />
+                    {/* 0 基準に固定せず実データのレンジに合わせる。0.数pt の差を潰さないため。 */}
+                    <YAxis
+                      width={56}
+                      tick={{ fontSize: 10 }}
+                      domain={fittedDomain(values) ?? [0, "auto"]}
+                      allowDecimals
+                      tickFormatter={(v) => Number(v).toFixed(decimals)}
+                    />
+                    <Tooltip formatter={(v) => Number(v).toFixed(Math.max(decimals, 2))} />
+                    <Line type="monotone" dataKey="value" stroke="#2563eb" dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              );
+            })()}
           </div>
         ))}
     </div>
