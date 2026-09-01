@@ -67,7 +67,7 @@ def collect_macro_exposure(*, symbols: list[str] | None = None, observed_at: dat
                 ).order_by(PriceSnapshot.trade_date).all()
                 price_returns = _returns(_weekly_last(prices), difference=False)
                 if len(price_returns) < minimum_weeks:
-                    _ledger(session, ticker.id, observed_at, CoverageStatus.NOT_COLLECTED,
+                    _ledger(session, ticker.id, observed_at, CoverageStatus.COLLECTED_NO_FINDING,
                             CoverageReasonCode.INSUFFICIENT_PRICE_HISTORY, f"{len(price_returns)} weekly returns")
                     counts["no_finding"] += 1
                     continue
@@ -102,7 +102,7 @@ def collect_macro_exposure(*, symbols: list[str] | None = None, observed_at: dat
                     _ledger(session, ticker.id, observed_at, CoverageStatus.COLLECTED_WITH_DATA, None, None)
                     counts["with_data"] += 1
                 else:
-                    _ledger(session, ticker.id, observed_at, CoverageStatus.NOT_COLLECTED,
+                    _ledger(session, ticker.id, observed_at, CoverageStatus.COLLECTED_NO_FINDING,
                             CoverageReasonCode.INSUFFICIENT_FACTOR_HISTORY if insufficient_factor else CoverageReasonCode.SOURCE_NOT_SCANNED,
                             "No factor had a usable 52-week aligned sample")
                     counts["no_finding"] += 1
