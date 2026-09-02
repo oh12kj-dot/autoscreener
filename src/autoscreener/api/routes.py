@@ -3642,7 +3642,14 @@ def get_thesis_milestones(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of
 @router.get("/candidates/{ticker}/macro-exposure", response_model=InvestmentIntelligenceResponse)
 def get_macro_exposure(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: datetime.date | None = Query(None), session: Session = Depends(get_session)):
     date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,MacroExposureSnapshot)
-    return _intelligence_response(t.symbol,date,rows,coverage=_dataset_coverage(session,t.id,"macro_exposure",date))
+    vintage_supported = bool(rows) and all(
+        bool((row.raw_payload or {}).get("fred_vintage_supported")) for row in rows
+    )
+    data={"historical_backtest_supported":vintage_supported,
+          "forward_shadow_only":not vintage_supported,
+          "snapshots":[_model_row_dict(row) for row in rows]}
+    return _intelligence_response(t.symbol,date,rows,data=data,
+        coverage=_dataset_coverage(session,t.id,"macro_exposure",date))
 
 
 @router.get("/candidates/{ticker}/mna-history", response_model=InvestmentIntelligenceResponse)
@@ -3650,8 +3657,18 @@ def get_mna_history(ticker: str = Path(..., pattern=TICKER_PATTERN), as_of: date
     date=as_of or utc_today(); t,rows=_rows_endpoint(session,ticker,date,DelistingEvent,order_column=DelistingEvent.event_date)
     peers=session.query(DelistingEvent).filter(DelistingEvent.event_date<=date).all()
     acquisition=[r for r in peers if r.event_type in {"cash_acquisition","stock_acquisition"}]
+    # Unknown is an unclassified competing-risk observation, not evidence of
+    # "no acquisition".  Dividing acquisitions by all rows previously turned
+    # 100% unknown coverage into an apparently precise 0% acquisition rate.
+    classified=[r for r in peers if r.event_type != "unknown"]
+    unknown_count=len(peers)-len(classified)
+    classification_coverage=len(classified)/len(peers) if peers else None
     data={"population_statistics":{"historical_acquisition_count":len(acquisition),"historical_delisting_count":len(peers),
-          "acquisition_share":len(acquisition)/len(peers) if peers else None,
+          "classified_event_count":len(classified),"unknown_event_count":unknown_count,
+          "classification_coverage":classification_coverage,
+          "acquisition_share":len(acquisition)/len(classified) if classified else None,
+          "historical_backtest_supported":bool(classified) and classification_coverage >= 0.8,
+          "forward_shadow_only":not (bool(classified) and classification_coverage >= 0.8),
           "coverage_status": CoverageStatus.COLLECTED_WITH_DATA if peers else CoverageStatus.NOT_COLLECTED},
           "ticker_events":[_model_row_dict(r) for r in rows]}
     return _intelligence_response(t.symbol,date,rows,source="delisting_events",data=data,

@@ -8,12 +8,15 @@ from __future__ import annotations
 import datetime
 
 from autoscreener.collectors.delisting_source import (
+    DELISTING_TRADING_GRACE_DAYS,
     DelistingEvent,
     iter_delisting_events,
+    last_trade_after_delisting,
     parse_form_index,
     register_delisting_events,
 )
-from autoscreener.db.models import Ticker
+from autoscreener.batch.collect_delistings import rollback_false_delistings
+from autoscreener.db.models import DelistingEvent as DelistingEventRow, PriceSnapshot, Ticker
 from autoscreener.db.session import session_scope
 
 _SAMPLE_IDX = """Description:           Master Index of EDGAR Dissemination Feed by Form Type
@@ -80,9 +83,133 @@ def test_register_delisting_events_sets_delisted_at_without_quarantine():
         _cleanup(symbols)
 
 
+def test_last_trade_after_delisting_respects_the_grace_window():
+    """判定基準そのもの(タスク①②で共有):廃止日 + 猶予日数より後に約定が
+    あるときだけ最終取引日を返す。猶予内・以前で途切れているものは None。"""
+    symbols = ["ZZLTAD1", "ZZLTAD2", "ZZLTAD3"]
+    _cleanup(symbols)
+    claimed = datetime.date(2024, 4, 1)
+    try:
+        with session_scope() as session:
+            gone = Ticker(symbol="ZZLTAD1", market="US")       # 廃止日以前で終了
+            within = Ticker(symbol="ZZLTAD2", market="US")      # 猶予窓の内側
+            trading = Ticker(symbol="ZZLTAD3", market="US")     # 猶予窓より後
+            session.add_all([gone, within, trading])
+            session.flush()
+            session.add_all([
+                PriceSnapshot(ticker_id=gone.id, trade_date=claimed - datetime.timedelta(days=3), close=1.0, volume=10),
+                PriceSnapshot(
+                    ticker_id=within.id,
+                    trade_date=claimed + datetime.timedelta(days=DELISTING_TRADING_GRACE_DAYS - 1),
+                    close=1.0,
+                    volume=10,
+                ),
+                PriceSnapshot(
+                    ticker_id=trading.id,
+                    trade_date=claimed + datetime.timedelta(days=DELISTING_TRADING_GRACE_DAYS + 1),
+                    close=1.0,
+                    volume=10,
+                ),
+            ])
+            session.flush()
+
+            assert last_trade_after_delisting(session, gone.id, claimed) is None
+            assert last_trade_after_delisting(session, within.id, claimed) is None
+            assert last_trade_after_delisting(session, trading.id, claimed) == (
+                claimed + datetime.timedelta(days=DELISTING_TRADING_GRACE_DAYS + 1)
+            )
+    finally:
+        _cleanup(symbols)
+
+
+def test_register_delisting_events_skips_symbols_still_trading():
+    """ガード(2026-09-02 D-1):提出日より後に価格がある銘柄は廃止登録しない。
+
+    上場ノートの個別シリーズ償還で Form 25 を出す発行体(AAPL・MA 等)を
+    CIK→シンボル解決で本体ごと廃止扱いにする誤検出を、登録の手前で弾く。
+    """
+    still_trading, truly_gone = "ZZGUARD1", "ZZGUARD2"
+    _cleanup([still_trading, truly_gone])
+    filed = datetime.date(2024, 4, 1)
+    try:
+        with session_scope() as session:
+            t1 = Ticker(symbol=still_trading, market="US")
+            t2 = Ticker(symbol=truly_gone, market="US")
+            session.add_all([t1, t2])
+            session.flush()
+            session.add_all([
+                # 提出日の半年後まで取引継続 -> ガードで据え置き
+                PriceSnapshot(ticker_id=t1.id, trade_date=filed + datetime.timedelta(days=180), close=12.0, volume=1000),
+                # 取引は提出日の10日前で終了 -> 本物の廃止として登録される
+                PriceSnapshot(ticker_id=t2.id, trade_date=filed - datetime.timedelta(days=10), close=0.4, volume=500),
+            ])
+
+        events = [
+            DelistingEvent("0000930001", "25", filed, "ZZ GUARD ONE"),
+            DelistingEvent("0000930002", "25", filed, "ZZ GUARD TWO"),
+        ]
+        counts = register_delisting_events(
+            events, cik_to_symbol={"0000930001": still_trading, "0000930002": truly_gone}
+        )
+
+        assert counts["skipped_recent_trading"] == 1
+        with session_scope() as session:
+            rows = {
+                t.symbol: t
+                for t in session.query(Ticker).filter(Ticker.symbol.in_([still_trading, truly_gone])).all()
+            }
+            assert rows[still_trading].delisted_at is None
+            assert (
+                session.query(DelistingEventRow).filter_by(ticker_id=rows[still_trading].id).count() == 0
+            )
+            assert rows[truly_gone].delisted_at.date() == filed
+            assert (
+                session.query(DelistingEventRow).filter_by(ticker_id=rows[truly_gone].id).count() == 1
+            )
+    finally:
+        _cleanup([still_trading, truly_gone])
+
+
+def test_rollback_false_delisting_is_dry_run_by_default_and_applies_when_requested():
+    symbol = "ZZROLLBACK"
+    _cleanup([symbol])
+    claimed = datetime.date(2024, 4, 1)
+    try:
+        with session_scope() as session:
+            ticker = Ticker(
+                symbol=symbol, market="US",
+                delisted_at=datetime.datetime.combine(claimed, datetime.time(), tzinfo=datetime.timezone.utc),
+            )
+            session.add(ticker)
+            session.flush()
+            session.add(PriceSnapshot(
+                ticker_id=ticker.id, trade_date=claimed + datetime.timedelta(days=180),
+                close=8.0, volume=100,
+            ))
+            session.add(DelistingEventRow(
+                ticker_id=ticker.id, event_date=claimed, event_type="unknown",
+                source="test", observed_at=datetime.datetime.now(datetime.timezone.utc), confidence="low",
+            ))
+
+        dry = rollback_false_delistings(symbols=[symbol])
+        assert dry == {"delisted_total": 1, "rolled_back": 1, "reserved": 0, "events_deleted": 1}
+        with session_scope() as session:
+            ticker = session.query(Ticker).filter_by(symbol=symbol).one()
+            assert ticker.delisted_at is not None
+
+        applied = rollback_false_delistings(apply=True, symbols=[symbol])
+        assert applied["rolled_back"] == 1
+        with session_scope() as session:
+            ticker = session.query(Ticker).filter_by(symbol=symbol).one()
+            assert ticker.delisted_at is None
+            assert session.query(DelistingEventRow).filter_by(ticker_id=ticker.id).count() == 0
+    finally:
+        _cleanup([symbol])
+
+
 def _cleanup(symbols: list[str]) -> None:
-    from autoscreener.db.models import DelistingEvent as DelistingEventRow
     with session_scope() as session:
         for ticker in session.query(Ticker).filter(Ticker.symbol.in_(symbols)).all():
             session.query(DelistingEventRow).filter_by(ticker_id=ticker.id).delete()
+            session.query(PriceSnapshot).filter_by(ticker_id=ticker.id).delete()
             session.delete(ticker)

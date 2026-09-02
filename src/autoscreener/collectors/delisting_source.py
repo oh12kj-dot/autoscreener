@@ -22,13 +22,58 @@ import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
 from autoscreener.collectors.edgar_client import EdgarClient
 from autoscreener.config import get_settings, load_edgar_config
-from autoscreener.db.models import DelistingEvent as DelistingEventRow, Ticker
+from autoscreener.db.models import DelistingEvent as DelistingEventRow, PriceSnapshot, Ticker
 from autoscreener.db.session import session_scope
 from autoscreener.symbols import normalize_symbol
 
 logger = logging.getLogger(__name__)
+
+# Form 25/15 の「提出日」を廃止日として扱うときの猶予日数(2026-09-02 D-1 誤検出対策)。
+#
+# `register_delisting_events` は Form 25/15 の提出者を CIK→シンボルで解決し、その CIK が
+# 出した最古の提出日を `tickers.delisted_at` に入れていた。AAPL・MA・ABBV のように上場
+# ストラクチャード・ノートの個別シリーズ償還で Form 25 を日常的に出す発行体が本体ごと
+# 廃止扱いになり、592 件中の 500 件超が「現在も取引中なのに廃止」という誤検出になった。
+#
+# 判定基準は「主張された廃止日より後に取引を続けている銘柄は、その日付では廃止されて
+# いない」。ただし SEC Rule 12d2-2(d)(1) では Form 25 提出から上場廃止の発効まで10日
+# (Section 12(b) の登録抹消完了まで90日)あり、正当に廃止された銘柄でも提出日
+# ——`delisted_at` に入る値——の後 約10日は約定が残る。30日はこの窓の3倍を取り、価格
+# フィードの遅延・非取引日・提出日と最終取引日のズレも吸収する。実測の delta(最終取引日
+# − 廃止日)分布も 0日以下に5件・7〜17日に7件・その後 33日以降に密集で、18〜32日は空白。
+DELISTING_TRADING_GRACE_DAYS = 30
+
+
+def last_trade_after_delisting(
+    session: Session,
+    ticker_id: int,
+    claimed_delist_date: datetime.date,
+    *,
+    grace_days: int = DELISTING_TRADING_GRACE_DAYS,
+) -> datetime.date | None:
+    """`claimed_delist_date` + `grace_days` より後の約定が `price_snapshots` に
+    あれば、その最終取引日を返す(= その日付では廃止されていない誤検出の証拠)。
+
+    無ければ `None`。価格が全く無い/薄い銘柄や、取引が廃止日以前で途切れて
+    いる銘柄も `None` になる——本当の廃止かもしれないので、呼び出し側はこれらを
+    触ってはいけない(推測で廃止判定を外さない)。ロールバック(タスク①)と
+    コレクタのガード(タスク②)で同じこの関数を使う。
+    """
+    cutoff = claimed_delist_date + datetime.timedelta(days=grace_days)
+    return (
+        session.query(func.max(PriceSnapshot.trade_date))
+        .filter(
+            PriceSnapshot.ticker_id == ticker_id,
+            PriceSnapshot.trade_date > cutoff,
+        )
+        .scalar()
+    )
+
 
 # 上場廃止を示すフォーム。
 #   25 / 25-NSE          … 取引所による上場廃止届
@@ -161,6 +206,11 @@ def register_delisting_events(
       廃止済み企業も併用する)。
     - 同一シンボルに複数イベントがあれば**最も古い提出日**を採用する。
     - `is_quarantined` は変更しない(日次収集の除外は `delisted_at IS NOT NULL`)。
+    - **ガード(2026-09-02 D-1 誤検出対策)**:Form 25/15 の提出日より後に価格が
+      観測されている銘柄は登録しない。上場ノートのシリーズ償還で Form 25 を出す
+      発行体(AAPL・MA 等)を本体ごと廃止扱いにするのを防ぐだけで、原因や決済額を
+      推測しに行くわけではない(わからないものは unknown のまま)。スキップ件数は
+      `counts["skipped_recent_trading"]` で呼び出し側に見える。
     """
     if cik_to_symbol is None:
         if client is None:
@@ -183,13 +233,28 @@ def register_delisting_events(
             if current is None or event.filed_date < current.filed_date:
                 earliest[symbol] = event
 
-        counts = {"resolved": 0, "registered": 0, "updated": 0, "unresolved": len(events), "event_rows": 0}
+        counts = {
+            "resolved": 0,
+            "registered": 0,
+            "updated": 0,
+            "unresolved": len(events),
+            "event_rows": 0,
+            "skipped_recent_trading": 0,
+        }
         for symbol, event in earliest.items():
             counts["resolved"] += 1
             filed_dt = datetime.datetime.combine(
                 event.filed_date, datetime.time(), tzinfo=datetime.UTC
             )
             ticker = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+            # ガード:提出日 + 猶予日数より後に約定がある銘柄は、その日付では廃止
+            # されていない。CIK→シンボル解決が拾う「ノートのシリーズ償還を出す
+            # 本体」を弾く。ticker が未登録なら価格も無いので判定は走らない。
+            if ticker is not None and (
+                last_trade_after_delisting(session, ticker.id, event.filed_date) is not None
+            ):
+                counts["skipped_recent_trading"] += 1
+                continue
             if ticker is None:
                 ticker = Ticker(
                         symbol=symbol,

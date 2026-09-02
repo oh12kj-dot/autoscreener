@@ -11,6 +11,7 @@ cp932 で、`run-backtest` がKPI不合格を報告する行に含まれるダ�
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import sys
 
@@ -37,7 +38,10 @@ from autoscreener.batch.collect_guidance import collect_guidance
 from autoscreener.batch.collect_litigation import collect_litigation
 from autoscreener.batch.collect_macro import collect_macro
 from autoscreener.batch.collect_macro_exposure import collect_macro_exposure
-from autoscreener.batch.collect_market_opportunity import collect_market_opportunity
+from autoscreener.batch.collect_market_opportunity import (
+    collect_market_opportunity,
+    revalidate_market_opportunity_estimates,
+)
 from autoscreener.batch.collect_xbrl_facts import collect_xbrl_facts
 from autoscreener.batch.collect_consensus import collect_consensus
 from autoscreener.batch.collect_investment_intelligence import collect_investment_intelligence
@@ -50,6 +54,7 @@ from autoscreener.dates import utc_today
 from autoscreener.db.session import session_scope
 from autoscreener.scoring.engine import run_scoring
 from autoscreener.scoring.forward_validation import run_forward_validation
+from autoscreener.validation.coverage_bias import audit_v4_coverage_bias
 
 app = typer.Typer(add_completion=False)
 
@@ -587,6 +592,33 @@ def collect_market_opportunity_cmd(
         typer.echo(f"  {key}: {count}")
 
 
+@app.command("revalidate-market-opportunity")
+def revalidate_market_opportunity_cmd(
+    apply: bool = typer.Option(
+        False, "--apply", help="Archive and delete rows proven invalid by the Phase 0 TAM contract."
+    ),
+) -> None:
+    """Audit existing TAM rows; dry-run unless ``--apply`` is explicitly supplied."""
+    counts = revalidate_market_opportunity_estimates(apply=apply)
+    for key, count in counts.items():
+        typer.echo(f"  {key}: {count}")
+    if not apply and counts["invalid"]:
+        raise typer.BadParameter(
+            "Invalid TAM rows were found. Review the counts, confirm a database backup, "
+            "then rerun with --apply."
+        )
+
+
+@app.command("audit-coverage-bias")
+def audit_coverage_bias_cmd(
+    score_date: str = typer.Option("", help="v4 score date (YYYY-MM-DD); defaults to latest."),
+) -> None:
+    """Measure whether Live-data coverage is associated with the incumbent v4 rank."""
+    with session_scope() as session:
+        result = audit_v4_coverage_bias(session, score_date=_parse_date(score_date))
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
 @app.command("collect-filing-sections")
 def collect_filing_sections_cmd(
     symbols: str = typer.Option("", help="Comma-separated ticker symbols; defaults to tracked tickers."),
@@ -640,6 +672,38 @@ def backfill_delisting_events_cmd(
     counts = backfill_delisting_events_from_tickers()
     for key, count in counts.items():
         typer.echo(f"  {key}: {count}")
+
+
+@app.command("rollback-false-delistings")
+def rollback_false_delistings_cmd(
+    apply: bool = typer.Option(
+        False, "--apply", help="実際に delisted_at をクリアし、対応する delisting_events を削除する。"
+    ),
+    symbols: str = typer.Option("", help="検証対象をカンマ区切りで限定する。省略時は全件。"),
+) -> None:
+    """D-1 誤検出のロールバック(2026-09-02):取引を続けている銘柄の delisted_at を戻す。
+
+    `collect-delistings` / `backfill-delisting-events` が入れた `tickers.delisted_at`
+    は、上場ノートのシリーズ償還で Form 25 を出す発行体(AAPL・MA 等)を CIK→シンボル
+    解決で本体ごと廃止扱いにした誤検出を大量に含む。判定基準は「主張された廃止日 +
+    猶予日数(delisting_source.DELISTING_TRADING_GRACE_DAYS)より後に price_snapshots に
+    約定がある」= 誤検出と断定。基準を満たさないもの(価格が無い/薄い、取引が廃止日
+    以前で途切れている)は本当の廃止かもしれないので触らない。
+
+    `backfill-delisting-events` と同じ作法:`--apply` 無しでは対象件数だけ出して
+    `typer.BadParameter` で止める。件数と代表サンプルを目視確認し、バックアップを
+    取ってから `--apply` すること。
+    """
+    from autoscreener.batch.collect_delistings import rollback_false_delistings
+
+    counts = rollback_false_delistings(apply=apply, symbols=_optional_symbols(symbols))
+    for key, count in counts.items():
+        typer.echo(f"  {key}: {count}")
+    if not apply:
+        raise typer.BadParameter(
+            "これは破壊的な DB 変更です。上の件数と代表サンプルを目視確認し、"
+            "バックアップを取ってから --apply を付けて再実行してください。"
+        )
 
 
 @app.command("estimate-hazard")

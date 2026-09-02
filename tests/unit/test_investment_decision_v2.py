@@ -7,7 +7,7 @@ from autoscreener.api.main import app
 from autoscreener.batch.collect_consensus import collect_consensus
 from autoscreener.collectors.consensus import ConsensusSnapshot, YfinanceConsensusProvider
 from autoscreener.config import load_scoring_config
-from autoscreener.db.models import AnalystConsensusSnapshot, Ticker
+from autoscreener.db.models import AnalystConsensusSnapshot, DelistingEvent, MacroExposureSnapshot, Ticker
 from autoscreener.db.session import session_scope
 from autoscreener.scoring.investment_intelligence import (
     calculate_reinvestment_quality, jpy_after_tax_return, risk_sizing_preview,
@@ -190,4 +190,77 @@ def test_consensus_endpoint_is_point_in_time():
             ticker = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
             if ticker:
                 session.query(AnalystConsensusSnapshot).filter_by(ticker_id=ticker.id).delete()
+                session.delete(ticker)
+
+
+def test_mna_unknown_events_do_not_become_non_acquisition_observations():
+    symbol = "ZZMNAPIT"
+    observed = datetime.datetime(2097, 1, 2, tzinfo=datetime.timezone.utc)
+    with session_scope() as session:
+        existing = session.query(DelistingEvent).filter(
+            DelistingEvent.event_date <= datetime.date(2097, 1, 4)
+        ).all()
+        existing_classified = sum(row.event_type != "unknown" for row in existing)
+        existing_unknown = sum(row.event_type == "unknown" for row in existing)
+        old = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+        if old:
+            session.query(DelistingEvent).filter_by(ticker_id=old.id).delete()
+            session.delete(old)
+        ticker = Ticker(symbol=symbol, market="US")
+        session.add(ticker)
+        session.flush()
+        for day, event_type in ((1, "unknown"), (2, "cash_acquisition"), (3, "bankruptcy")):
+            session.add(DelistingEvent(
+                ticker_id=ticker.id, event_date=datetime.date(2097, 1, day), event_type=event_type,
+                source="test", observed_at=observed, confidence="test",
+            ))
+    try:
+        body = TestClient(app).get(
+            f"/api/v1/candidates/{symbol}/mna-history?as_of=2097-01-04"
+        ).json()
+        stats = body["data"]["population_statistics"]
+        assert stats["classified_event_count"] == existing_classified + 2
+        assert stats["unknown_event_count"] == existing_unknown + 1
+        expected_share = (
+            sum(row.event_type in {"cash_acquisition", "stock_acquisition"} for row in existing) + 1
+        ) / (existing_classified + 2)
+        assert stats["acquisition_share"] == pytest.approx(expected_share)
+        assert stats["classification_coverage"] < 1
+    finally:
+        with session_scope() as session:
+            ticker = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+            if ticker:
+                session.query(DelistingEvent).filter_by(ticker_id=ticker.id).delete()
+                session.delete(ticker)
+
+
+def test_macro_exposure_api_marks_non_vintage_data_as_forward_shadow_only():
+    symbol = "ZZMACROPIT"
+    observed = datetime.datetime(2097, 2, 1, tzinfo=datetime.timezone.utc)
+    with session_scope() as session:
+        old = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+        if old:
+            session.query(MacroExposureSnapshot).filter_by(ticker_id=old.id).delete()
+            session.delete(old)
+        ticker = Ticker(symbol=symbol, market="US")
+        session.add(ticker)
+        session.flush()
+        session.add(MacroExposureSnapshot(
+            ticker_id=ticker.id, observed_at=observed, observation_end=observed.date(),
+            factor="DGS10", beta=0.2, downside_beta=0.3, sample_count=80,
+            source="test", raw_payload={"fred_vintage_supported": False},
+            coverage_status="collected_with_data", confidence="medium",
+        ))
+    try:
+        body = TestClient(app).get(
+            f"/api/v1/candidates/{symbol}/macro-exposure?as_of=2097-02-01"
+        ).json()
+        assert body["data"]["historical_backtest_supported"] is False
+        assert body["data"]["forward_shadow_only"] is True
+        assert len(body["data"]["snapshots"]) == 1
+    finally:
+        with session_scope() as session:
+            ticker = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+            if ticker:
+                session.query(MacroExposureSnapshot).filter_by(ticker_id=ticker.id).delete()
                 session.delete(ticker)

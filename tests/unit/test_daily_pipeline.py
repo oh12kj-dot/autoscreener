@@ -85,6 +85,15 @@ def _stub_phase2367_steps():
         patch("autoscreener.batch.daily_pipeline.collect_xbrl_facts", return_value={"tickers": 0}) as xbrl,
         patch("autoscreener.batch.daily_pipeline.collect_consensus", return_value={"tickers": 0}) as consensus,
         patch("autoscreener.batch.daily_pipeline.collect_investment_intelligence", return_value={"sections": 0}) as intelligence,
+        # market_opportunity / macro_exposure も investment_intelligence と同じ
+        # ライブ層の工程。ここに足し忘れていたため、両者が実物のまま走り
+        # `select_tracked_tickers` の実DB経路 → 全追跡銘柄 × 全マクロ系列の
+        # 週次回帰(`collect_macro_exposure` は価格系列を key ごとに再集計する
+        # ので実質 O(n^2))に落ちて、このファイルのいくつかのテストが数分
+        # 止まっていた(このフィクスチャの docstring が言う「緑のまま、ただ
+        # 遅くなるだけ」の典型)。観点は骨格・順序・障害許容なので 0 件で通す。
+        patch("autoscreener.batch.daily_pipeline.collect_market_opportunity", return_value={"targets": 0}) as market_opportunity,
+        patch("autoscreener.batch.daily_pipeline.collect_macro_exposure", return_value={"targets": 0}) as macro_exposure,
         patch("autoscreener.batch.daily_pipeline.collect_filing_sections", return_value={"sections": 0}) as filing_sections,
         patch("autoscreener.batch.daily_pipeline.collect_guidance", return_value={"rows": 0}) as guidance,
         patch("autoscreener.batch.daily_pipeline.collect_concentration", return_value={"rows": 0}) as concentration,
@@ -109,6 +118,8 @@ def _stub_phase2367_steps():
             "xbrl": xbrl,
             "consensus": consensus,
             "intelligence": intelligence,
+            "market_opportunity": market_opportunity,
+            "macro_exposure": macro_exposure,
             "filing_sections": filing_sections,
             "guidance": guidance,
             "concentration": concentration,

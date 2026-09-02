@@ -13,6 +13,10 @@ from autoscreener.scoring.investment_intelligence import macro_exposure
 
 
 _RATE_FACTORS = frozenset({"DGS10", "DFII10", "BAMLH0A0HYM2"})
+# The stored FRED observations currently have no vintage/realtime boundary.
+# They are valid for forward shadow monitoring, but must not be replayed into a
+# historical score until ALFRED/FRED vintage collection is implemented.
+FRED_VINTAGE_SUPPORTED = False
 
 
 def _weekly_last(rows: list[tuple[datetime.date, float]]) -> dict[tuple[int, int], tuple[datetime.date, float]]:
@@ -95,7 +99,11 @@ def collect_macro_exposure(*, symbols: list[str] | None = None, observed_at: dat
                             factor=factor, beta=result["beta"], downside_beta=result["downside_beta"], sample_count=result["sample_count"],
                             source="price_snapshots+fred", source_url=None, coverage_status=CoverageStatus.COLLECTED_WITH_DATA,
                             confidence="medium", raw_payload={"series_id": factor, "transform": "difference" if factor in _RATE_FACTORS else "return",
-                            "window_weeks": len(common), "fred_vintage_supported": False}))
+                            "window_weeks": len(common),
+                            "fred_vintage_supported": FRED_VINTAGE_SUPPORTED,
+                            "historical_backtest_supported": FRED_VINTAGE_SUPPORTED,
+                            "forward_shadow_only": not FRED_VINTAGE_SUPPORTED,
+                        }))
                         counts["snapshots"] += 1
                     any_snapshot = True
                 if any_snapshot:
