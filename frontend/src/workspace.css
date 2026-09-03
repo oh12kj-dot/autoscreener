@@ -320,8 +320,26 @@
 .page-ranking > div > .table-scroll,
 .page-ranking > div > .pagination,
 .page-ranking > div > .error,
-.page-ranking > div > p:not(.score-date) {
+.page-ranking > div > p:not(.score-date),
+.page-ranking > div > .model-toggle,
+.page-ranking > div > .v5-ranking-section {
   grid-column: 1 / -1;
+}
+
+/* Phase 11(2026-09-03「v5のUIが見れたものではない」指摘への対応・根本原因):
+   RankingPageのルートdivは上の12列グリッドの対象で、v4の各要素は個別に
+   grid-column を割り当てられている。v5切替トグル(.model-toggle)と
+   V5RankingSectionのルート(.v5-ranking-section)は、この割り当てが無いまま
+   グリッドの直接の子になっていたため、既定のauto placementで幅1/12列
+   (約80px)に押し込まれ、中の文章が1文字ずつ縦に折り返される致命的な
+   崩れ方をしていた——「見れたものではない」の実際の原因はCSSクラスの
+   不足3件だけではなく、この構造的な列崩壊だった(実機確認で発見)。
+   `.v5-ranking-section` の内部は通常のブロックレイアウトなので、
+   ここでフルスパンにしてしまえば、内部の要素は v4 のグリッド規則の
+   影響を一切受けない(2階層下の子はセレクタの対象外のため)。 */
+
+.page-ranking .v5-ranking-section .table-scroll .ranking-table {
+  min-width: 1080px;
 }
 
 .page-ranking > div > h2 {

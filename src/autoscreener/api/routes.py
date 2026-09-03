@@ -3713,12 +3713,34 @@ def get_jpy_return(ticker: str = Query(..., pattern=TICKER_PATTERN), usd_moic: f
 
 
 def _latest_v5_run(session: Session, as_of: datetime.date | None = None) -> ModelRun:
+    """The most recent successful v5 run, preferring one with real output.
+
+    Phase 11 fix(2026-09-03「v5のUIが見れたものではない」実機確認で発見):
+    a same-day ``run-v5-shadow`` invocation for a date whose
+    ``universe_snapshots`` row does not exist yet (e.g. today, before the
+    daily pipeline has run) legitimately "succeeds" with
+    ``population_count = 0`` (see ``run_v5_shadow``'s early-population
+    branch). Ordering purely by ``as_of DESC`` let such an empty run mask a
+    real, populated run from a prior date -- every v5 UI surface (ranking
+    list, ticker detail, validation status's ``latest_run``) would then
+    show "no candidates" even though real data exists one day earlier.
+    Prefer the latest run that actually scored something; only fall back
+    to an empty run when literally no non-empty run exists for the
+    requested window (so a genuinely-empty history still 404s honestly
+    rather than silently succeeding with nothing to show).
+    """
     query = session.query(ModelRun).filter(
         ModelRun.model_version == "v5", ModelRun.status == "succeeded"
     )
     if as_of is not None:
         query = query.filter(ModelRun.as_of <= as_of)
-    run = query.order_by(ModelRun.as_of.desc(), ModelRun.finished_at.desc()).first()
+    run = (
+        query.filter(ModelRun.population_count > 0)
+        .order_by(ModelRun.as_of.desc(), ModelRun.finished_at.desc())
+        .first()
+    )
+    if run is None:
+        run = query.order_by(ModelRun.as_of.desc(), ModelRun.finished_at.desc()).first()
     if run is None:
         raise HTTPException(status_code=404, detail="successful v5 model run not found")
     return run
@@ -3878,12 +3900,13 @@ def get_v5_validation_status(session: Session = Depends(get_session)) -> ModelV5
     unsupported = sorted(
         key for key, spec in FEATURES_BY_KEY.items() if not spec.historical_backtest_supported
     )
-    latest_run_row = (
-        session.query(ModelRun)
-        .filter(ModelRun.model_version == "v5", ModelRun.status == "succeeded")
-        .order_by(ModelRun.as_of.desc(), ModelRun.finished_at.desc())
-        .first()
-    )
+    # Phase 11 fix(2026-09-03):以前はここだけ独自にクエリしており、
+    # `_latest_v5_run()` の「population_count>0を優先する」補正(同フェーズの
+    # 別修正)が反映されず、今日の空runが最終runとして出てしまっていた。
+    try:
+        latest_run_row = _latest_v5_run(session, None)
+    except HTTPException:
+        latest_run_row = None
     if realized_count == 0:
         warnings.append("forward_validation_zero_matured_observations")
     return ModelV5ValidationStatusResponse(

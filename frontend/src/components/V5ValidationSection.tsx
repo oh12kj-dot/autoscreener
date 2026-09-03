@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { fetchV5ValidationStatus } from "../api/client";
 import type { ModelV5ValidationStatus } from "../api/types";
+import { V5WarningBadges } from "./V5WarningBadges";
+import { v5DecisionLabel, v5ModeLabel, v5RunStatusLabel, v5SignalLabel } from "../v5Labels";
 
 /** Phase 8/9(Issue #3 §28・§29・§34・§36):v5(Shadow Challenger)の検証状況。
  *  v4の検証セクションとは別枠の追加専用コンポーネント。数字は
@@ -40,8 +42,8 @@ export function V5ValidationSection() {
     <div className="v5-validation-section">
       <h3>v5 Shadow Challenger の検証状況</h3>
       <div className="v5-badges">
-        <span className="v5-badge">forward_shadow_only</span>
-        <span className="v5-badge">not_for_production</span>
+        <span className="v5-badge" title="forward_shadow_only">将来検証のみ</span>
+        <span className="v5-badge" title="not_for_production">投資判断には未使用</span>
       </div>
       <div className="model-notice negative">
         <strong>
@@ -59,13 +61,13 @@ export function V5ValidationSection() {
           <tr>
             <td>Champion / Challenger</td>
             <td>
-              {status.champion_model} / {status.challenger_model}(mode: {status.challenger_mode})
+              {status.champion_model} / {status.challenger_model}（{v5ModeLabel(status.challenger_mode)}）
             </td>
           </tr>
           <tr>
             <td>昇格判断(Decision Record)</td>
             <td>
-              {status.decision}
+              {v5DecisionLabel(status.decision)}
               {status.decision_entry_date && `(${status.decision_entry_date}時点)`}
             </td>
           </tr>
@@ -74,8 +76,8 @@ export function V5ValidationSection() {
             <td>
               {status.latest_run ? (
                 <>
-                  {status.latest_run.as_of}(status: {status.latest_run.status}、config_hash:{" "}
-                  {status.latest_run.config_hash ?? "—"})
+                  {status.latest_run.as_of}（状態: {v5RunStatusLabel(status.latest_run.status)}、config_hash:{" "}
+                  {status.latest_run.config_hash ?? "—"}）
                 </>
               ) : (
                 "データ不足(run記録なし)"
@@ -114,7 +116,7 @@ export function V5ValidationSection() {
             <td>既知の未対応特徴量(historical_backtest_supported=false)</td>
             <td>
               {status.unsupported_historical_features.length > 0
-                ? status.unsupported_historical_features.join(", ")
+                ? status.unsupported_historical_features.map((k) => v5SignalLabel(k)).join("、")
                 : "なし"}
             </td>
           </tr>
@@ -122,7 +124,9 @@ export function V5ValidationSection() {
       </table>
 
       {status.warnings.length > 0 && (
-        <p className="v5-warnings">warnings: {status.warnings.join(", ")}</p>
+        <div className="v5-warnings">
+          <V5WarningBadges codes={status.warnings} compact />
+        </div>
       )}
     </div>
   );

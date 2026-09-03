@@ -1997,6 +1997,39 @@ td.negative {
   font-weight: 600;
 }
 
+/* Phase 11(2026-09-03「v5のUIが見れたものではない」指摘への対応):
+   前ラウンドがセッション上限で中断した際、まさにこの3クラスの追加途中
+   だった。`.v5-status-strip` は複数の<span>を横並びで出すヘッダのため、
+   無スタイルだと1行の塊に潰れて読めなくなる——今回の主因。 */
+.v5-not-for-production-notice {
+  border-left-color: var(--danger);
+}
+
+.v5-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1.25rem;
+  margin: 0 0 1rem;
+  padding: 0.6rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.v5-status-strip strong {
+  color: var(--text);
+}
+
+.v5-run-warnings {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .v5-badges {
   display: flex;
   flex-wrap: wrap;

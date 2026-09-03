@@ -1,24 +1,24 @@
 import { useEffect, useState } from "react";
 import { fetchCandidates, fetchV5Objectives, fetchV5ScoreDetail } from "../api/client";
 import type { ModelV5AblationEntry, ModelV5ObjectivesResponse, ModelV5ScoreDetail } from "../api/types";
+import { V5WarningBadges } from "./V5WarningBadges";
+import {
+  v5AblationReasonLabel,
+  v5ObjectiveLabel,
+  v5SignalLabel,
+  v5StateShiftLabel,
+} from "../v5Labels";
 
 /** Phase 8(Issue #3 §28・§29・§34・§36):TickerDetailPage向けのv5専用セクション。
  *  v4の描画コードとは完全に分離した、追加専用(additive-only)のコンポーネント
- *  ——既存v4画面のJSX・フックには一切触れない。 */
-
-const FEATURE_LABELS: Record<string, string> = {
-  growth_duration_years: "成長期間",
-  initial_growth_rate: "初期成長率",
-  revenue_multiple_ratio: "売上マルチプル比率",
-  sigma_multiplier: "分布の広がり(σ)倍率",
-  left_tail_extra: "左テール追加リスク",
-  survival_multiplier: "生存確率倍率",
-  model_confidence: "モデル信頼度",
-};
-
-function label(key: string): string {
-  return FEATURE_LABELS[key] ?? key;
-}
+ *  ——既存v4画面のJSX・フックには一切触れない。
+ *
+ *  Phase 11(2026-09-03「v5のUIが見れたものではない」指摘への対応):
+ *  ablationの行キーは signal key(guidance/litigation/accounting_quality等)
+ *  であり、state_shift の内訳キー(growth_duration_years等)とは別の名前
+ *  空間。以前はこの2つを同じ `label()` で解決していたため、外側の行見出し
+ *  は常に生のsignal keyのまま出ていた(FEATURE_LABELSがstate_shift用の
+ *  キーしか知らなかったため)。`v5Labels.ts` で両方を別関数に分離する。 */
 
 function fmtYears(v: number): string {
   return `${v.toFixed(1)}y`;
@@ -55,13 +55,13 @@ function renderStateShift(
     if (key === "growth_duration_years" && growth?.duration_years?.value != null) {
       const withV = growth.duration_years.value;
       const withoutV = withV - delta;
-      rows.push({ key, text: `${label(key)}: ${fmtYears(withoutV)} → ${fmtYears(withV)} (Δ${fmtDelta(delta, 2)}y)` });
+      rows.push({ key, text: `${v5StateShiftLabel(key)}: ${fmtYears(withoutV)} → ${fmtYears(withV)} (Δ${fmtDelta(delta, 2)}y)` });
     } else if (key === "initial_growth_rate" && growth?.initial_rate?.value != null) {
       const withV = growth.initial_rate.value;
       const withoutV = withV - delta;
-      rows.push({ key, text: `${label(key)}: ${fmtRate(withoutV)} → ${fmtRate(withV)} (Δ${fmtDelta(delta * 100, 1)}pt)` });
+      rows.push({ key, text: `${v5StateShiftLabel(key)}: ${fmtRate(withoutV)} → ${fmtRate(withV)} (Δ${fmtDelta(delta * 100, 1)}pt)` });
     } else {
-      rows.push({ key, text: `${label(key)}: Δ${fmtDelta(delta)}` });
+      rows.push({ key, text: `${v5StateShiftLabel(key)}: Δ${fmtDelta(delta)}` });
     }
   }
   return rows;
@@ -91,20 +91,30 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
       .catch((e: Error) => setError(e.message));
   }, [ticker]);
 
-  const loadV4Rank = () => {
+  // /candidates の limit は最大200(_MAX_LIMIT、routes.py)。411銘柄などの
+  // 母集団を1回で取得しようとすると 422 Unprocessable Entity になる
+  // (Phase 11の実機確認で発見した実バグ)。200件ずつページングして総当たりする。
+  const V4_CANDIDATES_PAGE_LIMIT = 200;
+
+  const loadV4Rank = async () => {
     setV4RankLoading(true);
-    // v4順位はランキング一覧が動的に確率順で並べ替えて初めて決まる
-    // (対象の目標次第で順位が変わる)ため、一覧APIを総取得して検索する。
-    // ページ読み込み時の常時取得は避け、要求されたときだけ計算する。
-    fetchCandidates({ limit: 1, offset: 0 })
-      .then((first) =>
-        fetchCandidates({ limit: Math.max(first.total, 1), offset: 0 }).then((full) => {
-          const idx = full.items.findIndex((item) => item.ticker === ticker);
-          setV4Rank(idx === -1 ? "not_ranked" : idx + 1);
-        })
-      )
-      .catch(() => setV4Rank("not_ranked"))
-      .finally(() => setV4RankLoading(false));
+    try {
+      const first = await fetchCandidates({ limit: 1, offset: 0 });
+      let foundIndex = -1;
+      for (let offset = 0; offset < first.total; offset += V4_CANDIDATES_PAGE_LIMIT) {
+        const page = await fetchCandidates({ limit: V4_CANDIDATES_PAGE_LIMIT, offset });
+        const idxInPage = page.items.findIndex((item) => item.ticker === ticker);
+        if (idxInPage !== -1) {
+          foundIndex = offset + idxInPage;
+          break;
+        }
+      }
+      setV4Rank(foundIndex === -1 ? "not_ranked" : foundIndex + 1);
+    } catch {
+      setV4Rank("not_ranked");
+    } finally {
+      setV4RankLoading(false);
+    }
   };
 
   if (error) {
@@ -132,9 +142,11 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
     <div className="v5-ticker-section">
       <h3>v5 Shadow Challenger(参考・投資判断には未使用)</h3>
       <div className="v5-badges">
-        <span className="v5-badge">forward_shadow_only</span>
-        <span className="v5-badge">not_for_production</span>
-        <span className="v5-badge">historical_backtest_supported=false(一部特徴量)</span>
+        <span className="v5-badge" title="forward_shadow_only">将来検証のみ</span>
+        <span className="v5-badge" title="not_for_production">投資判断には未使用</span>
+        <span className="v5-badge" title="historical_backtest_supported=false">
+          一部特徴量は過去再現(historical backtest)未対応
+        </span>
       </div>
       <p className="v5-caveat">
         v5はChampion(v4)と並行して動く検証専用モデルです。実現リターンによる検証(forward
@@ -161,7 +173,7 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
             <td>{detail.distribution.expected_moic != null ? `${detail.distribution.expected_moic.toFixed(2)}x` : "—"}</td>
           </tr>
           <tr>
-            <td>順位({defaultObjective})</td>
+            <td>{v5ObjectiveLabel(defaultObjective)}での順位</td>
             <td>
               {v4Rank == null ? (
                 <button type="button" disabled={v4RankLoading} onClick={loadV4Rank}>
@@ -199,7 +211,7 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
           )}
           {ablationEntries.map(([key, entry]) => (
             <tr key={key}>
-              <td>{label(key)}</td>
+              <td>{v5SignalLabel(key)}</td>
               <td>{entry.status === "computed" ? "計算済み" : "未計算"}</td>
               <td>
                 {entry.status === "computed" && entry.state_shift ? (
@@ -210,7 +222,7 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
                   </ul>
                 ) : (
                   <span className="v5-not-computed-reason">
-                    {entry.reason ?? "理由不明(未記録)"}
+                    {v5AblationReasonLabel(entry.reason)}
                   </span>
                 )}
               </td>
@@ -220,7 +232,9 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
       </table>
 
       {detail.warnings.length > 0 && (
-        <p className="v5-warnings">warnings: {detail.warnings.join(", ")}</p>
+        <div className="v5-warnings">
+          <V5WarningBadges codes={detail.warnings} compact />
+        </div>
       )}
       <p className="v5-confidence">モデル信頼度: {(detail.confidence * 100).toFixed(0)}%</p>
     </div>

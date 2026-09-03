@@ -2,6 +2,14 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchV5Objectives, fetchV5Scores, fetchV5ValidationStatus } from "../api/client";
 import type { ModelV5ObjectivesResponse, ModelV5ScoreListResponse, ModelV5ValidationStatus } from "../api/types";
+import { V5WarningBadges } from "./V5WarningBadges";
+import {
+  v5DecisionLabel,
+  v5DistributionStatusLabel,
+  v5FilterRowBoilerplateWarnings,
+  v5ObjectiveLabel,
+  v5SignalLabel,
+} from "../v5Labels";
 
 const PAGE_SIZE = 50;
 
@@ -66,7 +74,7 @@ export function V5RankingSection() {
       {status && (
         <div className="v5-status-strip">
           <span>
-            判定: <strong>{status.decision}</strong>（{status.decision_entry_date}）
+            判定: <strong>{v5DecisionLabel(status.decision)}</strong>（{status.decision_entry_date}）
           </span>
           <span>
             評価日数: <strong>{status.evaluation_dates_count}</strong>
@@ -79,8 +87,10 @@ export function V5RankingSection() {
           </span>
           {status.unsupported_historical_features.length > 0 && (
             <span>
-              historical backtest 非対応:{" "}
-              <strong>{status.unsupported_historical_features.join(", ")}</strong>
+              過去再現(historical backtest)非対応の特徴量:{" "}
+              <strong>
+                {status.unsupported_historical_features.map((k) => v5SignalLabel(k)).join("、")}
+              </strong>
             </span>
           )}
         </div>
@@ -92,7 +102,7 @@ export function V5RankingSection() {
           <select value={objective} onChange={(e) => { setObjective(e.target.value); setOffset(0); }}>
             {objectivesData?.objectives.map((o) => (
               <option key={o.name} value={o.name} title={o.description}>
-                {o.name}
+                {v5ObjectiveLabel(o.name)}
               </option>
             ))}
           </select>
@@ -104,7 +114,10 @@ export function V5RankingSection() {
           v5 run: {data.run.run_id.slice(0, 8)}… ・ as_of {data.run.as_of} ・
           母集団 {data.run.population_count}銘柄 ・ config_hash {data.run.config_hash.slice(0, 12)}
           {data.run.warnings.length > 0 && (
-            <span className="v5-run-warnings"> ・ {data.run.warnings.join(", ")}</span>
+            <span className="v5-run-warnings">
+              {" "}
+              ・ <V5WarningBadges codes={data.run.warnings} compact />
+            </span>
           )}
         </p>
       )}
@@ -121,7 +134,7 @@ export function V5RankingSection() {
                 <tr>
                   <th>順位</th>
                   <th>銘柄</th>
-                  <th>{objective}</th>
+                  <th>{v5ObjectiveLabel(objective)}</th>
                   <th>P(10x)</th>
                   <th>期待CAGR</th>
                   <th>P(loss, &lt;1.0x)</th>
@@ -154,15 +167,12 @@ export function V5RankingSection() {
                         : "—"}
                     </td>
                     <td>{(item.confidence * 100).toFixed(0)}%</td>
-                    <td>v5 ({item.distribution.status})</td>
+                    <td>v5({v5DistributionStatusLabel(item.distribution.status)})</td>
                     <td>
-                      {item.warnings.length > 0 ? (
-                        <span title={item.warnings.join(", ")} className="th-badge">
-                          {item.warnings.length}件
-                        </span>
-                      ) : (
-                        "—"
-                      )}
+                      <V5WarningBadges
+                        codes={v5FilterRowBoilerplateWarnings(item.warnings)}
+                        compact
+                      />
                     </td>
                   </tr>
                 ))}
