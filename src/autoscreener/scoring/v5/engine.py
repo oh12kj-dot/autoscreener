@@ -45,6 +45,12 @@ from autoscreener.scoring.v5.quality import (
 )
 from autoscreener.scoring.v5.scenario import build_scenarios
 from autoscreener.scoring.v5.state_model import build_future_state
+from autoscreener.scoring.v5.tail_risk import (
+    TailFeatureSet,
+    TailUpdate,
+    apply_tail_features,
+    build_tail_feature_sets,
+)
 
 # Single source of truth for the persisted contract_version: reads
 # ModelV5Config.implementation_version directly (audit fix, 2026-09-03) so a
@@ -62,6 +68,11 @@ def _code_revision_info() -> dict:
     input: any failure (git missing, not a repo, timeout) is recorded as an
     explicit ``null`` + reason rather than failing the run. Never backfilled
     onto pre-existing runs -- the append-only history is not rewritten.
+
+    Standard rule from the 2026-09-03 audit (residual item 2): evidence runs
+    used for a phase's doc numbers must be taken on a clean working tree
+    (``dirty: False``) *after* committing that phase's implementation, not
+    mid-implementation.
     """
     from autoscreener.config import PROJECT_ROOT
 
@@ -102,13 +113,15 @@ def _feature_payload(
     growth_features: GrowthFeatureSet,
     quality_features: QualityFeatureSet,
     capital_features: CapitalFeatureSet,
+    tail_features: TailFeatureSet,
     growth_update: GrowthUpdate | None,
     quality_update: QualityUpdate | None,
     capital_update: CapitalUpdate | None,
+    tail_update: TailUpdate | None,
     ablation: dict,
 ) -> dict:
     payload = {
-        "registry_version": "phase5",
+        "registry_version": "phase6",
         "pit_evidence": item.evidence(),
         "contracts": [
             {
@@ -122,6 +135,7 @@ def _feature_payload(
         "growth_features": growth_features.to_dict(),
         "quality_features": quality_features.to_dict(),
         "capital_features": capital_features.to_dict(),
+        "tail_features": tail_features.to_dict(),
         "ablation": ablation,
     }
     if growth_update is not None:
@@ -130,15 +144,17 @@ def _feature_payload(
         payload["quality_update"] = quality_update.to_dict()
     if capital_update is not None:
         payload["capital_update"] = capital_update.to_dict()
+    if tail_update is not None:
+        payload["tail_update"] = tail_update.to_dict()
     return payload
 
 
 def _score_warnings(
     item: V5PitInput, has_distribution: bool,
     growth_features: GrowthFeatureSet, quality_features: QualityFeatureSet,
-    capital_features: CapitalFeatureSet,
+    capital_features: CapitalFeatureSet, tail_features: TailFeatureSet,
 ) -> list[str]:
-    warnings = ["phase5_state_updates_shadow_only", "not_for_production"]
+    warnings = ["phase6_state_updates_shadow_only", "not_for_production"]
     if item.raw_snapshot_id is not None:
         warnings.append("financial_statement_pit_is_approximate")
     if item.input_status == "not_collected":
@@ -147,7 +163,10 @@ def _score_warnings(
         warnings.append("distribution_unavailable")
     disabled = [
         signal.key
-        for signal in (*growth_features.signals, *quality_features.signals, *capital_features.signals)
+        for signal in (
+            *growth_features.signals, *quality_features.signals,
+            *capital_features.signals, *tail_features.signals,
+        )
         if signal.status == "runtime_disabled_low_coverage"
     ]
     if disabled:
@@ -161,13 +180,14 @@ def _distribution_for(
     growth_features: GrowthFeatureSet,
     quality_features: QualityFeatureSet,
     capital_features: CapitalFeatureSet,
+    tail_features: TailFeatureSet,
     base_confidence: float,
     model_config: ModelV5Config,
-) -> tuple[GrowthUpdate, QualityUpdate, CapitalUpdate, float, dict]:
-    """Compute one (growth_update, quality_update, capital_update, confidence,
-    distribution) tuple.
+) -> tuple[GrowthUpdate, QualityUpdate, CapitalUpdate, TailUpdate, float, dict]:
+    """Compute one (growth_update, quality_update, capital_update, tail_update,
+    confidence, distribution) tuple.
 
-    The single place Phase 3, 4, and 5 state updates are combined into a
+    The single place Phase 3-6 state updates are combined into a
     distribution, so the leave-one-out ablation loop below can call this
     with any signal excluded from any feature set and get a directly
     comparable counterfactual, instead of duplicating the combination logic
@@ -178,27 +198,38 @@ def _distribution_for(
         min(
             1.0,
             base_confidence + growth_features.confidence_delta
-            + quality_features.confidence_delta + capital_features.confidence_delta,
+            + quality_features.confidence_delta + capital_features.confidence_delta
+            + tail_features.confidence_delta,
         ),
     )
     growth_update = apply_growth_features(result, growth_features, config=model_config)
     quality_update = apply_quality_features(
         result, quality_features, config=model_config, growth_update=growth_update,
     )
-    capital_update = apply_capital_features(result, capital_features, config=model_config)
-    mean_multiplier = growth_update.revenue_multiple_ratio * quality_update.mean_multiplier
+    capital_update = apply_capital_features(
+        result, capital_features, config=model_config, quality_update=quality_update,
+    )
+    tail_update = apply_tail_features(tail_features, config=model_config)
+    mean_multiplier = (
+        growth_update.revenue_multiple_ratio * quality_update.mean_multiplier
+        * capital_update.mean_multiplier
+    )
+    # Both Phase 4 accounting_quality and Phase 6 tail-risk widen only the
+    # left tail; summed here (each already bounded by its own config cap)
+    # rather than allowing either module to know about the other.
+    left_tail_extra = quality_update.left_tail_extra + tail_update.left_tail_extra
     scenarios = build_scenarios(
         result, confidence=confidence, config=model_config,
         conditional_mean_multiplier=mean_multiplier,
         sigma_multiplier=quality_update.sigma_multiplier,
-        left_tail_extra=quality_update.left_tail_extra,
+        left_tail_extra=left_tail_extra,
         survival_multiplier=capital_update.survival_multiplier,
     )
     distribution = scenario_distribution(
         scenarios, horizon_years=model_config.target_horizon_years,
         target_moic=model_config.target_moic, confidence=confidence,
     )
-    return growth_update, quality_update, capital_update, confidence, distribution
+    return growth_update, quality_update, capital_update, tail_update, confidence, distribution
 
 
 def _ablate(
@@ -208,35 +239,48 @@ def _ablate(
     growth_features: GrowthFeatureSet,
     quality_features: QualityFeatureSet,
     capital_features: CapitalFeatureSet,
+    tail_features: TailFeatureSet,
     base_confidence: float,
     model_config: ModelV5Config,
     full_growth_update: GrowthUpdate,
     full_quality_update: QualityUpdate,
     full_capital_update: CapitalUpdate,
+    full_tail_update: TailUpdate,
     full_confidence: float,
     full_distribution: dict,
 ) -> dict:
-    """Leave-one-feature-out counterfactual, growth/quality/capital key alike."""
+    """Leave-one-feature-out counterfactual, any growth/quality/capital/tail key."""
     is_growth_key = any(signal.key == key for signal in growth_features.signals)
     is_quality_key = any(signal.key == key for signal in quality_features.signals)
+    is_capital_key = any(signal.key == key for signal in capital_features.signals)
     without_growth = growth_features.excluding(key) if is_growth_key else growth_features
     without_quality = quality_features.excluding(key) if is_quality_key else quality_features
-    without_capital = (
-        capital_features.excluding(key) if not is_growth_key and not is_quality_key
-        else capital_features
+    without_capital = capital_features.excluding(key) if is_capital_key else capital_features
+    without_tail = (
+        tail_features.excluding(key)
+        if not is_growth_key and not is_quality_key and not is_capital_key
+        else tail_features
     )
     (
         without_growth_update, without_quality_update, without_capital_update,
-        without_confidence, without_distribution,
+        without_tail_update, without_confidence, without_distribution,
     ) = _distribution_for(
         result, growth_features=without_growth, quality_features=without_quality,
-        capital_features=without_capital, base_confidence=base_confidence,
-        model_config=model_config,
+        capital_features=without_capital, tail_features=without_tail,
+        base_confidence=base_confidence, model_config=model_config,
     )
     full_duration = full_growth_update.updated_duration_years * full_quality_update.duration_multiplier
     without_duration = without_growth_update.updated_duration_years * without_quality_update.duration_multiplier
-    full_mean = full_growth_update.revenue_multiple_ratio * full_quality_update.mean_multiplier
-    without_mean = without_growth_update.revenue_multiple_ratio * without_quality_update.mean_multiplier
+    full_mean = (
+        full_growth_update.revenue_multiple_ratio * full_quality_update.mean_multiplier
+        * full_capital_update.mean_multiplier
+    )
+    without_mean = (
+        without_growth_update.revenue_multiple_ratio * without_quality_update.mean_multiplier
+        * without_capital_update.mean_multiplier
+    )
+    full_left_tail = full_quality_update.left_tail_extra + full_tail_update.left_tail_extra
+    without_left_tail = without_quality_update.left_tail_extra + without_tail_update.left_tail_extra
     return {
         "status": "computed",
         "state_shift": {
@@ -246,7 +290,7 @@ def _ablate(
             "growth_duration_years": full_duration - without_duration,
             "revenue_multiple_ratio": full_mean - without_mean,
             "sigma_multiplier": full_quality_update.sigma_multiplier - without_quality_update.sigma_multiplier,
-            "left_tail_extra": full_quality_update.left_tail_extra - without_quality_update.left_tail_extra,
+            "left_tail_extra": full_left_tail - without_left_tail,
             "survival_multiplier": full_capital_update.survival_multiplier - without_capital_update.survival_multiplier,
             "model_confidence": full_confidence - without_confidence,
         },
@@ -294,6 +338,26 @@ def _reconcile_quality_features(
     )
 
 
+def _reconcile_capital_features(
+    capital_features: CapitalFeatureSet, capital_update: CapitalUpdate
+) -> CapitalFeatureSet:
+    """Same reconciliation as ``_reconcile_quality_features``, for capital
+    signals (currently only ``future_dilution_capacity`` can produce a
+    ``no_effect_keys`` entry, when the shared anti-triple-counting budget
+    was already exhausted by Phase 4)."""
+    if not capital_update.no_effect_keys:
+        return capital_features
+    no_effect = set(capital_update.no_effect_keys)
+    return CapitalFeatureSet(
+        tuple(
+            replace(signal, applied=False, status="no_change")
+            if signal.key in no_effect else signal
+            for signal in capital_features.signals
+        ),
+        dict(capital_features.universe_coverage),
+    )
+
+
 def run_v5_shadow(
     as_of: datetime.date | None = None,
     *,
@@ -331,7 +395,7 @@ def run_v5_shadow(
             # cannot distinguish two runs on different code with identical
             # config/registry content (2026-09-03 audit finding).
             metrics={"code_revision": code_revision},
-            warnings=["phase5_capital_state_updates", "v4_champion_unchanged"],
+            warnings=["phase6_tail_macro_state_updates", "v4_champion_unchanged"],
         ))
 
     try:
@@ -355,6 +419,9 @@ def run_v5_shadow(
             capital_feature_sets = build_capital_feature_sets(
                 session, items, as_of=as_of, config=model_config
             )
+            tail_feature_sets = build_tail_feature_sets(
+                session, items, as_of=as_of, config=model_config
+            )
             base_count = 0
             empty_count = 0
             objective_rows: dict[str, list[ObjectiveScore]] = {}
@@ -374,8 +441,10 @@ def run_v5_shadow(
                 growth_features = growth_feature_sets[item.ticker_id]
                 quality_features = quality_feature_sets[item.ticker_id]
                 capital_features = capital_feature_sets[item.ticker_id]
+                tail_features = tail_feature_sets[item.ticker_id]
                 all_signals = (
-                    *growth_features.signals, *quality_features.signals, *capital_features.signals,
+                    *growth_features.signals, *quality_features.signals,
+                    *capital_features.signals, *tail_features.signals,
                 )
                 total_signal_slots += len(all_signals)
                 base_confidence = (
@@ -395,6 +464,7 @@ def run_v5_shadow(
                 growth_update: GrowthUpdate | None = None
                 quality_update: QualityUpdate | None = None
                 capital_update: CapitalUpdate | None = None
+                tail_update: TailUpdate | None = None
                 if result is None:
                     confidence = base_confidence
                     distribution = unavailable_distribution(
@@ -402,11 +472,12 @@ def run_v5_shadow(
                     )
                 else:
                     (
-                        growth_update, quality_update, capital_update, confidence, distribution,
+                        growth_update, quality_update, capital_update, tail_update,
+                        confidence, distribution,
                     ) = _distribution_for(
                         result, growth_features=growth_features, quality_features=quality_features,
-                        capital_features=capital_features, base_confidence=base_confidence,
-                        model_config=model_config,
+                        capital_features=capital_features, tail_features=tail_features,
+                        base_confidence=base_confidence, model_config=model_config,
                     )
                     if quality_update.no_effect_keys:
                         quality_features = _reconcile_quality_features(quality_features, quality_update)
@@ -415,14 +486,22 @@ def run_v5_shadow(
                                 "status": "not_computed",
                                 "reason": "no_change_zero_growth_or_reduction",
                             }
+                    if capital_update.no_effect_keys:
+                        capital_features = _reconcile_capital_features(capital_features, capital_update)
+                        for key in capital_update.no_effect_keys:
+                            ablation[key] = {
+                                "status": "not_computed",
+                                "reason": "no_change_zero_overhang_or_budget_exhausted",
+                            }
                     applied_keys = (
                         *growth_update.applied_keys, *quality_update.applied_keys,
-                        *capital_update.applied_keys,
+                        *capital_update.applied_keys, *tail_update.applied_keys,
                     )
                     ablation_enabled = (
                         model_config.growth.ablation_enabled
                         and model_config.quality.ablation_enabled
                         and model_config.capital.ablation_enabled
+                        and model_config.tail.ablation_enabled
                     )
                     for key in applied_keys:
                         applied_counts[key] = applied_counts.get(key, 0) + 1
@@ -431,9 +510,10 @@ def run_v5_shadow(
                         ablation[key] = _ablate(
                             key, result=result, growth_features=growth_features,
                             quality_features=quality_features, capital_features=capital_features,
-                            base_confidence=base_confidence, model_config=model_config,
-                            full_growth_update=growth_update, full_quality_update=quality_update,
-                            full_capital_update=capital_update, full_confidence=confidence,
+                            tail_features=tail_features, base_confidence=base_confidence,
+                            model_config=model_config, full_growth_update=growth_update,
+                            full_quality_update=quality_update, full_capital_update=capital_update,
+                            full_tail_update=tail_update, full_confidence=confidence,
                             full_distribution=distribution,
                         )
                         ablation_count += 1
@@ -445,6 +525,7 @@ def run_v5_shadow(
                     growth_update=growth_update,
                     quality_update=quality_update,
                     capital_update=capital_update,
+                    tail_update=tail_update,
                     contract_version=model_config.implementation_version,
                 )
                 session.add(ModelScore(
@@ -456,11 +537,13 @@ def run_v5_shadow(
                     states=future_state.to_dict(),
                     features=_feature_payload(
                         item, registry, growth_features, quality_features, capital_features,
-                        growth_update, quality_update, capital_update, ablation,
+                        tail_features, growth_update, quality_update, capital_update, tail_update,
+                        ablation,
                     ),
                     confidence=confidence,
                     warnings=_score_warnings(
-                        item, has_distribution, growth_features, quality_features, capital_features
+                        item, has_distribution, growth_features, quality_features,
+                        capital_features, tail_features,
                     ),
                 ))
                 objective_results = evaluate_objectives(
@@ -502,6 +585,8 @@ def run_v5_shadow(
                 feature_universe_coverage.update(next(iter(quality_feature_sets.values())).universe_coverage)
             if capital_feature_sets:
                 feature_universe_coverage.update(next(iter(capital_feature_sets.values())).universe_coverage)
+            if tail_feature_sets:
+                feature_universe_coverage.update(next(iter(tail_feature_sets.values())).universe_coverage)
             run.metrics = {
                 # code_revision was already stored at creation; carried
                 # forward here rather than lost when this dict replaces
@@ -513,6 +598,7 @@ def run_v5_shadow(
                 "phase3_distributions": base_count,
                 "phase4_distributions": base_count,
                 "phase5_distributions": base_count,
+                "phase6_distributions": base_count,
                 "empty_distributions": empty_count,
                 "objective_scores": sum(len(rows) for rows in objective_rows.values()),
                 "enabled_objectives": sorted(objective_rows),
@@ -533,6 +619,7 @@ def run_v5_shadow(
             "phase3_distributions": base_count,
             "phase4_distributions": base_count,
             "phase5_distributions": base_count,
+            "phase6_distributions": base_count,
             "empty_distributions": empty_count,
             "objective_scores": sum(len(rows) for rows in objective_rows.values()),
             "ablation_results": ablation_count,

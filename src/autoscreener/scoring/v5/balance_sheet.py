@@ -1,23 +1,32 @@
-"""Phase 5 debt-maturity, liquidity, and capital-allocation survival updates.
+"""Phase 5/6 debt-maturity, liquidity, capital-allocation, and future-
+dilution-capacity updates.
 
 Mirrors the ``quality.py``/``growth.py`` API by design: every builder is
-point-in-time, coverage-gated, and returns explicit missingness. Unlike
-Phase 3/4 (which never touched ``survival_probability`` -- "Survival is held
-constant until Phase 5/6", scenario.py's old docstring), these three signals
-are the first to shrink it. None can ever raise survival above the v4-seeded
-baseline; a well-covered maturity wall, ample liquidity, or no aggressive
-capital-return commitment all get a no-op multiplier of 1.0, matching the
-same never-reward-merely-having-data convention as every earlier phase.
+point-in-time, coverage-gated, and returns explicit missingness.
 
-Scope note (see docs/model_v5_phase5_capital_allocation_2026-09-03.md
-"Deviations"): a fourth candidate signal, future dilution capacity (ATM/
-shelf/unexercised options from ``dilution_capacity``), was in the handoff's
-Phase 5 prep list but is deliberately NOT implemented here.
-``collect_dilution.py``'s own docstring states that table is never read by
-``evaluate_gates`` or ``scoring/`` ("原則3"); wiring it into v5 scoring, even
-as an uncertainty-only signal, would silently override that explicit
-existing repository principle rather than extend it, so it is left for a
-follow-up decision rather than guessed at here.
+``debt_maturity``/``liquidity``/``capital_allocation`` shrink
+``survival_probability`` (never touched before Phase 5 -- "Survival is held
+constant until Phase 5/6", scenario.py's old docstring). None can ever raise
+survival above the v4-seeded baseline; a well-covered maturity wall, ample
+liquidity, or no aggressive capital-return commitment all get a no-op
+multiplier of 1.0, matching the same never-reward-merely-having-data
+convention as every earlier phase.
+
+``future_dilution_capacity`` (added 2026-09-03, Phase 6, Issue #3 section
+12) reads ``dilution_capacity`` (ATM/shelf remaining authorization,
+unexercised options/warrants, variable-conversion flag) and decays the
+growth mean multiplier -- future diluted share count -> per-share value.
+This required a user decision: ``collect_dilution.py``'s docstring states,
+as an explicit numbered principle, that table is never read by
+``evaluate_gates`` or ``scoring/`` (and ``scoring/v5/`` is a subpackage of
+``scoring/``). The Phase 5 doc recorded this conflict rather than guessing;
+the user's decision (2026-09-03) was to interpret that principle as scoped
+to v4's ``evaluate_gates``/``scoring/`` specifically -- v4's own behavior is
+unchanged -- and to let v5, an independent shadow challenger, read it. See
+``collect_dilution.py``'s docstring for the same decision recorded at the
+source, and docs/model_v5_phase6_tail_macro_competing_risk_2026-09-03.md for
+the full triple-counting analysis against v4's ``dilution_drag`` and Phase
+4's ``per_share_economics``.
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ from autoscreener.coverage import CoverageStatus
 from autoscreener.db.models import (
     CapitalAllocationEvent,
     DebtInstrument,
+    DilutionCapacity,
     LiquidityFacility,
     LiveDatasetCoverage,
 )
@@ -39,8 +49,9 @@ from autoscreener.scoring.moic import MoicResult
 from autoscreener.scoring.v5.feature_registry import FEATURES_BY_KEY
 from autoscreener.scoring.v5.growth import _coverage_status, _cutoff, _reliability
 from autoscreener.scoring.v5.inputs import V5PitInput
+from autoscreener.scoring.v5.quality import QualityUpdate
 
-_FEATURE_KEYS = ("debt_maturity", "liquidity", "capital_allocation")
+_FEATURE_KEYS = ("debt_maturity", "liquidity", "capital_allocation", "future_dilution_capacity")
 _LEDGER_DATASET = {
     "debt_maturity": "debt_profile", "liquidity": "debt_profile",
     "capital_allocation": "capital_allocation",
@@ -113,8 +124,16 @@ class CapitalFeatureSet:
 @dataclass(frozen=True)
 class CapitalUpdate:
     survival_multiplier: float
+    mean_multiplier: float
     applied_keys: tuple[str, ...]
     signal_effects: dict[str, dict]
+    # Signals whose feature-level candidacy (nonzero raw value) resolved to
+    # zero real effect once the actual result/quality budget was known --
+    # e.g. future_dilution_capacity when the shared anti-triple-counting
+    # budget (max_combined_dilution_reduction) was already exhausted by
+    # Phase 4's per_share_economics/incremental_roic. Same discipline as
+    # quality.py's QualityUpdate.no_effect_keys (2026-09-03 audit).
+    no_effect_keys: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -268,6 +287,74 @@ def _capital_allocation_signal(
     )
 
 
+def _future_dilution_capacity_signal(
+    rows: list[DilutionCapacity], market_cap: float | None, *, config: ModelV5Config,
+) -> CapitalSignal:
+    """ATM/shelf remaining authorization + unexercised options/warrants +
+    a variable-conversion flag -- unissued future capacity, structurally
+    distinct from v4's ``dilution_drag`` and Phase 4's
+    ``per_share_economics`` (both derived from *realized*, historical share
+    counts). See ``apply_capital_features`` for the explicit anti-triple-
+    counting budget shared with those two.
+
+    ``dilution_capacity`` has no coverage ledger and no per-row
+    ``coverage_status``/``confidence`` column (unlike the K-1 Live
+    Intelligence tables) -- ``collect_dilution.py`` only upserts a row when
+    it found *something* (``if not evidence: return False``), so an absent
+    row cannot be distinguished from "never scanned" here. Treated
+    conservatively as NOT_COLLECTED either way, same as growth.py's base
+    signals before any ledger fallback.
+    """
+    if not rows:
+        return _empty_signal(
+            "future_dilution_capacity", CoverageStatus.NOT_COLLECTED,
+            "no_dilution_capacity_disclosure_found",
+        )
+    latest = max(rows, key=lambda row: row.collected_on)
+    atm = float(latest.atm_remaining_usd) if latest.atm_remaining_usd is not None else None
+    shelf = float(latest.shelf_remaining_usd) if latest.shelf_remaining_usd is not None else None
+    equity_capacity_ratio = None
+    if (atm is not None or shelf is not None) and market_cap is not None and market_cap > 0:
+        equity_capacity_ratio = ((atm or 0.0) + (shelf or 0.0)) / market_cap
+    options_ratio = (
+        float(latest.unexercised_options_ratio)
+        if latest.unexercised_options_ratio is not None else None
+    )
+    has_variable_conversion = bool(latest.has_variable_conversion)
+    if equity_capacity_ratio is None and options_ratio is None and not has_variable_conversion:
+        return _empty_signal(
+            "future_dilution_capacity", CoverageStatus.COLLECTED_WITH_DATA,
+            "missing_required_fields",
+        )
+    overhang = 0.0
+    if equity_capacity_ratio is not None:
+        overhang += min(
+            config.capital.future_dilution_atm_shelf_component_cap, max(0.0, equity_capacity_ratio)
+        )
+    if options_ratio is not None:
+        overhang += min(
+            config.capital.future_dilution_options_component_cap, max(0.0, options_ratio)
+        )
+    if has_variable_conversion:
+        overhang += config.capital.future_dilution_variable_conversion_bump
+    evidence = {
+        "atm_remaining_usd": atm, "shelf_remaining_usd": shelf, "market_cap": market_cap,
+        "equity_capacity_ratio": equity_capacity_ratio, "unexercised_options_ratio": options_ratio,
+        "has_variable_conversion": has_variable_conversion,
+        "collected_on": latest.collected_on.isoformat(),
+    }
+    observed_at = datetime.datetime.combine(
+        latest.collected_on, datetime.time.min, tzinfo=datetime.timezone.utc
+    )
+    # No per-row confidence field exists on this table (K-4 extraction mixes
+    # XBRL options data with S-3/424B5/10-Q text regex); a flat, moderate
+    # reliability documents that rather than fabricating a per-row tier.
+    return CapitalSignal(
+        "future_dilution_capacity", "candidate", CoverageStatus.COLLECTED_WITH_DATA, False, False,
+        0.60, observed_at, overhang, evidence,
+    )
+
+
 def build_capital_feature_sets(
     session: Session,
     items: list[V5PitInput],
@@ -291,6 +378,12 @@ def build_capital_feature_sets(
         CapitalAllocationEvent.observed_at < cutoff,
         CapitalAllocationEvent.announced_at < cutoff,
     ).order_by(CapitalAllocationEvent.announced_at, CapitalAllocationEvent.id).all()
+    # DilutionCapacity has no observed_at (only collected_on, a Date) and no
+    # coverage ledger -- PIT-filtered on collected_on <= as_of directly,
+    # same convention as XbrlFact.filed_date.
+    dilution_rows = session.query(DilutionCapacity).filter(
+        DilutionCapacity.ticker_id.in_(ticker_ids), DilutionCapacity.collected_on <= as_of,
+    ).order_by(DilutionCapacity.collected_on, DilutionCapacity.id).all()
     ledger_rows = session.query(LiveDatasetCoverage).filter(
         LiveDatasetCoverage.ticker_id.in_(ticker_ids),
         LiveDatasetCoverage.dataset.in_(set(_LEDGER_DATASET.values())),
@@ -305,6 +398,7 @@ def build_capital_feature_sets(
 
     debt_by = group(debt_rows)
     events_by = group(event_rows)
+    dilution_by = group(dilution_rows)
     liquidity_by: dict[int, LiquidityFacility | None] = {ticker_id: None for ticker_id in ticker_ids}
     for row in liquidity_rows:
         liquidity_by[row.ticker_id] = row  # last (most recent observed_at) wins
@@ -321,6 +415,11 @@ def build_capital_feature_sets(
         latest_fcf = (
             item.financial_annual[-1].free_cash_flow if item.financial_annual else None
         )
+        # getattr, not direct attribute access: several existing tests mock
+        # moic_inputs with a partial SimpleNamespace, not the full MoicInputs
+        # dataclass -- a missing attribute should degrade to "unavailable",
+        # matching every other None-means-missing convention here, not crash.
+        market_cap = getattr(item.moic_inputs, "market_cap", None) if item.moic_inputs is not None else None
         candidate = {
             "debt_maturity": _debt_maturity_signal(
                 debt_by[ticker_id], liquidity_row, as_of=as_of
@@ -328,6 +427,9 @@ def build_capital_feature_sets(
             "liquidity": _liquidity_signal(liquidity_row, latest_fcf, config=config),
             "capital_allocation": _capital_allocation_signal(
                 events_by[ticker_id], liquidity_row, as_of=as_of, config=config
+            ),
+            "future_dilution_capacity": _future_dilution_capacity_signal(
+                dilution_by[ticker_id], market_cap, config=config
             ),
         }
         for key, dataset in _LEDGER_DATASET.items():
@@ -383,21 +485,70 @@ def apply_capital_features(
     features: CapitalFeatureSet,
     *,
     config: ModelV5Config,
+    quality_update: QualityUpdate | None = None,
     excluded_key: str | None = None,
 ) -> CapitalUpdate:
     """Map debt-maturity/liquidity/capital-allocation shortfalls to a single
     bounded ``survival_multiplier`` (always ``<= 1.0``: shrink-only, never a
-    bonus). Empty feature sets return ``1.0``, reproducing Phase 2-4 output
-    exactly -- the regression guard asserted in the Phase 5 tests.
+    bonus), and future_dilution_capacity to a bounded ``mean_multiplier``.
+    Empty feature sets return ``1.0``/``1.0``, reproducing Phase 2-5 output
+    exactly -- the regression guard asserted in every phase's test suite.
+
+    ``quality_update`` (Phase 6): future_dilution_capacity must not
+    triple-count the same "shares outstanding will grow" story alongside
+    v4's ``dilution_drag`` (already inside ``result``, via the growth path)
+    and Phase 4's ``per_share_economics`` (already folded into
+    ``quality_update.mean_multiplier``). Rather than stacking an independent
+    second cap on top, the reduction budget already spent by
+    ``quality_update`` is subtracted from the shared
+    ``max_combined_dilution_reduction`` ceiling before this signal is
+    allowed to spend any of what remains.
     """
     survival_multiplier = 1.0
+    mean_multiplier = 1.0
     applied: list[str] = []
+    no_effect: list[str] = []
     effects: dict[str, dict] = {}
+    already_used_reduction = (
+        max(0.0, 1.0 - quality_update.mean_multiplier) if quality_update is not None else 0.0
+    )
 
     for signal in features.signals:
         if not signal.applied or signal.key == excluded_key:
             continue
-        shortfall = float(signal.value)
+        value = float(signal.value)
+        if signal.key == "future_dilution_capacity":
+            overhang = value
+            raw_reduction = config.capital.future_dilution_weight * overhang
+            remaining_budget = max(
+                0.0, config.capital.max_combined_dilution_reduction - already_used_reduction
+            )
+            reduction = min(
+                config.capital.future_dilution_max_reduction, remaining_budget, raw_reduction
+            )
+            if reduction <= 1e-9:
+                # Either the overhang itself rounds to zero, or Phase 4's
+                # per_share_economics/incremental_roic already spent the
+                # entire shared anti-triple-counting budget -- a genuine
+                # no-op, not a fabricated "applied with zero impact" entry
+                # (same discipline as the 2026-09-03 incremental_roic fix).
+                no_effect.append(signal.key)
+                effects[signal.key] = {
+                    "status": "no_change_zero_overhang_or_budget_exhausted",
+                    "overhang": overhang, "already_used_reduction_budget": already_used_reduction,
+                    "remaining_budget": remaining_budget,
+                }
+                continue
+            mean_multiplier *= (1.0 - reduction)
+            effects[signal.key] = {
+                "overhang": overhang, "raw_reduction": raw_reduction,
+                "already_used_reduction_budget": already_used_reduction,
+                "remaining_budget": remaining_budget, "reduction": reduction,
+                "mean_multiplier_factor": 1.0 - reduction,
+            }
+            applied.append(signal.key)
+            continue
+        shortfall = value
         if signal.key == "debt_maturity":
             weight, floor = config.capital.debt_maturity_weight, config.capital.debt_maturity_min_survival_multiplier
         elif signal.key == "liquidity":
@@ -418,6 +569,6 @@ def apply_capital_features(
         applied.append(signal.key)
 
     return CapitalUpdate(
-        survival_multiplier=survival_multiplier, applied_keys=tuple(applied),
-        signal_effects=effects,
+        survival_multiplier=survival_multiplier, mean_multiplier=mean_multiplier,
+        applied_keys=tuple(applied), signal_effects=effects, no_effect_keys=tuple(no_effect),
     )

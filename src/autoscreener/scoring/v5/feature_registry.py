@@ -126,14 +126,39 @@ FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
           transform="bounded_runway", enabled=True, required_coverage=0.50, min_reliability=0.5,
           notes="Phase 5: cash runway from the latest annual FCF burn, separate from the "
                 "long-term-leverage-driven debt_maturity signal above."),
-    _spec("customer_concentration", "customer_concentrations", "tail_risk",
-          notes="Concentration widens idiosyncratic left tail."),
-    _spec("litigation", "litigation_events", "tail_risk", historical=False,
-          notes="Shadow only until severity and amount coverage are reliable."),
-    _spec("macro_regime", "macro_exposure_snapshots", "scenario_distribution", historical=False,
-          notes="FRED current observations cannot be used in historical reconstruction."),
+    _spec("future_dilution_capacity", "dilution_capacity", "growth_mean_multiplier",
+          direction="lower_better", transform="bounded_ratio", enabled=True,
+          required_coverage=0.50, min_reliability=0.5,
+          notes="Phase 6 (Issue #3 section 12, user decision 2026-09-03): ATM/shelf remaining "
+                "authorization + unexercised options/warrants + variable-conversion flag decay "
+                "the growth mean multiplier -- unissued future capacity, distinct from v4's "
+                "dilution_drag and Phase 4's per_share_economics (both realized/historical). "
+                "Shares an explicit anti-triple-counting reduction budget with those two "
+                "(config.capital.max_combined_dilution_reduction)."),
+    _spec("customer_concentration", "customer_concentration", "tail_risk",
+          direction="lower_better", transform="bounded_ratio", enabled=True,
+          required_coverage=0.50, min_reliability=0.5,
+          notes="Phase 6: total disclosed 10%+ customer revenue concentration widens the left "
+                "tail only (Issue #3 section 12: never lowers the mean growth rate directly)."),
+    _spec("litigation", "litigation_events", "tail_risk", direction="lower_better",
+          transform="bounded_count", historical=False, enabled=True, required_coverage=0.50,
+          min_reliability=0.5,
+          notes="Phase 6: shadow only until severity/amount coverage is reliable -- the table "
+                "has no severity/amount field at all yet, only kind/title/detail text; trailing-"
+                "window event count is used as an explicitly bounded, crude proxy for the left "
+                "tail only."),
+    _spec("macro_regime", "macro_exposure_snapshots", "scenario_distribution",
+          direction="lower_better", transform="bounded_downside_beta", historical=False,
+          enabled=True, required_coverage=0.50, min_reliability=0.5,
+          notes="Phase 6: downside_beta widens the left tail only, and only when "
+                "fred_vintage_supported=true (0% of current rows) -- FRED current observations "
+                "are never used in historical reconstruction. High beta/exposure alone is not "
+                "treated as bad (Issue #3 section 10)."),
     _spec("acquisition_competing_risk", "delisting_events", "competing_risk", historical=False,
-          notes="Disabled while event classification coverage is below threshold."),
+          notes="Phase 6: deliberately NOT implemented. 94/94 delisting_events rows are "
+                "event_type=unknown (Phase 0 baseline), below any defensible classification-"
+                "coverage threshold; Issue #3 section 13 explicitly prohibits treating unknown "
+                "as acquisition=0. competing_risk.acquisition_probability stays unsupported."),
 )
 
 FEATURES_BY_KEY = {feature.key: feature for feature in FEATURE_REGISTRY}

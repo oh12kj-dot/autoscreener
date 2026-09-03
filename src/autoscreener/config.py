@@ -564,6 +564,27 @@ class ModelV5CapitalConfig(BaseModel):
     capital_allocation_weight: float = Field(ge=0, default=0.20)
     capital_allocation_min_survival_multiplier: float = Field(gt=0, le=1, default=0.90)
 
+    # future_dilution_capacity (2026-09-03, Phase 6, Issue #3 section 12):
+    # ATM/shelf remaining authorization + unexercised options/warrants +
+    # a variable-conversion flag from `dilution_capacity`. Connects to
+    # growth's mean multiplier (future diluted share count -> per-share
+    # value), NOT survival. Each dollar/share-count ratio component is
+    # capped before weighting so one outlier filing cannot dominate.
+    future_dilution_atm_shelf_component_cap: float = Field(ge=0, default=0.50)
+    future_dilution_options_component_cap: float = Field(ge=0, default=0.50)
+    future_dilution_variable_conversion_bump: float = Field(ge=0, default=0.05)
+    future_dilution_weight: float = Field(ge=0, default=0.15)
+    future_dilution_max_reduction: float = Field(ge=0, lt=1, default=0.15)
+    # Explicit anti-triple-counting ceiling (user-decided 2026-09-03): the
+    # *combined* mean-multiplier reduction from Phase 4's per_share_economics
+    # (realized, historical per-share-vs-whole-company CAGR gap) and this
+    # signal (unissued, forward-looking capacity) is capped here, with this
+    # signal's own contribution explicitly reduced by whatever budget
+    # per_share_economics/incremental_roic already consumed -- not just an
+    # independent second cap stacked on top (docs/model_v5_phase6_tail_
+    # macro_competing_risk_2026-09-03.md "Triple-counting" section).
+    max_combined_dilution_reduction: float = Field(ge=0, lt=1, default=0.35)
+
     ablation_enabled: bool = True
 
     @model_validator(mode="after")
@@ -575,7 +596,43 @@ class ModelV5CapitalConfig(BaseModel):
         )
         if any(floor <= 0 or floor > 1 for floor in floors):
             raise ValueError("survival multiplier floors must lie in (0, 1]")
+        if self.future_dilution_max_reduction > self.max_combined_dilution_reduction:
+            raise ValueError(
+                "future_dilution_max_reduction must be <= max_combined_dilution_reduction"
+            )
         return self
+
+
+class ModelV5TailConfig(BaseModel):
+    """Phase 6 tail-risk parameters (Issue #3 section 12): customer
+    concentration, litigation, and macro-regime downside exposure.
+
+    Every parameter here bounds an additive ``left_tail_extra`` contribution
+    (``>= 0``) -- none can ever lower the conditional mean, matching Phase 4
+    accounting_quality's contract. M&A competing risk has no config here: it
+    is not implemented at all (see tail_risk.py's module docstring).
+    """
+
+    customer_concentration_weight: float = Field(ge=0, default=0.20)
+    customer_concentration_left_tail_max: float = Field(ge=0, default=0.20)
+
+    litigation_lookback_days: int = Field(gt=0, default=365)
+    # No severity/amount field exists on litigation_events yet; event count
+    # within the lookback window is the proxy, capped at this count.
+    litigation_severity_count_cap: int = Field(gt=0, default=3)
+    litigation_weight: float = Field(ge=0, default=0.15)
+    litigation_left_tail_max: float = Field(ge=0, default=0.15)
+
+    macro_regime_weight: float = Field(ge=0, default=0.10)
+    macro_regime_left_tail_max: float = Field(ge=0, default=0.10)
+
+    # Shared ceiling across all three Phase 6 signals combined (not
+    # coordinated with Phase 4 accounting_quality's own
+    # accounting_left_tail_extra_max -- both are summed by engine.py and
+    # this is Phase 6's own bound on its own contribution).
+    max_combined_left_tail_extra: float = Field(ge=0, default=0.35)
+
+    ablation_enabled: bool = True
 
 
 class ModelV5ScenarioWeights(BaseModel):
@@ -596,7 +653,7 @@ class ModelV5Config(BaseModel):
     enabled: bool = True
     mode: Literal["shadow", "active", "legacy"] = "shadow"
     model_version: Literal["v5"] = "v5"
-    implementation_version: str = Field(default="v5.phase5", pattern=r"^v5\.phase\d+$")
+    implementation_version: str = Field(default="v5.phase6", pattern=r"^v5\.phase\d+$")
     target_horizon_years: int = Field(gt=0, le=30, default=7)
     target_moic: float = Field(gt=1, default=10.0)
     reliability: ModelV5ReliabilityConfig = Field(default_factory=ModelV5ReliabilityConfig)
@@ -604,6 +661,7 @@ class ModelV5Config(BaseModel):
     growth: ModelV5GrowthConfig = Field(default_factory=ModelV5GrowthConfig)
     quality: ModelV5QualityConfig = Field(default_factory=ModelV5QualityConfig)
     capital: ModelV5CapitalConfig = Field(default_factory=ModelV5CapitalConfig)
+    tail: ModelV5TailConfig = Field(default_factory=ModelV5TailConfig)
     scenario_weights: ModelV5ScenarioWeights
     feature_flags: dict[str, bool] = Field(default_factory=dict)
 

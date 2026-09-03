@@ -8,8 +8,22 @@ XBRLから未行使オプション比率を集め、`dilution_capacity` へ upse
 数字だけ出して根拠を出さないと、人間は結局S-3/10-Qの原本を読み直すことになり、
 自動化した意味が消える(`dilution_outlook.py` と同じ設計思想)。
 
-原則3:このバッチが書く `dilution_capacity` は `evaluate_gates` にも
-`scoring/` にも一切読まれない。表示・チェックリストのみが読者。
+原則3(2026-08 策定、K-4):このバッチが書く `dilution_capacity` は v4 の
+`evaluate_gates` にも v4 の `scoring/`(`scoring/engine.py` 系の除外ゲート・
+実現時価総額倍率モデル本体)にも一切読まれない。表示・チェックリストのみが読者。
+**v4 に対しては今もこの原則のまま変えていない。**
+
+2026-09-03 追記(model_v5_phase6、Issue #3 §12、ユーザー判断で確定):
+上記の「一切読まれない」を、以降は **v4 の evaluate_gates / scoring/ に限定して
+解釈する**。v5 (`scoring/v5/`) は v4 とは別の独立した shadow challenger であり、
+Issue #3 の主旨(「v4 を聖域にしない」)に沿って新しい情報源を取り込む対象として
+設計されている。`scoring/v5/balance_sheet.py` の `future_dilution_capacity`
+signal は `dilution_capacity` を読む——ただし v4 の `dilution_drag` や v5
+Phase 4 の `per_share_economics` と三重計上しないよう、接続先は
+「将来の希薄化株式数 → 1株価値の平均倍率」のみに限定し、上限で抑える
+(docs/model_v5_phase6_tail_macro_competing_risk_2026-09-03.md 参照)。
+原則3自体を黙って書き換えたのではなく、v4 側の適用は変えず、v5 という新しい
+読者を追加したという経緯を、ここに残す。
 
 例外は銘柄単位で握ってログに残し、次の銘柄へ進む(1銘柄のS-3が読めなくても
 バッチ全体を止めない)。

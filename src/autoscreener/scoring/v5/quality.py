@@ -653,6 +653,22 @@ def apply_quality_features(
             # bonus). The ratio is a compression effect only; it must never
             # exceed 1.0 regardless of which direction the path moved.
             incremental_ratio = min(1.0, incremental_ratio)
+            if incremental_ratio >= 1.0 - 1e-9:
+                # Minor fix (2026-09-03 audit): the clamp above can pin the
+                # ratio to exactly 1.0 (initial_rate < terminal_rate). That
+                # is a genuine no-op on the distribution, not merely a
+                # bounded-but-nonzero effect -- treat it identically to the
+                # reduction_years <= 0 case above rather than leaving it
+                # counted as "applied" with a fabricated impact.
+                no_effect.append(signal.key)
+                effects[signal.key] = {
+                    "status": "no_change_clamped_to_unity",
+                    "current_duration_years": current_duration,
+                    "reduction_years": reduction_years,
+                    "duration_multiplier": duration_multiplier,
+                    "revenue_multiple_ratio_from_duration": incremental_ratio,
+                }
+                continue
             # Composes multiplicatively with per_share_economics below and
             # with growth_update.revenue_multiple_ratio in engine.py, so the
             # duration compression this signal adds on top of Phase 3's

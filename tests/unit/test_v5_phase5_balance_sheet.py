@@ -313,7 +313,7 @@ def test_shadow_run_persists_capital_ablation_without_touching_v4(monkeypatch):
             run = session.get(ModelRun, run_id)
             score = session.query(ModelScore).filter_by(run_id=run_id).one()
             impact = score.features["ablation"]["debt_maturity"]
-            assert score.states["contract_version"] == "v5.phase5"
+            assert score.states["contract_version"] == "v5.phase6"
             assert "debt_maturity" in score.states["state_updates_applied"]
             assert score.states["competing_risk"]["survival_probability"]["status"] == "updated"
             assert score.states["competing_risk"]["survival_probability"]["value"] < 0.91

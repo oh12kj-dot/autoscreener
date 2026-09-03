@@ -12,6 +12,7 @@ from autoscreener.scoring.moic import MoicInputs, MoicResult
 from autoscreener.scoring.v5.balance_sheet import CapitalUpdate
 from autoscreener.scoring.v5.growth import GrowthUpdate
 from autoscreener.scoring.v5.quality import QualityUpdate
+from autoscreener.scoring.v5.tail_risk import TailUpdate
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ def build_future_state(
     growth_update: GrowthUpdate | None = None,
     quality_update: QualityUpdate | None = None,
     capital_update: CapitalUpdate | None = None,
+    tail_update: TailUpdate | None = None,
     contract_version: str = "v5.phase2",
 ) -> FutureState:
     """Build the complete state namespace without inventing later-phase data."""
@@ -171,17 +173,33 @@ def build_future_state(
     # Phase 5 (docs/model_v5_phase5_capital_allocation_2026-09-03.md):
     # debt-maturity/liquidity/capital-allocation shortfalls only ever shrink
     # survival_probability below the v4 seed (never a bonus) -- the first
-    # phase to move it; Phase 2/3/4 held it fixed.
+    # phase to move it; Phase 2/3/4 held it fixed. Phase 6
+    # (docs/model_v5_phase6_tail_macro_competing_risk_2026-09-03.md):
+    # future_dilution_capacity only ever decays the already-computed
+    # revenue multiple further, same channel as per_share_economics, with
+    # an explicit shared budget enforced in apply_capital_features so the
+    # two can never triple-count the same dilution story.
     survival_value = result.survival_probability
     if capital_update is not None and capital_update.applied_keys:
-        survival_value = result.survival_probability * capital_update.survival_multiplier
         state_updates = tuple(state_updates) + capital_update.applied_keys
         status = "updated"
+    if capital_update is not None:
+        survival_value = result.survival_probability * capital_update.survival_multiplier
+        revenue_multiple *= capital_update.mean_multiplier
     survival = StateValue(
         survival_value,
         "updated" if capital_update is not None and capital_update.applied_keys else "seed",
         "v5_capital_state" if capital_update is not None and capital_update.applied_keys else "v4_structural_model",
     )
+
+    # Phase 6 tail-risk (customer_concentration/litigation/macro_regime)
+    # widens only left_tail_extra (engine.py sums it with Phase 4's
+    # accounting_quality contribution before build_scenarios); there is no
+    # dedicated state slot for an uncertainty-only quantity, so applied
+    # tail keys are only recorded in state_updates_applied for transparency.
+    if tail_update is not None and tail_update.applied_keys:
+        state_updates = tuple(state_updates) + tail_update.applied_keys
+        status = "updated"
 
     return FutureState(
         contract_version=contract_version, status=status,

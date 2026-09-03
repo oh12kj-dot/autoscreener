@@ -166,7 +166,10 @@ def test_incremental_roic_never_increases_mean_multiplier_when_initial_below_ter
     shortening it (22/105 real 2026-09-02 ablations showed a positive
     DeltaP(target) from a signal meant to be a penalty). The incremental
     ratio must be clamped to <= 1.0 regardless of which direction the
-    recomposed path moves."""
+    recomposed path moves. Minor fix (2026-09-03 second audit): a ratio
+    clamped all the way to 1.0 is a genuine no-op, not merely a
+    bounded-but-nonzero effect -- it must be reported as no_effect, not
+    "applied", matching the reduction_years <= 0 case."""
     from autoscreener.scoring.v5.growth import GrowthUpdate
 
     config = load_model_v5_config()
@@ -181,8 +184,9 @@ def test_incremental_roic_never_increases_mean_multiplier_when_initial_below_ter
         _result(initial=0.10, terminal=0.50), _features(low_roic_signal), config=config,
         growth_update=growth_update,
     )
-    assert update.applied_keys == ("incremental_roic",)
-    assert update.mean_multiplier <= 1.0 + 1e-12
+    assert update.applied_keys == ()
+    assert update.no_effect_keys == ("incremental_roic",)
+    assert update.mean_multiplier == pytest.approx(1.0)
     assert (
         update.signal_effects["incremental_roic"]["revenue_multiple_ratio_from_duration"]
         <= 1.0 + 1e-12
@@ -581,7 +585,7 @@ def test_shadow_run_persists_quality_ablation_without_touching_v4(monkeypatch):
             run = session.get(ModelRun, run_id)
             score = session.query(ModelScore).filter_by(run_id=run_id).one()
             impact = score.features["ablation"]["accounting_quality"]
-            assert score.states["contract_version"] == "v5.phase5"
+            assert score.states["contract_version"] == "v5.phase6"
             assert score.states["state_updates_applied"] == ["accounting_quality"]
             assert score.states["economics"]["reinvestment_efficiency"]["status"] == "not_collected"
             assert impact["status"] == "computed"

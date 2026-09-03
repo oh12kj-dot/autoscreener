@@ -4,7 +4,7 @@
 enabled: true
 mode: shadow
 model_version: v5
-implementation_version: v5.phase5
+implementation_version: v5.phase6
 target_horizon_years: 7
 target_moic: 10.0
 
@@ -55,6 +55,24 @@ capital:
   capital_allocation_lookback_days: 365
   capital_allocation_weight: 0.20
   capital_allocation_min_survival_multiplier: 0.90
+  future_dilution_atm_shelf_component_cap: 0.50
+  future_dilution_options_component_cap: 0.50
+  future_dilution_variable_conversion_bump: 0.05
+  future_dilution_weight: 0.15
+  future_dilution_max_reduction: 0.15
+  max_combined_dilution_reduction: 0.35
+  ablation_enabled: true
+
+tail:
+  customer_concentration_weight: 0.20
+  customer_concentration_left_tail_max: 0.20
+  litigation_lookback_days: 365
+  litigation_severity_count_cap: 3
+  litigation_weight: 0.15
+  litigation_left_tail_max: 0.15
+  macro_regime_weight: 0.10
+  macro_regime_left_tail_max: 0.10
+  max_combined_left_tail_extra: 0.35
   ablation_enabled: true
 
 scenario_weights:
@@ -77,12 +95,16 @@ feature_flags:
   capital_allocation: true
   debt_maturity: true
   liquidity: true
-  # future_dilution_capacity is deliberately NOT introduced in Phase 5:
-  # collect_dilution.py's own docstring states dilution_capacity is never
-  # read by evaluate_gates or scoring/ ("原則3"). Wiring it into v5 scoring
-  # (even as an uncertainty-only signal) would silently override that
-  # explicit existing principle; see the Phase 5 doc's Deviations section.
-  customer_concentration: false
-  litigation: false
-  macro_regime: false
+  # future_dilution_capacity (2026-09-03, Phase 6): principle 3 in
+  # collect_dilution.py is now scoped to v4's evaluate_gates/scoring/ only
+  # (user decision, Issue #3 section 12); v5 reads dilution_capacity with
+  # an explicit anti-triple-counting budget shared with per_share_economics.
+  future_dilution_capacity: true
+  customer_concentration: true
+  litigation: true
+  macro_regime: true
+  # acquisition_competing_risk stays disabled: 94/94 delisting_events rows
+  # are event_type=unknown, below any defensible classification-coverage
+  # threshold, and Issue #3 section 13 prohibits treating unknown as
+  # acquisition=0. Not implemented in code at all, not just gated off.
   acquisition_competing_risk: false
