@@ -1,0 +1,52 @@
+# Model v5 remains an independent shadow challenger. Phase 2 expands the v4
+# structural seed into an explicit scenario mixture. No Live Intelligence
+# feature changes a state until its later implementation phase is accepted.
+enabled: true
+mode: shadow
+model_version: v5
+implementation_version: v5.phase3
+target_horizon_years: 7
+target_moic: 10.0
+
+reliability:
+  ready_input_confidence: 0.50
+  unavailable_input_confidence: 0.00
+
+uncertainty:
+  confidence_sigma_multiplier: 0.50
+  left_tail_multiplier: 1.25
+  scenario_log_shift_sigma: 0.50
+
+growth:
+  consensus_revision_weight: 0.35
+  operating_kpi_weight: 0.20
+  guidance_weight: 0.35
+  max_initial_growth_adjustment: 0.08
+  min_initial_growth_rate: -0.50
+  max_initial_growth_rate: 0.75
+  min_kpi_comparison_days: 60
+  max_kpi_comparison_days: 450
+  tam_min_headroom_ratio: 1.01
+  ablation_enabled: true
+
+scenario_weights:
+  downside: 0.20
+  base: 0.60
+  upside: 0.20
+
+# Later phases may enable these only after their state mapping, PIT contract,
+# missingness policy, and ablation tests exist.
+feature_flags:
+  tam_headroom: true
+  operating_kpi_nowcast: true
+  consensus_revision: true
+  guidance: true
+  incremental_roic: false
+  accounting_quality: false
+  capital_allocation: false
+  debt_maturity: false
+  liquidity: false
+  customer_concentration: false
+  litigation: false
+  macro_regime: false
+  acquisition_competing_risk: false

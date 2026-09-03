@@ -23,6 +23,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
     func,
     text,
 )
@@ -239,6 +240,82 @@ class Score(Base):
     financials_as_of: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModelRun(Base):
+    """Append-only execution record for an independent model version."""
+
+    __tablename__ = "model_runs"
+    __table_args__ = (
+        CheckConstraint("mode IN ('shadow', 'active', 'legacy')", name="ck_model_runs_mode"),
+        CheckConstraint("status IN ('running', 'succeeded', 'failed')", name="ck_model_runs_status"),
+        Index("ix_model_runs_version_as_of", "model_version", "as_of"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    model_version: Mapped[str] = mapped_column(String(20))
+    config_hash: Mapped[str] = mapped_column(String(64))
+    as_of: Mapped[datetime.date] = mapped_column(Date, index=True)
+    mode: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    population_count: Mapped[int] = mapped_column(default=0)
+    started_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    warnings: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+
+class ModelScore(Base):
+    """Per-ticker state and distribution output belonging to one model run."""
+
+    __tablename__ = "model_scores"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "ticker_id", "target_horizon_years", "target_moic",
+            name="uq_model_scores_run_ticker_target",
+        ),
+        Index("ix_model_scores_run_confidence", "run_id", "confidence"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("model_runs.id", ondelete="CASCADE"), index=True
+    )
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    target_horizon_years: Mapped[int] = mapped_column()
+    target_moic: Mapped[float] = mapped_column(Numeric(12, 4))
+    distribution: Mapped[dict] = mapped_column(JSONB)
+    states: Mapped[dict] = mapped_column(JSONB)
+    features: Mapped[dict] = mapped_column(JSONB)
+    confidence: Mapped[float] = mapped_column(Numeric(6, 5))
+    warnings: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ObjectiveScore(Base):
+    """Re-rankable objective output derived from an immutable v5 distribution."""
+
+    __tablename__ = "objective_scores"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "ticker_id", "objective",
+            name="uq_objective_scores_run_ticker_objective",
+        ),
+        Index("ix_objective_scores_run_objective_rank", "run_id", "objective", "rank"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("model_runs.id", ondelete="CASCADE"), index=True
+    )
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    objective: Mapped[str] = mapped_column(String(50))
+    score_value: Mapped[float | None] = mapped_column(Numeric(24, 12), nullable=True)
+    rank: Mapped[int | None] = mapped_column(nullable=True)
+    explanation: Mapped[dict] = mapped_column(JSONB)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class ForwardReturn(Base):

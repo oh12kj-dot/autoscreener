@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -438,6 +439,95 @@ class ScoringConfig(BaseModel):
     kpi_acceptance: KpiAcceptanceConfig = Field(default_factory=lambda: KpiAcceptanceConfig())
 
 
+class ModelV5ReliabilityConfig(BaseModel):
+    """Phase 1 reliability contract; confidence never shifts the mean."""
+
+    ready_input_confidence: float = Field(ge=0, le=1, default=0.5)
+    unavailable_input_confidence: float = Field(ge=0, le=1, default=0.0)
+
+
+class ModelV5UncertaintyConfig(BaseModel):
+    """Controls for the explicit Phase 2 scenario-mixture distribution."""
+
+    confidence_sigma_multiplier: float = Field(ge=0, default=0.5)
+    left_tail_multiplier: float = Field(ge=1, default=1.25)
+    scenario_log_shift_sigma: float = Field(ge=0, default=0.5)
+
+
+class ModelV5GrowthConfig(BaseModel):
+    """Conservative Phase 3 observation-update parameters.
+
+    These are challenger parameters, not accepted production constants. Every
+    update is bounded and persisted with a leave-one-feature-out impact.
+    """
+
+    consensus_revision_weight: float = Field(ge=0, le=1, default=0.35)
+    operating_kpi_weight: float = Field(ge=0, le=1, default=0.20)
+    guidance_weight: float = Field(ge=0, le=1, default=0.35)
+    max_initial_growth_adjustment: float = Field(gt=0, le=0.5, default=0.08)
+    min_initial_growth_rate: float = Field(gt=-1, lt=1, default=-0.50)
+    max_initial_growth_rate: float = Field(gt=0, le=2, default=0.75)
+    min_kpi_comparison_days: int = Field(ge=30, default=60)
+    max_kpi_comparison_days: int = Field(gt=60, default=450)
+    tam_min_headroom_ratio: float = Field(gt=1, default=1.01)
+    ablation_enabled: bool = True
+
+    @model_validator(mode="after")
+    def growth_bounds_ordered(self) -> ModelV5GrowthConfig:
+        if self.min_initial_growth_rate >= self.max_initial_growth_rate:
+            raise ValueError("min_initial_growth_rate must be < max_initial_growth_rate")
+        if self.min_kpi_comparison_days >= self.max_kpi_comparison_days:
+            raise ValueError("min_kpi_comparison_days must be < max_kpi_comparison_days")
+        return self
+
+
+class ModelV5ScenarioWeights(BaseModel):
+    downside: float = Field(ge=0, le=1)
+    base: float = Field(ge=0, le=1)
+    upside: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def weights_sum_to_one(self) -> ModelV5ScenarioWeights:
+        if abs(self.downside + self.base + self.upside - 1.0) > 1e-9:
+            raise ValueError("scenario weights must sum to 1")
+        return self
+
+
+class ModelV5Config(BaseModel):
+    """Independent v5 shadow-model configuration (GitHub Issue #3 Phase 1)."""
+
+    enabled: bool = True
+    mode: Literal["shadow", "active", "legacy"] = "shadow"
+    model_version: Literal["v5"] = "v5"
+    implementation_version: str = Field(default="v5.phase3", pattern=r"^v5\.phase\d+$")
+    target_horizon_years: int = Field(gt=0, le=30, default=7)
+    target_moic: float = Field(gt=1, default=10.0)
+    reliability: ModelV5ReliabilityConfig = Field(default_factory=ModelV5ReliabilityConfig)
+    uncertainty: ModelV5UncertaintyConfig = Field(default_factory=ModelV5UncertaintyConfig)
+    growth: ModelV5GrowthConfig = Field(default_factory=ModelV5GrowthConfig)
+    scenario_weights: ModelV5ScenarioWeights
+    feature_flags: dict[str, bool] = Field(default_factory=dict)
+
+
+class ObjectiveDefinition(BaseModel):
+    enabled: bool = True
+    description: str
+    downside_lambda: float | None = Field(default=None, ge=0)
+    right_tail_moic: float | None = Field(default=None, gt=1)
+
+
+class ObjectivesConfig(BaseModel):
+    default_objective: str
+    objectives: dict[str, ObjectiveDefinition]
+
+    @model_validator(mode="after")
+    def default_is_enabled(self) -> ObjectivesConfig:
+        definition = self.objectives.get(self.default_objective)
+        if definition is None or not definition.enabled:
+            raise ValueError("default_objective must name an enabled objective")
+        return self
+
+
 class RiskSizingConfig(BaseModel):
     """Display-only shrink factors; never expands the existing hard cap."""
 
@@ -670,6 +760,14 @@ def load_collection_config(path: Path | None = None) -> CollectionConfig:
 
 def load_scoring_config(path: Path | None = None) -> ScoringConfig:
     return _load(ScoringConfig, path or CONFIG_DIR / "scoring.yaml")
+
+
+def load_model_v5_config(path: Path | None = None) -> ModelV5Config:
+    return _load(ModelV5Config, path or CONFIG_DIR / "model_v5.yaml")
+
+
+def load_objectives_config(path: Path | None = None) -> ObjectivesConfig:
+    return _load(ObjectivesConfig, path or CONFIG_DIR / "objectives.yaml")
 
 
 def load_portfolio_config(path: Path | None = None) -> PortfolioConfig:

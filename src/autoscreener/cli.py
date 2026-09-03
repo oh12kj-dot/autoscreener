@@ -54,6 +54,7 @@ from autoscreener.dates import utc_today
 from autoscreener.db.session import session_scope
 from autoscreener.scoring.engine import run_scoring
 from autoscreener.scoring.forward_validation import run_forward_validation
+from autoscreener.scoring.v5.engine import run_v5_shadow
 from autoscreener.validation.coverage_bias import audit_v4_coverage_bias
 
 app = typer.Typer(add_completion=False)
@@ -590,6 +591,16 @@ def collect_market_opportunity_cmd(
     counts = collect_market_opportunity(symbols=_optional_symbols(symbols))
     for key, count in counts.items():
         typer.echo(f"  {key}: {count}")
+
+
+@app.command("run-v5-shadow")
+def run_v5_shadow_cmd(
+    date: str = typer.Option("", help="対象日(YYYY-MM-DD)。既定は当日。"),
+) -> None:
+    """独立したv5 challengerをshadow modeで実行し、v4 scoresには触れない。"""
+    result = run_v5_shadow(_parse_date(date))
+    for key, value in result.items():
+        typer.echo(f"  {key}: {value}")
 
 
 @app.command("revalidate-market-opportunity")

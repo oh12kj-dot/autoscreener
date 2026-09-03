@@ -1179,3 +1179,93 @@ class DataCoverageResponse(BaseModel):
     as_of: datetime.date
     ticker_count: int
     datasets: list[DataCoverageRow]
+
+
+class ModelV5ScenarioView(BaseModel):
+    name: str
+    weight: float
+    log_mu: float
+    log_sigma: float
+    conditional_expected_moic: float
+    survival_probability: float
+
+
+class ModelV5DistributionView(BaseModel):
+    contract_version: str
+    status: str
+    distribution_family: str | None = None
+    source_model_version: str
+    target_moic: float
+    p_moic_below_0_5: float | None = None
+    p_moic_below_1_0: float | None = None
+    p_moic_2x: float | None = None
+    p_moic_3x: float | None = None
+    p_moic_5x: float | None = None
+    p_moic_10x: float | None = None
+    p_target: float | None = None
+    expected_moic: float | None = None
+    median_moic: float | None = None
+    expected_cagr: float | None = None
+    median_cagr: float | None = None
+    expected_shortfall_10pct: float | None = None
+    p10_moic: float | None = None
+    p25_moic: float | None = None
+    p50_moic: float | None = None
+    p75_moic: float | None = None
+    p90_moic: float | None = None
+    survival_probability: float | None = None
+    acquisition_probability: float | None = None
+    model_confidence: float
+    scenarios: list[ModelV5ScenarioView] = []
+
+
+class ModelV5RunView(BaseModel):
+    run_id: str
+    model_version: str
+    config_hash: str
+    as_of: datetime.date
+    mode: str
+    status: str
+    population_count: int
+    started_at: datetime.datetime
+    finished_at: datetime.datetime | None = None
+    metrics: dict | None = None
+    warnings: list[str] = []
+
+
+class ModelV5ObjectiveScoreView(BaseModel):
+    objective: str
+    status: str
+    score_value: float | None = None
+    rank: int | None = None
+    explanation: dict
+
+
+class ModelV5ScoreSummary(BaseModel):
+    rank: int | None = None
+    ticker: str
+    selected_objective: str
+    objective_value: float | None = None
+    distribution: ModelV5DistributionView
+    confidence: float
+    warnings: list[str] = []
+
+
+class ModelV5ScoreListResponse(BaseModel):
+    run: ModelV5RunView
+    selected_objective: str
+    total: int
+    items: list[ModelV5ScoreSummary]
+
+
+class ModelV5ScoreDetail(BaseModel):
+    run: ModelV5RunView
+    ticker: str
+    target_horizon_years: int
+    target_moic: float
+    distribution: ModelV5DistributionView
+    states: dict
+    features: dict
+    confidence: float
+    warnings: list[str] = []
+    objectives: list[ModelV5ObjectiveScoreView]

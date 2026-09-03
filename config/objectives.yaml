@@ -1,0 +1,26 @@
+# Distribution-only objectives are enabled in Phase 2. Objectives that require
+# quality states or execution inputs stay disabled until those phases exist.
+default_objective: ten_bagger
+objectives:
+  ten_bagger:
+    description: Probability of reaching the configured target MOIC.
+  expected_return:
+    enabled: true
+    description: Expected compound annual return.
+  risk_adjusted:
+    enabled: true
+    description: Expected return less configurable downside risk.
+    downside_lambda: 0.50
+  quality_compounder:
+    enabled: false
+    description: Distribution-led long-duration per-share compounding objective.
+  asymmetric:
+    enabled: true
+    description: Right-tail probability relative to left-tail severity.
+    right_tail_moic: 5.0
+  capital_preservation:
+    enabled: true
+    description: Survival and low expected shortfall objective.
+  execution_adjusted:
+    enabled: false
+    description: Separate tradability and execution-cost adjustment.

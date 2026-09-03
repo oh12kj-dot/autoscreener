@@ -117,6 +117,11 @@ from autoscreener.api.schemas import (
     ReverseValuationScenarioView,
     DataCoverageResponse,
     DataCoverageRow,
+    ModelV5RunView,
+    ModelV5ScoreDetail,
+    ModelV5ScoreListResponse,
+    ModelV5ScoreSummary,
+    ModelV5ObjectiveScoreView,
 )
 from autoscreener.config import (
     ScoringConfig,
@@ -126,6 +131,7 @@ from autoscreener.config import (
     load_execution_config,
     load_fred_config,
     load_monitoring_config,
+    load_objectives_config,
     load_portfolio_config,
     load_positions_config,
     load_scoring_config,
@@ -179,6 +185,9 @@ from autoscreener.db.models import (
     MacroExposureSnapshot,
     DelistingEvent,
     LiveDatasetCoverage,
+    ModelRun,
+    ModelScore,
+    ObjectiveScore,
 )
 from autoscreener.research.notes import load_all_notes, load_note
 from autoscreener.pipeline_stages import PIPELINE_STAGE_COUNT
@@ -3696,6 +3705,130 @@ def get_jpy_return(ticker: str = Query(..., pattern=TICKER_PATTERN), usd_moic: f
     t=_intelligence_ticker(session,ticker)
     return InvestmentIntelligenceResponse(ticker=t.symbol,as_of=utc_today(),coverage_status="collected_with_data",source="user_scenario",
         data=jpy_after_tax_return(usd_moic=usd_moic,entry_usdjpy=entry_usdjpy,exit_usdjpy=exit_usdjpy,account_type=account_type,horizon_years=horizon_years))
+
+
+def _latest_v5_run(session: Session, as_of: datetime.date | None = None) -> ModelRun:
+    query = session.query(ModelRun).filter(
+        ModelRun.model_version == "v5", ModelRun.status == "succeeded"
+    )
+    if as_of is not None:
+        query = query.filter(ModelRun.as_of <= as_of)
+    run = query.order_by(ModelRun.as_of.desc(), ModelRun.finished_at.desc()).first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="successful v5 model run not found")
+    return run
+
+
+def _v5_run_view(run: ModelRun) -> ModelV5RunView:
+    return ModelV5RunView(
+        run_id=str(run.id), model_version=run.model_version,
+        config_hash=run.config_hash, as_of=run.as_of, mode=run.mode,
+        status=run.status, population_count=run.population_count,
+        started_at=run.started_at, finished_at=run.finished_at,
+        metrics=run.metrics, warnings=run.warnings or [],
+    )
+
+
+def _v5_distribution_payload(score: ModelScore) -> dict:
+    """Make older Phase 1 rows readable while retaining their explicit version."""
+    payload = dict(score.distribution)
+    payload.setdefault("model_confidence", float(score.confidence))
+    payload.setdefault("scenarios", [])
+    return payload
+
+
+@router.get("/models/v5/runs/latest", response_model=ModelV5RunView)
+def get_latest_v5_run(
+    as_of: datetime.date | None = None,
+    session: Session = Depends(get_session),
+) -> ModelV5RunView:
+    """Return the latest successful append-only v5 run, never a running/failed row."""
+    return _v5_run_view(_latest_v5_run(session, as_of))
+
+
+@router.get("/models/v5/scores", response_model=ModelV5ScoreListResponse)
+def list_v5_scores(
+    objective: str | None = None,
+    as_of: datetime.date | None = None,
+    limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_session),
+) -> ModelV5ScoreListResponse:
+    """Rank one immutable v5 distribution set by the selected objective."""
+    objective_config = load_objectives_config()
+    selected = objective or objective_config.default_objective
+    definition = objective_config.objectives.get(selected)
+    if definition is None or not definition.enabled:
+        raise HTTPException(status_code=422, detail=f"objective is not enabled: {selected}")
+    run = _latest_v5_run(session, as_of)
+    base = (
+        session.query(ObjectiveScore, ModelScore, Ticker)
+        .join(ModelScore, (ModelScore.run_id == ObjectiveScore.run_id) &
+              (ModelScore.ticker_id == ObjectiveScore.ticker_id))
+        .join(Ticker, Ticker.id == ObjectiveScore.ticker_id)
+        .filter(ObjectiveScore.run_id == run.id, ObjectiveScore.objective == selected)
+    )
+    total = base.count()
+    rows = (
+        base.order_by(ObjectiveScore.rank.asc().nullslast(), Ticker.symbol.asc())
+        .offset(offset).limit(limit).all()
+    )
+    items = [
+        ModelV5ScoreSummary(
+            rank=objective_row.rank, ticker=ticker.symbol,
+            selected_objective=selected,
+            objective_value=(float(objective_row.score_value)
+                             if objective_row.score_value is not None else None),
+            distribution=_v5_distribution_payload(model_score),
+            confidence=float(model_score.confidence),
+            warnings=model_score.warnings or [],
+        )
+        for objective_row, model_score, ticker in rows
+    ]
+    return ModelV5ScoreListResponse(
+        run=_v5_run_view(run), selected_objective=selected, total=total, items=items
+    )
+
+
+@router.get("/models/v5/scores/{ticker}", response_model=ModelV5ScoreDetail)
+def get_v5_score(
+    ticker: str = Path(..., pattern=TICKER_PATTERN),
+    as_of: datetime.date | None = None,
+    session: Session = Depends(get_session),
+) -> ModelV5ScoreDetail:
+    run = _latest_v5_run(session, as_of)
+    row = (
+        session.query(ModelScore, Ticker)
+        .join(Ticker, Ticker.id == ModelScore.ticker_id)
+        .filter(ModelScore.run_id == run.id, Ticker.symbol == ticker)
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="ticker not found in latest v5 run")
+    score, ticker_row = row
+    objective_rows = (
+        session.query(ObjectiveScore)
+        .filter(ObjectiveScore.run_id == run.id, ObjectiveScore.ticker_id == ticker_row.id)
+        .order_by(ObjectiveScore.objective.asc()).all()
+    )
+    objectives = [
+        ModelV5ObjectiveScoreView(
+            objective=item.objective,
+            status=(item.explanation or {}).get("status", "unavailable"),
+            score_value=(float(item.score_value) if item.score_value is not None else None),
+            rank=item.rank,
+            explanation=item.explanation or {},
+        )
+        for item in objective_rows
+    ]
+    return ModelV5ScoreDetail(
+        run=_v5_run_view(run), ticker=ticker_row.symbol,
+        target_horizon_years=score.target_horizon_years,
+        target_moic=float(score.target_moic),
+        distribution=_v5_distribution_payload(score), states=score.states, features=score.features,
+        confidence=float(score.confidence), warnings=score.warnings or [],
+        objectives=objectives,
+    )
 
 
 @router.get("/data-coverage", response_model=DataCoverageResponse)

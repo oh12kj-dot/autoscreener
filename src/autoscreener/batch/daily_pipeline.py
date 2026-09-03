@@ -52,6 +52,7 @@ from autoscreener.db.session import session_scope
 from autoscreener.monitoring import HealthFinding, check_collection_health, check_pipeline_health, check_quarantine_health
 from autoscreener.pipeline_stages import PIPELINE_STAGE_SEQUENCE
 from autoscreener.scoring.engine import run_scoring
+from autoscreener.scoring.v5.engine import run_v5_shadow
 from autoscreener.scoring.forward_validation import run_forward_validation
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,15 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
             st.result = results["macro_exposure"] = collect_macro_exposure(symbols=tracked_symbols)
     except Exception:
         logger.exception("macro exposure calculation failed")
+
+    # Issue #3 Phase 1: v5 is append-only and shadow-only.  A failure is
+    # recorded as a non-core failed stage but never prevents v4 scoring or the
+    # remaining operational stages from completing.
+    try:
+        with recorder.stage("model_v5_shadow", PIPELINE_STAGE_SEQUENCE["model_v5_shadow"]) as st:
+            st.result = results["model_v5_shadow"] = run_v5_shadow(today)
+    except Exception:
+        logger.exception("Model v5 shadow run failed")
 
     for stage_name in ("investment_intelligence", "market_opportunity", "macro_exposure"):
         stage_result = results.get(stage_name) or {}
