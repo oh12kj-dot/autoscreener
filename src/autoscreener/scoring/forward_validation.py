@@ -21,7 +21,15 @@ import logging
 from sqlalchemy.orm import Session
 
 from autoscreener.dates import utc_today
-from autoscreener.db.models import ForwardReturn, PriceSnapshot, Score, Ticker
+from autoscreener.db.models import (
+    ForwardReturn,
+    ModelRun,
+    ModelScore,
+    ModelV5ForwardReturn,
+    PriceSnapshot,
+    Score,
+    Ticker,
+)
 from autoscreener.db.session import session_scope
 
 logger = logging.getLogger(__name__)
@@ -240,6 +248,112 @@ def run_forward_validation(as_of_date: datetime.date | None = None) -> dict[str,
                     existing.settlement = settlement
                     existing.computed_at = now
                 computed += 1
+
+    return {
+        "computed": computed,
+        "settled_delisted": settled_delisted,
+        "not_matured": not_matured,
+        "missing_price": missing_price,
+    }
+
+
+def run_forward_validation_v5(as_of_date: datetime.date | None = None) -> dict[str, int]:
+    """v5 analogue of ``run_forward_validation`` (Phase 7, Issue #3 section
+    27). Reuses this module's entry/exit-price and delisted-settlement
+    logic (``_entry_price``/``_exit_price``/``_is_delisted``/
+    ``_settle_delisted``) and the same ``HORIZONS`` list unchanged -- only
+    the source (``model_scores``, keyed by ``run_id``, not ``scores`` keyed
+    by ``score_date``) and the target table (``model_v5_forward_returns``)
+    differ. Append-only, same semantics as the v4 function: an existing row
+    with a realized value is never recomputed, a delisted settlement uses
+    the last observed close (never a hardcoded -100% unless truly no price
+    was ever observed), and a ticker with neither a market exit price nor a
+    delisting determination is left unresolved for the next run rather than
+    guessed at.
+    """
+    as_of_date = as_of_date or utc_today()
+    computed = 0
+    settled_delisted = 0
+    not_matured = 0
+    missing_price = 0
+
+    with session_scope() as session:
+        cutoff = as_of_date - datetime.timedelta(days=_MIN_HORIZON_DAYS)
+        runs = session.query(ModelRun).filter(
+            ModelRun.status == "succeeded", ModelRun.as_of <= cutoff,
+        ).all()
+
+        tickers: dict[int, Ticker] = {}
+        last_price_dates: dict[int, datetime.date | None] = {}
+
+        for run in runs:
+            scores = session.query(ModelScore).filter_by(run_id=run.id).all()
+            for score in scores:
+                ticker_id = score.ticker_id
+                if ticker_id not in tickers:
+                    tickers[ticker_id] = session.get(Ticker, ticker_id)
+                    last_price_dates[ticker_id] = (
+                        session.query(PriceSnapshot.trade_date)
+                        .filter(PriceSnapshot.ticker_id == ticker_id)
+                        .order_by(PriceSnapshot.trade_date.desc())
+                        .limit(1)
+                        .scalar()
+                    )
+                ticker = tickers[ticker_id]
+                if ticker is None:
+                    continue
+
+                entry_price = _entry_price(session, ticker_id, run.as_of)
+                if entry_price is None or entry_price == 0:
+                    missing_price += 1
+                    continue
+
+                for horizon_label, days in HORIZONS:
+                    target_date = run.as_of + datetime.timedelta(days=days)
+                    if as_of_date < target_date:
+                        not_matured += 1
+                        continue
+
+                    existing = (
+                        session.query(ModelV5ForwardReturn)
+                        .filter_by(run_id=run.id, ticker_id=ticker_id, horizon=horizon_label)
+                        .one_or_none()
+                    )
+                    if existing is not None and existing.realized_return is not None:
+                        continue
+
+                    exit_price = _exit_price(session, ticker_id, target_date)
+                    if exit_price is not None:
+                        realized_return = exit_price / entry_price - 1
+                        settlement = SETTLEMENT_MARKET
+                    elif _is_delisted(ticker, last_price_dates[ticker_id], target_date):
+                        realized_return = _settle_delisted(
+                            session, ticker_id, entry_price, run.as_of, target_date
+                        )
+                        settlement = SETTLEMENT_DELISTED
+                        settled_delisted += 1
+                    else:
+                        missing_price += 1
+                        continue
+
+                    now = datetime.datetime.now(datetime.UTC)
+                    if existing is None:
+                        session.add(
+                            ModelV5ForwardReturn(
+                                run_id=run.id,
+                                ticker_id=ticker_id,
+                                base_date=run.as_of,
+                                horizon=horizon_label,
+                                realized_return=realized_return,
+                                settlement=settlement,
+                                computed_at=now,
+                            )
+                        )
+                    else:
+                        existing.realized_return = realized_return
+                        existing.settlement = settlement
+                        existing.computed_at = now
+                    computed += 1
 
     return {
         "computed": computed,

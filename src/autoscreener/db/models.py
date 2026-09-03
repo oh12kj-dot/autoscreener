@@ -347,6 +347,40 @@ class ForwardReturn(Base):
     computed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ModelV5ForwardReturn(Base):
+    """Model v5 Phase 7 forward validation (Issue #3 section 27): the v5
+    analogue of ``ForwardReturn``, append-only, keyed by ``run_id`` (not
+    ``ticker_id``/``base_date`` like the v4 table) because v5's
+    ``model_runs`` already carries the model-version/config identity that a
+    v5 score belongs to -- multiple v5 runs can legitimately score the same
+    ticker on the same day under different configs, which the v4 table's
+    ``(ticker_id, base_date, horizon)`` key does not need to support since
+    v4 has exactly one ``scores`` row per ``(ticker, score_date,
+    scoring_version)``.
+
+    Reuses ``scoring/forward_validation.py``'s entry/exit-price and
+    delisted-settlement logic exactly (``_entry_price``/``_exit_price``/
+    ``_is_delisted``/``_settle_delisted``) via
+    ``run_forward_validation_v5()`` in that same module -- this table only
+    changes the source (``model_scores`` instead of ``scores``) and the key
+    shape, not the settlement definition itself.
+    """
+
+    __tablename__ = "model_v5_forward_returns"
+    __table_args__ = (
+        UniqueConstraint("run_id", "ticker_id", "horizon", name="uq_model_v5_forward_return"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("model_runs.id"), index=True)
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    base_date: Mapped[datetime.date] = mapped_column(Date, index=True)
+    horizon: Mapped[str] = mapped_column(String(10))  # "1M"/"3M"/"6M"/"1Y"/"3Y"/"5Y"/"7Y"
+    realized_return: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+    settlement: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    computed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class BacktestRun(Base):
     """擬似バックテストの実行結果(27.8・14.2)。
 

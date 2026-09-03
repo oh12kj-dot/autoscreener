@@ -53,7 +53,7 @@ from autoscreener.config import load_collection_config
 from autoscreener.dates import utc_today
 from autoscreener.db.session import session_scope
 from autoscreener.scoring.engine import run_scoring
-from autoscreener.scoring.forward_validation import run_forward_validation
+from autoscreener.scoring.forward_validation import run_forward_validation, run_forward_validation_v5
 from autoscreener.scoring.v5.engine import run_v5_shadow
 from autoscreener.validation.coverage_bias import audit_v4_coverage_bias
 
@@ -601,6 +601,18 @@ def run_v5_shadow_cmd(
     result = run_v5_shadow(_parse_date(date))
     for key, value in result.items():
         typer.echo(f"  {key}: {value}")
+
+
+@app.command("run-forward-validation-v5")
+def run_forward_validation_v5_cmd(
+    date: str = typer.Option("", help="基準日(YYYY-MM-DD)。既定は当日。"),
+) -> None:
+    """Phase 7(Issue #3 27章):成熟した v5 model_scores の実現リターンを
+    model_v5_forward_returns に記録する。run_forward_validation と同じ
+    決済ロジックを再利用する。v4 の scores/forward_returns には触れない。"""
+    counts = run_forward_validation_v5(_parse_date(date))
+    for key, count in counts.items():
+        typer.echo(f"  {key}: {count}")
 
 
 @app.command("revalidate-market-opportunity")

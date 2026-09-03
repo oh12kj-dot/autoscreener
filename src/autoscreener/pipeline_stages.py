@@ -29,6 +29,16 @@ PIPELINE_STAGE_SEQUENCE = {
     "model_v5_shadow": 23,
     "monitoring": 24,
     "backup": 25,
+    # Phase 7 (Issue #3 27章): appended at the end per the handoff's explicit
+    # instruction not to renumber existing stages. The number is reserved
+    # here so `PIPELINE_STAGE_SEQUENCE`/`PIPELINE_STAGE_COUNT` stay the
+    # single source of truth for stage ordering, but this stage is NOT
+    # wired into daily_pipeline.py's actual execution list in this phase --
+    # a fresh, real-DB-unvalidated-in-production code path should not be
+    # spliced into the live 09:00 JST scheduled pipeline as a side effect of
+    # an infrastructure/measurement deliverable. Run manually via
+    # `run-forward-validation-v5` until a deliberate follow-up wires it in.
+    "forward_validation_v5": 26,
 }
 
 PIPELINE_STAGE_COUNT = len(PIPELINE_STAGE_SEQUENCE)
