@@ -62,7 +62,10 @@ def test_run_v5_historical_records_forced_disabled_features(monkeypatch):
 
     def _fake_run_v5_shadow(as_of, *, model_config=None, objectives_config=None):
         captured["feature_flags"] = dict(model_config.feature_flags)
-        return {"status": "succeeded", "run_id": "fake"}
+        # A real run_id shape (run_v5_shadow always returns one for a
+        # succeeded run) -- the mock must not use a non-UUID placeholder
+        # now that run_v5_historical persists onto the run record by run_id.
+        return {"status": "succeeded", "run_id": "00000000-0000-0000-0000-000000000000"}
 
     monkeypatch.setattr("autoscreener.backtest.v5_comparison.run_v5_shadow", _fake_run_v5_shadow)
     result = run_v5_historical(datetime.date(2024, 6, 30))
@@ -70,6 +73,27 @@ def test_run_v5_historical_records_forced_disabled_features(monkeypatch):
     for key in result["forced_disabled_features"]:
         assert captured["feature_flags"][key] is False
         assert not FEATURES_BY_KEY[key].historical_backtest_supported
+
+
+def test_run_v5_historical_persists_forced_off_onto_the_run_record():
+    """Audit fix (2026-09-03, second Phase 7 re-review): a historical run
+    must be distinguishable from an ordinary shadow run by reading
+    ModelRun.metrics/warnings alone, without recomputing
+    historical_feature_flags() and comparing config hashes by hand."""
+    result = run_v5_historical(datetime.date(2024, 6, 30))
+    run_id = result["run_id"]
+    try:
+        with session_scope() as session:
+            run = session.get(ModelRun, run_id)
+            assert run.metrics["historical_mode"] is True
+            assert set(run.metrics["historical_forced_off_features"]) == set(
+                result["forced_disabled_features"]
+            )
+            assert any("historical_mode" in w for w in run.warnings)
+    finally:
+        with session_scope() as session:
+            session.query(ModelScore).filter_by(run_id=run_id).delete()
+            session.query(ModelRun).filter_by(id=run_id).delete()
 
 
 # ---------------------------------------------------------------------------

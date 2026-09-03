@@ -42,6 +42,8 @@ from dataclasses import asdict, dataclass
 
 from sqlalchemy.orm import Session
 
+from autoscreener.db.session import session_scope
+
 from autoscreener.backtest.metrics import spearman
 from autoscreener.config import ModelV5Config, ObjectivesConfig, load_model_v5_config, load_objectives_config
 from autoscreener.db.models import ModelRun, ModelScore, ObjectiveScore, Score
@@ -82,9 +84,20 @@ def run_v5_historical(
     objectives_config: ObjectivesConfig | None = None,
 ) -> dict:
     """Run v5 in "historical mode": PIT-unsupported features are force-
-    disabled regardless of config (see ``historical_feature_flags``), and
-    the forced-off set is recorded on the returned result so a reader never
-    has to re-derive which features were suppressed for a given run.
+    disabled regardless of config (see ``historical_feature_flags``).
+
+    Audit fix (2026-09-03, second Phase 7 re-review): the forced-off set
+    must be persisted onto the run itself, not just returned to the
+    in-process caller -- otherwise a historical run is indistinguishable
+    from an ordinary shadow run once this function returns (the audit had
+    to recompute ``historical_feature_flags()`` and compare config hashes
+    by hand to confirm PIT enforcement had actually fired). ``ModelRun.
+    metrics`` gains ``historical_mode: true`` and
+    ``historical_forced_off_features: [...]`` via a follow-up update in the
+    same logical operation (append-only is about not rewriting a *different*
+    run's history later, not about never finishing writing this run's own
+    record); a warning is appended for the same reason dashboards read
+    ``warnings`` before ``metrics``.
     """
     model_config = model_config or load_model_v5_config()
     overridden_flags, forced_off = historical_feature_flags(model_config)
@@ -94,6 +107,21 @@ def run_v5_historical(
     )
     result["historical_mode"] = True
     result["forced_disabled_features"] = list(forced_off)
+    run_id = result.get("run_id")
+    if run_id is not None:
+        with session_scope() as session:
+            run = session.get(ModelRun, run_id)
+            if run is not None:
+                run.metrics = {
+                    **(run.metrics or {}),
+                    "historical_mode": True,
+                    "historical_forced_off_features": list(forced_off),
+                }
+                run.warnings = [
+                    *(run.warnings or []),
+                    "historical_mode: forced_off=" + ",".join(forced_off) if forced_off
+                    else "historical_mode: no_features_forced_off",
+                ]
     return result
 
 

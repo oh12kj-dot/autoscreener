@@ -29,16 +29,28 @@ PIPELINE_STAGE_SEQUENCE = {
     "model_v5_shadow": 23,
     "monitoring": 24,
     "backup": 25,
-    # Phase 7 (Issue #3 27章): appended at the end per the handoff's explicit
-    # instruction not to renumber existing stages. The number is reserved
-    # here so `PIPELINE_STAGE_SEQUENCE`/`PIPELINE_STAGE_COUNT` stay the
-    # single source of truth for stage ordering, but this stage is NOT
-    # wired into daily_pipeline.py's actual execution list in this phase --
-    # a fresh, real-DB-unvalidated-in-production code path should not be
-    # spliced into the live 09:00 JST scheduled pipeline as a side effect of
-    # an infrastructure/measurement deliverable. Run manually via
-    # `run-forward-validation-v5` until a deliberate follow-up wires it in.
-    "forward_validation_v5": 26,
 }
 
 PIPELINE_STAGE_COUNT = len(PIPELINE_STAGE_SEQUENCE)
+
+# Stage numbers reserved for code that exists and is real-DB-tested but is
+# NOT wired into `daily_pipeline.py`'s actual execution list yet (Phase 7
+# audit fix, 2026-09-03): keeping a reserved number inside
+# `PIPELINE_STAGE_SEQUENCE` inflated `PIPELINE_STAGE_COUNT` past the number
+# of stages the pipeline actually runs, which made
+# `frontend/src/pages/PipelinePage.tsx`'s `completedStagesCount /
+# expected_stage_count` permanently under-report ("26/27" forever) on every
+# future real run -- exactly the kind of silent, always-on false signal
+# that page exists to prevent. A reserved number belongs here, in a
+# separate constant nothing computes `PIPELINE_STAGE_COUNT` from, until the
+# day it is deliberately wired into `PIPELINE_STAGE_SEQUENCE` for real (at
+# which point it moves out of this dict and into the sequence with the next
+# free number, still never renumbering existing stages).
+RESERVED_STAGE_NUMBERS = {
+    # Phase 7 (Issue #3 27章): run_forward_validation_v5() and the
+    # `run-forward-validation-v5` CLI command are implemented and
+    # real-DB-tested; only the daily_pipeline.py wiring is deferred (see
+    # docs/model_v5_phase7_backtest_infrastructure_2026-09-03.md
+    # "Deviations").
+    "forward_validation_v5": 26,
+}

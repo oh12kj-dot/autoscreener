@@ -266,15 +266,29 @@ cd frontend; npm test; npm run build
 - v4 `scores` の行数とフィンガープリントが run 前後で不変
 - API smoke（`/api/v1/models/v5/runs/latest`、`/scores?objective=...`、`/scores/{ticker}`）が 200 で `v5.phase4` を返す
 
-**v4 フィンガープリント照合はテストを実行していない状態で取ること（2026-09-03 追記）。**
-`tests/unit/test_api_routes.py` 等は本物の `scores` テーブルへ実際に `Score` 行を
-INSERT し、テスト終了時に自分で削除する（専用のテスト用DBは無く、`session_scope()`
-は `.env` の `DATABASE_URL` が指す開発DBをそのまま使う — `tests/conftest.py` に
-DB分離のフィクスチャは無い）。監査中、`pytest` 実行中に `run-v5-shadow` を重ねて
-実行したところ、フィンガープリント照合の途中で行数が一時的に 8,225→8,226 に
-見えた（テスト終了後に 8,225 へ戻った）。**テストと shadow run を同時に走らせない
-こと。** フィンガープリントは「pytest が完全に終了してから」「次の pytest を
-開始する前に」の静止した瞬間に取る。
+**DB に対する一切の集計・測定（v4 フィンガープリントに限らない）はテストを
+実行していない状態で取ること（2026-09-03 追記、2026-09-03 Phase 7 再監査で
+強化）。** `tests/unit/test_api_routes.py` 等は本物の `scores` テーブルへ実際に
+`Score` 行を INSERT し、テスト終了時に自分で削除する（専用のテスト用DBは無く、
+`session_scope()` は `.env` の `DATABASE_URL` が指す開発DBをそのまま使う —
+`tests/conftest.py` に DB分離のフィクスチャは無い）。監査中、`pytest` 実行中に
+`run-v5-shadow` を重ねて実行したところ、フィンガープリント照合の途中で行数が
+一時的に 8,225→8,226 に見えた（テスト終了後に 8,225 へ戻った）。
+
+**さらに、`test_api_routes.py` は `Score` 行だけでなく `universe_snapshots` /
+`raw_snapshots` にも未来日付（`_TODAY = datetime.date(2099, 1, 1)`、同ファイル
+23行目のコメント「実データと衝突しない未来日付を使う」）の行を多数のフィクスチャで
+INSERT する（`UniverseSnapshot(snapshot_date=_TODAY, ...)` / `RawSnapshot
+(available_from=..., ...)`、同ファイル各所）。テスト実行中に `MAX(snapshot_date)`
+系のクエリを打つと `2099-01-01` を拾ってしまい、実際に Phase 7 再監査でこれが
+発生して監査側の集計クエリが壊れた（overlap が 0件になった）。テスト終了後は
+9件 / 2026-09-02 に正しく戻る。**
+
+**テストと shadow run・その他の DB 集計クエリを同時に走らせないこと。** 数値は
+「pytest が完全に終了してから」「次の pytest を開始する前に」の静止した瞬間に
+取る。テスト用DB分離（savepoint/rollback フィクスチャ等）は
+docs/model_v5_phase7_backtest_infrastructure_2026-09-03.md で調査済みだが、
+実装はしていない（影響範囲が大きく別途判断が必要）。
 
 **完了条件:** 上記が揃い、`docs/model_v5_phase4_quality_<日付>.md` に「実データで実際に効いた feature」と「coverage gate で効かなかった feature」を分けて記録できていること。効かなかったことは失敗ではない（Phase 3 の TAM/KPI/guidance と同じ扱い）。
 

@@ -5,7 +5,11 @@ from unittest.mock import ANY, patch
 import pytest
 
 from autoscreener.batch.daily_pipeline import run_daily_pipeline
-from autoscreener.pipeline_stages import PIPELINE_STAGE_COUNT, PIPELINE_STAGE_SEQUENCE
+from autoscreener.pipeline_stages import (
+    PIPELINE_STAGE_COUNT,
+    PIPELINE_STAGE_SEQUENCE,
+    RESERVED_STAGE_NUMBERS,
+)
 
 
 def test_pipeline_stage_sequence_is_unique_contiguous_and_matches_execution_order():
@@ -16,6 +20,19 @@ def test_pipeline_stage_sequence_is_unique_contiguous_and_matches_execution_orde
     assert PIPELINE_STAGE_SEQUENCE["consensus"] < PIPELINE_STAGE_SEQUENCE["gates"]
     assert PIPELINE_STAGE_SEQUENCE["macro_exposure"] < PIPELINE_STAGE_SEQUENCE["model_v5_shadow"]
     assert PIPELINE_STAGE_SEQUENCE["model_v5_shadow"] < PIPELINE_STAGE_SEQUENCE["monitoring"]
+
+
+def test_reserved_stage_numbers_never_double_count_pipeline_stage_count():
+    """Audit fix (2026-09-03, Phase 7 re-review): a stage number reserved
+    for code that is real but not yet wired into daily_pipeline.py's
+    execution list must never inflate PIPELINE_STAGE_COUNT --
+    frontend/src/pages/PipelinePage.tsx divides completed stages by this
+    count, so an inflated count would make every future real run show a
+    permanent, incorrect "N-1/N" shortfall."""
+    assert "forward_validation_v5" not in PIPELINE_STAGE_SEQUENCE
+    assert RESERVED_STAGE_NUMBERS["forward_validation_v5"] == PIPELINE_STAGE_COUNT + 1
+    # No collision between a reserved number and an active stage number.
+    assert set(RESERVED_STAGE_NUMBERS.values()).isdisjoint(PIPELINE_STAGE_SEQUENCE.values())
 
 
 class _FakeRecorder:
