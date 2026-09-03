@@ -206,7 +206,153 @@ See the Definition-of-Done item-by-item assessment in
 which of section 36's 22 checklist items are achieved, not yet achieved,
 or structurally blocked and why.
 
+## Entry 3 -- 2026-09-03 (Phase 10: objective-layer distribution/uncertainty fixes)
+
+```json
+{
+  "entry": 3,
+  "review_date": "2026-09-03",
+  "phase": "Phase 10 (risk_adjusted/ten_bagger objective-layer methodology fixes)",
+  "decision": "CONTINUE_SHADOW",
+  "decision_confidence": "high",
+  "code_revision": {
+    "commit": "3c48fe3ce0cf3d00af3fd56d60bdfa066b7219b1",
+    "dirty": false
+  },
+  "reasons": [
+    "no_new_realized_outcome_evidence_was_created_this_phase_phase_10_is_objective_layer_methodology_only",
+    "entry_1s_central_finding_is_unchanged_no_realized_outcome_backtest_exists_for_either_model",
+    "these_fixes_change_how_v5s_own_objectives_rank_tickers_relative_to_each_other_not_whether_v5_vs_v4_comparison_evidence_exists"
+  ],
+  "measured_evidence": {
+    "finding_1_risk_adjusted_was_a_constant_shift_of_expected_return": {
+      "root_cause": "expected_shortfall_10pct collapses to exactly 0.0 whenever failure_mass >= 10pct, true for 100pct of the real universe (1164/1164 measured twice)",
+      "before_fix": "risk_adjusted == expected_cagr - lambda, a pure constant shift -- Spearman(expected_return, risk_adjusted) == 1.0 by algebraic identity for any lambda",
+      "after_fix_real_persisted_run_893b8386": {
+        "spearman_expected_return_vs_risk_adjusted": 0.9919649725206005,
+        "top20_overlap_count": 18,
+        "top20_total": 20,
+        "expected_moic_given_loss_defined_count": 1164,
+        "expected_moic_given_loss_distinct_values": 1160,
+        "expected_moic_given_loss_range": [0.0069478229684922016, 0.4188054156318529]
+      }
+    },
+    "finding_2_ten_bagger_rewarded_reliability_driven_widening": {
+      "before_fix_real_isolated_ablation_712_tickers": {
+        "delta_positive_count": 712,
+        "delta_positive_total": 712,
+        "mean_delta_severity_gte_0_5": 0.003669035240914839,
+        "mean_delta_severity_lt_0_5": 0.0018183705666688934,
+        "spearman_severity_vs_delta": 0.2661883517288287
+      },
+      "chosen_config": {"reliability_sigma_lambda": 20.0, "reliability_left_tail_lambda": 20.0},
+      "after_fix_real_isolated_ablation_712_tickers": {
+        "delta_nonpositive_count": 661,
+        "delta_nonpositive_total": 712,
+        "mean_delta_severity_gte_0_5": -0.002526995709262884,
+        "mean_delta_severity_lt_0_5": -0.002780626124068923,
+        "spearman_severity_vs_delta": 0.12978529004901432
+      },
+      "population_level_full_universe_1164_tickers": {
+        "spearman_severity_vs_ten_bagger_rank_before_fix": -0.006755723569447428,
+        "spearman_severity_vs_ten_bagger_rank_after_fix": 0.22962297115275157,
+        "interpretation": "positive after the fix means worse severity now correlates with a worse (larger-numbered) rank, the economically correct direction"
+      },
+      "mean_preservation_check": "widened distribution (sigma_multiplier=1.5, left_tail_extra=0.35) expected_moic and expected_cagr equal the clean distribution's to within pytest.approx rel=1e-9 -- Issue section 6.3 not violated"
+    }
+  },
+  "dod_item_4_correction": {
+    "prior_status_in_phase8_doc": "not achieved (based on a stale 2026-09-01 memory note)",
+    "corrected_status": "achieved -- verified fixed in commit 7f057906a6fc5f2f1d25c40d89061fdd9a415fad (Phase 0, predates this session) plus fresh real-DB re-verification this round (delisting_events: 94/94 unknown, correctly excluded from acquisition-rate denominator; market_opportunity_estimate: 4/4 rows with plausible magnitudes, zero bare-number artifacts)",
+    "separate_still_open_concern_not_conflated_with_item_4": "TAM extraction coverage remains very low (4 rows across ~1273 tickers) -- a coverage problem, not a correctness problem; fixing requires large-scale external API access not authorized this round"
+  },
+  "dod_item_19_status": "unchanged, not attempted, explicit coordinator instruction (would require ~4.7 hour production pipeline run and large-scale external API access)",
+  "tests": {"backend_passed": 952, "new_this_phase": 11, "prior_baseline": 941, "frontend_passed": 2, "frontend_build": "succeeded", "frontend_lint_errors": 0},
+  "evidence_docs": [
+    "docs/model_v5_phase7_backtest_infrastructure_2026-09-03.md",
+    "docs/model_v5_phase8_ui_2026-09-03.md",
+    "docs/model_v5_phase10_reliability_objectives_2026-09-03.md"
+  ],
+  "not_claimed": [
+    "v5 is ready for production use",
+    "risk_adjusted is now a strongly independent risk measure from expected_return (0.992 is still high; only the exact 1.0 identity is what was fixed)",
+    "the reliability-widening discount eliminates every individual case where worse severity nominally increases ten_bagger (93pct of isolated per-ticker comparisons flip; ~7pct residual explained by extreme-tail lognormal sensitivity, honestly reported not tuned away)",
+    "this phase changes anything about scenario.py/quality.py/tail_risk.py -- both fixes are objectives.py-layer plus two new diagnostic distribution fields",
+    "promotion evidence changed -- no realized-outcome data was created this phase"
+  ]
+}
+```
+
+### Narrative
+
+Phase 10 fixed two methodology defects the coordinator found by real-data
+ablation and severity analysis, neither of which any unit test had caught
+(the full Phase 2-9 suite passed throughout, both before and after this
+phase's changes -- exactly why a real-data audit was needed).
+
+First, `risk_adjusted` was proven to be an exact constant shift of
+`expected_return` -- not approximately correlated, but algebraically
+identical in rank order -- because its downside input
+(`expected_shortfall_10pct`) is defined at a fixed *probability level*
+that collapses to 0.0 for the entire real universe once failure mass
+exceeds 10%, which it does for every ticker measured. Replacing that input
+with a fixed-*cutoff* conditional expectation (`expected_moic_given_loss`,
+`E[MOIC | MOIC < 1.0]`) breaks the identity: measured
+`Spearman(expected_return, risk_adjusted) = 0.992` (down from exactly
+1.0) with a real, differing top-20 roster (18/20 overlap) on the same
+2026-09-02 universe.
+
+Second, `ten_bagger` mechanically rewarded a reliability/quality-driven
+widening of the distribution -- confirmed in 712/712 real
+`accounting_quality` ablations, and traced to a genuine mathematical
+property of mean-preserving variance increases on far-right-tail
+exceedance probabilities (not a defect in the distribution's design,
+which Issue section 6.3 correctly prohibits "fixing" by lowering the
+mean). The fix lives entirely in `objectives.py`: a config-driven discount
+proportional to how much a ticker's own distribution was widened
+(`reliability_sigma_multiplier`/`reliability_left_tail_extra`, two new
+diagnostic-only distribution fields), tuned empirically against the real
+universe rather than guessed. The most decision-relevant real measurement
+-- `Spearman(severity, final ten_bagger rank)` across the full,
+1,164-ticker universe -- moved from -0.0068 (no real relationship,
+statistically indistinguishable from zero) to +0.230 (worse accounting
+quality now correctly correlates with a worse rank placement). A
+causally-cleaner isolated per-ticker check (same ticker, with vs without
+the signal) shows the sign flips for 93% of the 712 affected tickers, with
+an honestly-documented ~7% residual attributable to extreme-tail lognormal
+sensitivity that a linear-in-severity discount cannot fully cancel at any
+finite lambda -- reported as a real limitation, not tuned away by pushing
+lambda to an extreme value for a rounder headline number.
+
+Neither fix touches `scenario.py`, `quality.py`, or `tail_risk.py`; both
+are provably mean-preserving (measured directly: `expected_moic`/
+`expected_cagr` identical between a "clean" and a maximally "widened"
+constructed pair, to `rel=1e-9`). Both are opt-in via new config fields
+that default to a zero-effect no-op, which is why all 941 pre-existing
+tests needed no modification -- 11 new regression tests were added
+instead, and the full suite (952) passes.
+
+This phase also corrected Phase 8's Definition-of-Done item 4 assessment:
+it had been marked "not achieved" based on a memory note dated
+2026-09-01, which predates this same multi-round effort's own Phase 0
+work (commit `7f05790`, "model v5 Phase 0 data-quality corrections and
+baseline record") that already fixed both the TAM trillion-scale bug and
+the M&A/delisting `unknown`-treated-as-0% bug, with its own real-DB
+re-verification recorded at the time. A fresh real-DB read this round
+confirms no regression since (`delisting_events`: still 94/94 `unknown`,
+correctly excluded from the acquisition-rate denominator;
+`market_opportunity_estimate`: still 4 valid-magnitude rows). Item 4 is
+corrected to **achieved**; a separate, different, still-open concern (low
+TAM extraction *coverage*, not correctness) is recorded distinctly so it
+is not mistaken for the same item.
+
+None of the above changes Entry 1's central finding or this Decision
+Record's conclusion: no realized-outcome backtest exists for either model,
+so `PROMOTE_V5`/`KEEP_V4` remain unavailable per Issue #3 section 31.
+`CONTINUE_SHADOW` stands.
+
 ---
 
 *Future entries append below this line, in the same JSON + narrative shape,
 oldest first.*
+
