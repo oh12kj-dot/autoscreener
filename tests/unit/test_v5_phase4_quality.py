@@ -28,8 +28,10 @@ def _period(period_end: datetime.date, **kwargs) -> FinancialPeriod:
     return FinancialPeriod(period_end=period_end, **kwargs)
 
 
-def _result(initial: float = 0.20, fade: float = 0.75):
-    return SimpleNamespace(initial_growth_rate=initial, growth_fade_rate=fade)
+def _result(initial: float = 0.20, fade: float = 0.75, terminal: float = 0.04):
+    return SimpleNamespace(
+        initial_growth_rate=initial, growth_fade_rate=fade, terminal_growth_rate=terminal,
+    )
 
 
 def _seed_result(survival: float = 0.94):
@@ -116,6 +118,46 @@ def test_incremental_roic_shortens_duration_only_for_high_growth_low_roic():
     no_growth = apply_quality_features(_result(initial=0.0), _features(low_roic_signal), config=config)
     assert high_growth.duration_multiplier < 1.0
     assert no_growth.duration_multiplier == pytest.approx(1.0)
+
+
+def test_incremental_roic_actually_moves_the_growth_mean_multiplier():
+    """Audit fix 1 (2026-09-03): duration shortening must reach the actual
+    return path, not just the display state and the ablation state_shift.
+    The real 2026-09-02 run showed 214/214 incremental_roic ablations with
+    zero P(target)/expected_cagr impact because duration_multiplier never
+    fed build_scenarios. mean_multiplier must now differ from 1.0 whenever
+    the signal has a real effect, composed with growth's own path."""
+    from autoscreener.scoring.v5.growth import GrowthUpdate
+
+    config = load_model_v5_config()
+    low_roic_signal = _signal("incremental_roic", 0.30, evidence={})
+    growth_update = GrowthUpdate(
+        baseline_initial_rate=0.30, updated_initial_rate=0.30, terminal_rate=0.04,
+        baseline_duration_years=2.4, updated_duration_years=2.4,
+        baseline_fade=0.75, updated_fade=0.75, revenue_multiple_ratio=1.0,
+        applied_keys=(), signal_effects={},
+    )
+    update = apply_quality_features(
+        _result(initial=0.30), _features(low_roic_signal), config=config,
+        growth_update=growth_update,
+    )
+    assert update.applied_keys == ("incremental_roic",)
+    assert update.mean_multiplier < 1.0
+    assert update.no_effect_keys == ()
+
+
+def test_incremental_roic_zero_growth_is_reported_as_no_change_not_applied():
+    """Audit fix 1: reduction_years == 0 (non-positive growth) must not be
+    counted as "applied" -- it never moves anything (108/227 real cases in
+    the 2026-09-02 run were exactly this)."""
+    config = load_model_v5_config()
+    low_roic_signal = _signal("incremental_roic", 0.30, evidence={})
+    no_growth = apply_quality_features(
+        _result(initial=0.0), _features(low_roic_signal), config=config,
+    )
+    assert no_growth.applied_keys == ()
+    assert no_growth.no_effect_keys == ("incremental_roic",)
+    assert no_growth.mean_multiplier == pytest.approx(1.0)
 
 
 def test_incremental_roic_above_hurdle_never_extends_duration():

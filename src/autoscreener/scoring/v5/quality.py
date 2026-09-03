@@ -30,7 +30,7 @@ from autoscreener.db.models import XbrlFact
 from autoscreener.scoring.investment_intelligence import ReinvestmentQuality, calculate_reinvestment_quality
 from autoscreener.scoring.moic import MoicResult
 from autoscreener.scoring.v5.feature_registry import FEATURES_BY_KEY
-from autoscreener.scoring.v5.growth import _duration_from_fade
+from autoscreener.scoring.v5.growth import GrowthUpdate, _duration_from_fade, _path
 from autoscreener.scoring.v5.inputs import V5PitInput
 from autoscreener.screening.accounting_quality import AccountingQuality, calculate_accounting_quality
 from autoscreener.screening.financial_history import FinancialPeriod
@@ -129,6 +129,15 @@ class QualityUpdate:
     confidence_penalty: float
     applied_keys: tuple[str, ...]
     signal_effects: dict[str, dict]
+    # Signals whose feature-level candidacy status was "applied" (nonzero
+    # raw value) but whose actual effect on this ticker's state/distribution
+    # resolved to exactly zero this run (e.g. incremental_roic's duration
+    # shortfall multiplied by a non-positive growth level). Recorded so the
+    # engine can downgrade the persisted signal to "no_change" instead of an
+    # honest-looking but functionally inert "applied" (audit fix, 2026-09-03:
+    # 214/214 incremental_roic ablations previously showed zero distribution
+    # impact because duration never fed back into the growth path).
+    no_effect_keys: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -558,6 +567,7 @@ def apply_quality_features(
     features: QualityFeatureSet,
     *,
     config: ModelV5Config,
+    growth_update: GrowthUpdate | None = None,
     excluded_key: str | None = None,
 ) -> QualityUpdate:
     """Map quality observations to bounded state/uncertainty multipliers.
@@ -565,6 +575,16 @@ def apply_quality_features(
     Every multiplier defaults to a no-op (1.0 / 0.0) so an empty feature set
     reproduces Phase 2/3 output exactly -- this is the regression guard
     referenced in the handoff (4.5) and asserted in the Phase 4 tests.
+
+    ``growth_update`` (audit fix, 2026-09-03) is the already-applied Phase 3
+    growth state: incremental_roic's duration shortening must compose with
+    the growth-adjusted path (initial rate, terminal rate, fade), not just
+    the raw v4 seed, or it only ever changes a diagnostic display number and
+    never the distribution -- the original defect (214/214 real ablations
+    showed zero P(target)/expected_cagr impact because duration_multiplier
+    fed only the display state and the ablation's own state_shift, never
+    build_scenarios). When omitted (direct unit-test calls with no growth
+    context) this falls back to the raw seed.
     """
     duration_multiplier = 1.0
     mean_multiplier = 1.0
@@ -572,11 +592,21 @@ def apply_quality_features(
     left_tail_extra = 0.0
     confidence_penalty = 0.0
     applied: list[str] = []
+    no_effect: list[str] = []
     effects: dict[str, dict] = {}
 
     horizon = config.target_horizon_years
-    baseline_duration = _duration_from_fade(result.growth_fade_rate, horizon)
-    growth_level = max(0.0, result.initial_growth_rate)
+    if growth_update is not None:
+        current_initial = growth_update.updated_initial_rate
+        current_terminal = growth_update.terminal_rate
+        current_fade = growth_update.updated_fade
+        current_duration = growth_update.updated_duration_years
+    else:
+        current_initial = result.initial_growth_rate
+        current_terminal = result.terminal_growth_rate
+        current_fade = result.growth_fade_rate
+        current_duration = _duration_from_fade(current_fade, horizon)
+    growth_level = max(0.0, current_initial)
 
     for signal in features.signals:
         if not signal.applied or signal.key == excluded_key:
@@ -587,25 +617,60 @@ def apply_quality_features(
                 config.quality.incremental_roic_weight * growth_level * shortfall * horizon
             )
             reduction_years = min(config.quality.max_duration_reduction_years, raw_years)
+            if reduction_years <= 1e-9:
+                # Growth is not elevated (or the clamped shortfall resolves
+                # to zero reduction): incremental ROIC has no observable
+                # effect for this ticker this run. Recorded honestly as a
+                # no-op instead of counted as "applied" with a fabricated
+                # zero impact (audit fix 1, 2026-09-03).
+                no_effect.append(signal.key)
+                effects[signal.key] = {
+                    "status": "no_change_zero_growth_or_reduction",
+                    "current_duration_years": current_duration,
+                    "growth_level": growth_level, "shortfall": shortfall,
+                }
+                continue
+            new_duration = max(0.0, current_duration - reduction_years)
             duration_multiplier = (
-                1.0 if baseline_duration <= 0
-                else max(0.0, (baseline_duration - reduction_years) / baseline_duration)
+                1.0 if current_duration <= 0 else new_duration / current_duration
             )
+            new_fade = (
+                0.0 if new_duration <= 0
+                else min(current_fade, 0.5 ** (1.0 / new_duration))
+            )
+            baseline_path = _path(current_initial, current_terminal, current_fade, horizon)
+            reduced_path = _path(current_initial, current_terminal, new_fade, horizon)
+            baseline_multiple = math.prod(1.0 + rate for rate in baseline_path)
+            reduced_multiple = math.prod(1.0 + rate for rate in reduced_path)
+            incremental_ratio = (
+                reduced_multiple / baseline_multiple if baseline_multiple > 0 else 1.0
+            )
+            # Composes multiplicatively with per_share_economics below and
+            # with growth_update.revenue_multiple_ratio in engine.py, so the
+            # duration compression this signal adds on top of Phase 3's
+            # already-applied growth path is counted exactly once.
+            mean_multiplier *= incremental_ratio
             effects[signal.key] = {
-                "baseline_duration_years": baseline_duration,
+                "current_duration_years": current_duration,
                 "reduction_years": reduction_years,
                 "duration_multiplier": duration_multiplier,
+                "revenue_multiple_ratio_from_duration": incremental_ratio,
             }
         elif signal.key == "per_share_economics":
             gap = float(signal.value)
             raw_reduction = config.quality.per_share_gap_weight * gap
             reduction = min(config.quality.max_mean_multiplier_reduction, raw_reduction)
-            mean_multiplier = 1.0 - reduction
+            mean_multiplier *= (1.0 - reduction)
             effects[signal.key] = {
                 "dilutive_gap": gap, "mean_multiplier_reduction": reduction,
-                "mean_multiplier": mean_multiplier,
+                "mean_multiplier_factor": 1.0 - reduction,
             }
         elif signal.key == "cash_conversion":
+            # Diagnostic-only (handoff 4.3): populates
+            # economics.cash_conversion / economics.reinvestment_efficiency
+            # state values but never a distribution multiplier, so this
+            # "applied" entry's ablation is identically zero on
+            # p_target/expected_cagr by design, not a bug (see Phase 4 doc).
             evidence = signal.evidence
             effects[signal.key] = {
                 "cash_conversion": evidence.get("cash_conversion_ocf_ni"),
@@ -632,5 +697,5 @@ def apply_quality_features(
         duration_multiplier=duration_multiplier, mean_multiplier=mean_multiplier,
         sigma_multiplier=sigma_multiplier, left_tail_extra=left_tail_extra,
         confidence_penalty=confidence_penalty, applied_keys=tuple(applied),
-        signal_effects=effects,
+        signal_effects=effects, no_effect_keys=tuple(no_effect),
     )

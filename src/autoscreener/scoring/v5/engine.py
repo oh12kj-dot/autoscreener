@@ -6,6 +6,7 @@ import datetime
 import hashlib
 import json
 import uuid
+from dataclasses import replace
 
 from autoscreener.config import (
     ModelV5Config,
@@ -38,7 +39,9 @@ from autoscreener.scoring.v5.quality import (
 from autoscreener.scoring.v5.scenario import build_scenarios
 from autoscreener.scoring.v5.state_model import build_future_state
 
-_IMPLEMENTATION_VERSION = "v5.phase4"
+# Single source of truth for the persisted contract_version: reads
+# ModelV5Config.implementation_version directly (audit fix, 2026-09-03) so a
+# separate module constant can never silently drift from config/model_v5.yaml.
 
 
 def v5_config_hash(model_config: ModelV5Config, objectives_config: ObjectivesConfig) -> str:
@@ -127,7 +130,9 @@ def _distribution_for(
         min(1.0, base_confidence + growth_features.confidence_delta + quality_features.confidence_delta),
     )
     growth_update = apply_growth_features(result, growth_features, config=model_config)
-    quality_update = apply_quality_features(result, quality_features, config=model_config)
+    quality_update = apply_quality_features(
+        result, quality_features, config=model_config, growth_update=growth_update,
+    )
     mean_multiplier = growth_update.revenue_multiple_ratio * quality_update.mean_multiplier
     scenarios = build_scenarios(
         result, confidence=confidence, config=model_config,
@@ -189,6 +194,34 @@ def _ablate(
             "model_confidence": without_confidence,
         },
     }
+
+
+def _reconcile_quality_features(
+    quality_features: QualityFeatureSet, quality_update: QualityUpdate
+) -> QualityFeatureSet:
+    """Downgrade a persisted signal to ``no_change`` when it had zero effect.
+
+    ``build_quality_feature_sets`` flags a signal "applied" from its raw
+    value alone (coverage/reliability/nonzero-value gates), before any
+    ticker-specific result exists. ``apply_quality_features`` can determine,
+    with the real result in hand, that a nominally-applied signal (e.g.
+    incremental_roic when growth is not elevated) produced no measurable
+    effect this run. Without this reconciliation the persisted
+    ``quality_features`` payload would keep saying ``applied: true`` for a
+    signal that moved nothing -- exactly the gap the 2026-09-03 audit found
+    by cross-referencing ablation output against the "applied" flag.
+    """
+    if not quality_update.no_effect_keys:
+        return quality_features
+    no_effect = set(quality_update.no_effect_keys)
+    return QualityFeatureSet(
+        tuple(
+            replace(signal, applied=False, status="no_change")
+            if signal.key in no_effect else signal
+            for signal in quality_features.signals
+        ),
+        dict(quality_features.universe_coverage),
+    )
 
 
 def run_v5_shadow(
@@ -290,6 +323,13 @@ def run_v5_shadow(
                         result, growth_features=growth_features, quality_features=quality_features,
                         base_confidence=base_confidence, model_config=model_config,
                     )
+                    if quality_update.no_effect_keys:
+                        quality_features = _reconcile_quality_features(quality_features, quality_update)
+                        for key in quality_update.no_effect_keys:
+                            ablation[key] = {
+                                "status": "not_computed",
+                                "reason": "no_change_zero_growth_or_reduction",
+                            }
                     applied_keys = (*growth_update.applied_keys, *quality_update.applied_keys)
                     ablation_enabled = (
                         model_config.growth.ablation_enabled and model_config.quality.ablation_enabled
@@ -313,7 +353,7 @@ def run_v5_shadow(
                     confidence=confidence,
                     growth_update=growth_update,
                     quality_update=quality_update,
-                    contract_version=_IMPLEMENTATION_VERSION,
+                    contract_version=model_config.implementation_version,
                 )
                 session.add(ModelScore(
                     run_id=run_id,
