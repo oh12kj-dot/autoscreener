@@ -14,6 +14,7 @@ import { ScoreHistoryChart } from "../components/ScoreHistoryChart";
 import { Term } from "../components/Term";
 import { WarningBadges } from "../components/WarningBadges";
 import { InvestmentIntelligenceSections } from "../components/InvestmentIntelligenceSections";
+import { V5TickerDetailSection } from "../components/V5TickerDetailSection";
 import type { GlossaryId } from "../glossary";
 
 /** `factors` に入っている診断値の表示。内訳5因子とは別枠で並べる。
@@ -687,6 +688,14 @@ export function TickerDetailPage() {
       {/* K-9:生成AIによる定性分析(参考)。**最下部に置く**——上に置くと
           定量モデルの出力より先に読まれ、順位の根拠だと受け取られる。 */}
       <LlmAnalysisSection ticker={detail.ticker} />
+
+      {/* Phase 8(Issue #3 §28・§29):v5 Shadow Challengerは既存v4画面の
+          さらに下に追加専用で置く——v4の表示・挙動は一切変えない。 */}
+      <V5TickerDetailSection
+        ticker={detail.ticker}
+        v4Probability={detail.probability}
+        v4ExpectedMoic={detail.expected_moic}
+      />
     </div>
   );
 }

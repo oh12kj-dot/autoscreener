@@ -893,3 +893,160 @@ export interface LlmConnectionUpdate {
   send_effort?: boolean | null;
   api_key?: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Model v5 (Phase 8): independent shadow challenger. Field names mirror
+// api/schemas.py's ModelV5* Pydantic models exactly (snake_case, matching
+// every other type in this file). v5 is never production-quality -- every
+// v5 response carries its own `warnings`/`not_for_production` signal; the
+// UI must surface these, not hide them (Issue #3 section 27).
+// ---------------------------------------------------------------------------
+
+export interface ModelV5Scenario {
+  name: string;
+  weight: number;
+  log_mu: number;
+  log_sigma: number;
+  conditional_expected_moic: number;
+  survival_probability: number;
+}
+
+export interface ModelV5Distribution {
+  contract_version: string;
+  status: string;
+  distribution_family: string | null;
+  source_model_version: string;
+  target_moic: number;
+  p_moic_below_0_5: number | null;
+  p_moic_below_1_0: number | null;
+  p_moic_2x: number | null;
+  p_moic_3x: number | null;
+  p_moic_5x: number | null;
+  p_moic_10x: number | null;
+  p_target: number | null;
+  expected_moic: number | null;
+  median_moic: number | null;
+  expected_cagr: number | null;
+  median_cagr: number | null;
+  expected_shortfall_10pct: number | null;
+  p10_moic: number | null;
+  p25_moic: number | null;
+  p50_moic: number | null;
+  p75_moic: number | null;
+  p90_moic: number | null;
+  survival_probability: number | null;
+  acquisition_probability: number | null;
+  model_confidence: number;
+  scenarios: ModelV5Scenario[];
+}
+
+export interface ModelV5Run {
+  run_id: string;
+  model_version: string;
+  config_hash: string;
+  as_of: string;
+  mode: string;
+  status: string;
+  population_count: number;
+  started_at: string;
+  finished_at: string | null;
+  metrics: Record<string, unknown> | null;
+  warnings: string[];
+}
+
+export interface ModelV5ObjectiveScore {
+  objective: string;
+  status: string;
+  score_value: number | null;
+  rank: number | null;
+  explanation: Record<string, unknown>;
+}
+
+export interface ModelV5ScoreSummary {
+  rank: number | null;
+  ticker: string;
+  selected_objective: string;
+  objective_value: number | null;
+  distribution: ModelV5Distribution;
+  confidence: number;
+  warnings: string[];
+}
+
+export interface ModelV5ScoreListResponse {
+  run: ModelV5Run;
+  selected_objective: string;
+  total: number;
+  items: ModelV5ScoreSummary[];
+}
+
+/** One growth/quality/capital/tail signal, as persisted in
+ * ModelScore.features.{growth,quality,capital,tail}_features.signals. */
+export interface ModelV5Signal {
+  key: string;
+  status: string;
+  coverage_status: string;
+  runtime_enabled: boolean;
+  applied: boolean;
+  reliability: number;
+  observed_at: string | null;
+  value: number | null;
+  evidence: Record<string, unknown>;
+}
+
+/** One leave-one-feature-out ablation entry, as persisted in
+ * ModelScore.features.ablation[key]. `state_shift`/`scenario_impact` are
+ * only present when `status === "computed"`. */
+export interface ModelV5AblationEntry {
+  status: "computed" | "not_computed";
+  reason?: string;
+  state_shift?: Record<string, number>;
+  scenario_impact?: Record<string, number>;
+  without_feature?: Record<string, number>;
+}
+
+export interface ModelV5ScoreDetail {
+  run: ModelV5Run;
+  ticker: string;
+  target_horizon_years: number;
+  target_moic: number;
+  distribution: ModelV5Distribution;
+  states: Record<string, unknown>;
+  features: {
+    growth_features?: { signals: ModelV5Signal[] };
+    quality_features?: { signals: ModelV5Signal[] };
+    capital_features?: { signals: ModelV5Signal[] };
+    tail_features?: { signals: ModelV5Signal[] };
+    ablation?: Record<string, ModelV5AblationEntry>;
+    [key: string]: unknown;
+  };
+  confidence: number;
+  warnings: string[];
+  objectives: ModelV5ObjectiveScore[];
+}
+
+export interface ModelV5ObjectiveDefinition {
+  name: string;
+  description: string;
+}
+
+/** Only ever lists objectives enabled in config/objectives.yaml --
+ * quality_compounder/execution_adjusted never appear here. */
+export interface ModelV5ObjectivesResponse {
+  default_objective: string;
+  objectives: ModelV5ObjectiveDefinition[];
+}
+
+export interface ModelV5ValidationStatus {
+  decision: string;
+  decision_entry_date: string;
+  champion_model: string;
+  challenger_model: string;
+  challenger_mode: string;
+  evaluation_dates_count: number;
+  evaluation_date_range: [string, string] | null;
+  realized_forward_validation_count: number;
+  unsupported_historical_features: string[];
+  latest_run: ModelV5Run | null;
+  not_for_production: boolean;
+  warnings: string[];
+}

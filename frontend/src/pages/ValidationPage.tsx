@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchLatestBacktest } from "../api/client";
 import { Term } from "../components/Term";
+import { V5ValidationSection } from "../components/V5ValidationSection";
 import type { GlossaryId } from "../glossary";
 import type { BacktestSummary } from "../api/types";
 
@@ -172,6 +173,10 @@ export function ValidationPage() {
         生存確率が低い銘柄はランキング画面・銘柄詳細で警告バッジが付きますが、
         除外はされません。
       </div>
+
+      {/* Phase 8/9(Issue #3 §28・§29・§34・§36):v5は既存v4検証セクションの
+          下に追加専用で置く——v4の表示・挙動は一切変えない。 */}
+      <V5ValidationSection />
 
       {data.observation_count === 0 ? (
         <p>

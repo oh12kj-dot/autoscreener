@@ -120,7 +120,10 @@ from autoscreener.api.schemas import (
     ModelV5RunView,
     ModelV5ScoreDetail,
     ModelV5ScoreListResponse,
+    ModelV5ObjectiveDefinitionView,
+    ModelV5ObjectivesResponse,
     ModelV5ScoreSummary,
+    ModelV5ValidationStatusResponse,
     ModelV5ObjectiveScoreView,
 )
 from autoscreener.config import (
@@ -187,8 +190,10 @@ from autoscreener.db.models import (
     LiveDatasetCoverage,
     ModelRun,
     ModelScore,
+    ModelV5ForwardReturn,
     ObjectiveScore,
 )
+from autoscreener.scoring.v5.feature_registry import FEATURES_BY_KEY
 from autoscreener.research.notes import load_all_notes, load_note
 from autoscreener.pipeline_stages import PIPELINE_STAGE_COUNT
 from autoscreener.screening.dilution_outlook import (
@@ -3828,6 +3833,71 @@ def get_v5_score(
         distribution=_v5_distribution_payload(score), states=score.states, features=score.features,
         confidence=float(score.confidence), warnings=score.warnings or [],
         objectives=objectives,
+    )
+
+
+@router.get("/models/v5/objectives", response_model=ModelV5ObjectivesResponse)
+def list_v5_objectives() -> ModelV5ObjectivesResponse:
+    """Phase 8: the UI's objective selector reads this instead of a
+    hardcoded list, so a disabled objective (quality_compounder,
+    execution_adjusted -- config/objectives.yaml) can never be offered by
+    construction, not by the frontend remembering to filter correctly.
+    """
+    config = load_objectives_config()
+    return ModelV5ObjectivesResponse(
+        default_objective=config.default_objective,
+        objectives=[
+            ModelV5ObjectiveDefinitionView(name=name, description=definition.description)
+            for name, definition in config.objectives.items()
+            if definition.enabled
+        ],
+    )
+
+
+@router.get("/models/v5/validation-status", response_model=ModelV5ValidationStatusResponse)
+def get_v5_validation_status(session: Session = Depends(get_session)) -> ModelV5ValidationStatusResponse:
+    """Phase 8/9 (Issue #3 sections 28/29/34/36): live-measured validation
+    status for the UI -- never a hardcoded "looks good" string. Mirrors
+    docs/model_v5_validation.md Entry 1's decision (updated there, not
+    recomputed here); everything else is queried live so it cannot drift
+    stale the way a hardcoded copy would.
+    """
+    warnings = [
+        "not_for_production", "forward_shadow_only",
+        "no_realized_outcome_backtest_available_for_either_model",
+    ]
+    evaluation_dates = sorted(
+        d for (d,) in session.query(UniverseSnapshot.snapshot_date)
+        .filter(UniverseSnapshot.included.is_(True)).distinct().all()
+    )
+    realized_count = (
+        session.query(ModelV5ForwardReturn)
+        .filter(ModelV5ForwardReturn.realized_return.isnot(None))
+        .count()
+    )
+    unsupported = sorted(
+        key for key, spec in FEATURES_BY_KEY.items() if not spec.historical_backtest_supported
+    )
+    latest_run_row = (
+        session.query(ModelRun)
+        .filter(ModelRun.model_version == "v5", ModelRun.status == "succeeded")
+        .order_by(ModelRun.as_of.desc(), ModelRun.finished_at.desc())
+        .first()
+    )
+    if realized_count == 0:
+        warnings.append("forward_validation_zero_matured_observations")
+    return ModelV5ValidationStatusResponse(
+        decision="CONTINUE_SHADOW",
+        decision_entry_date="2026-09-03",
+        champion_model="v4", challenger_model="v5", challenger_mode="shadow",
+        evaluation_dates_count=len(evaluation_dates),
+        evaluation_date_range=(
+            [evaluation_dates[0], evaluation_dates[-1]] if evaluation_dates else None
+        ),
+        realized_forward_validation_count=realized_count,
+        unsupported_historical_features=unsupported,
+        latest_run=_v5_run_view(latest_run_row) if latest_run_row is not None else None,
+        warnings=warnings,
     )
 
 

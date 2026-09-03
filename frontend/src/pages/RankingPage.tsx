@@ -7,6 +7,7 @@ import { CollectionStatusBanner } from "../components/CollectionStatusBanner";
 import { TargetSelector, type TargetChoice } from "../components/TargetSelector";
 import { Term } from "../components/Term";
 import { WarningBadges } from "../components/WarningBadges";
+import { V5RankingSection } from "../components/V5RankingSection";
 
 const PAGE_SIZE = 50;
 const DEFAULT_TARGET: TargetChoice = { horizonYears: 7, targetMoic: 10 };
@@ -80,6 +81,21 @@ export function RankingPage() {
     setSearchParams(params);
   };
 
+  // Phase 8(Issue #3 §28・§29・§34・§36):v4(Champion)/v5(Shadow Challenger)
+  // の切り替え。URLに載せるのは目標と同じ理由(共有・戻るボタンでの切り替え)。
+  // 既定は v4 のまま——v5 は「あくまで切替先」であり、既存利用者の初回表示は
+  // 一切変わらない。
+  const model = searchParams.get("model") === "v5" ? "v5" : "v4";
+  const setModel = (next: "v4" | "v5") => {
+    const params = new URLSearchParams(searchParams);
+    if (next === "v4") {
+      params.delete("model");
+    } else {
+      params.set("model", next);
+    }
+    setSearchParams(params);
+  };
+
   const [sector, setSector] = useState("");
   const [minMarketCap, setMinMarketCap] = useState("");
   const [maxMarketCap, setMaxMarketCap] = useState("");
@@ -111,6 +127,32 @@ export function RankingPage() {
 
   return (
     <div>
+      {/* Phase 8(Issue #3 §28):v4(Champion)/v5(Shadow Challenger)切替。
+          既定は v4。v5選択時もこのページ自身のv4データ取得(useEffect群)は
+          そのまま動き続けるが、描画するJSXだけを切り替えることで、既存の
+          v4画面の表示(および挙動)を一切変えないという要件を守る。 */}
+      <div className="model-toggle" role="group" aria-label="モデル選択">
+        <button
+          type="button"
+          className={model === "v4" ? "active" : ""}
+          aria-pressed={model === "v4"}
+          onClick={() => setModel("v4")}
+        >
+          v4 Legacy(Champion)
+        </button>
+        <button
+          type="button"
+          className={model === "v5" ? "active" : ""}
+          aria-pressed={model === "v5"}
+          onClick={() => setModel("v5")}
+        >
+          v5 Shadow(Challenger)
+        </button>
+      </div>
+      {model === "v5" ? (
+        <V5RankingSection />
+      ) : (
+        <>
       {/* §6.5:バナーが出す「表示中のランキングは…時点」の日付は、この画面が
           実際に表示しているスコア確定日そのものでなければ意味が無い。別途
           APIから取らず、`GET /candidates` の応答をそのまま渡す。 */}
@@ -403,6 +445,8 @@ export function RankingPage() {
               次へ
             </button>
           </div>
+        </>
+      )}
         </>
       )}
     </div>

@@ -31,6 +31,11 @@ import type {
   InvestmentIntelligenceResponse,
   ReverseValuationResponse,
   DataCoverageResponse,
+  ModelV5ObjectivesResponse,
+  ModelV5Run,
+  ModelV5ScoreDetail,
+  ModelV5ScoreListResponse,
+  ModelV5ValidationStatus,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -348,4 +353,43 @@ export function deactivateLlmConnections(): Promise<LlmConnectionsResponse> {
  */
 export function generateLlmReport(body: GenerateReportRequest): Promise<GenerateReportResult> {
   return apiPost<GenerateReportResult>(`/api/v1/llm/report/generate`, body);
+}
+
+// ---------------------------------------------------------------------------
+// Model v5 (Phase 8). All read-only -- v5 has no write endpoints from the
+// UI, matching the shadow-only, append-only backend contract.
+// ---------------------------------------------------------------------------
+
+export function fetchV5LatestRun(asOf?: string): Promise<ModelV5Run> {
+  const q = asOf ? `?as_of=${encodeURIComponent(asOf)}` : "";
+  return apiFetch(`/api/v1/models/v5/runs/latest${q}`);
+}
+
+export interface FetchV5ScoresParams {
+  objective?: string;
+  asOf?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchV5Scores(params: FetchV5ScoresParams = {}): Promise<ModelV5ScoreListResponse> {
+  const q = new URLSearchParams();
+  if (params.objective) q.set("objective", params.objective);
+  if (params.asOf) q.set("as_of", params.asOf);
+  q.set("limit", String(params.limit ?? 50));
+  q.set("offset", String(params.offset ?? 0));
+  return apiFetch(`/api/v1/models/v5/scores?${q.toString()}`);
+}
+
+export function fetchV5ScoreDetail(ticker: string, asOf?: string): Promise<ModelV5ScoreDetail> {
+  const q = asOf ? `?as_of=${encodeURIComponent(asOf)}` : "";
+  return apiFetch(`/api/v1/models/v5/scores/${encodeURIComponent(ticker)}${q}`);
+}
+
+export function fetchV5Objectives(): Promise<ModelV5ObjectivesResponse> {
+  return apiFetch(`/api/v1/models/v5/objectives`);
+}
+
+export function fetchV5ValidationStatus(): Promise<ModelV5ValidationStatus> {
+  return apiFetch(`/api/v1/models/v5/validation-status`);
 }

@@ -1269,3 +1269,42 @@ class ModelV5ScoreDetail(BaseModel):
     confidence: float
     warnings: list[str] = []
     objectives: list[ModelV5ObjectiveScoreView]
+
+
+class ModelV5ObjectiveDefinitionView(BaseModel):
+    """One enabled v5 objective, for the UI's objective selector (Phase 8).
+
+    Only ever lists objectives where `ObjectiveDefinition.enabled` is True
+    in config/objectives.yaml -- quality_compounder/execution_adjusted are
+    disabled there and therefore never appear here, so the frontend cannot
+    accidentally offer them regardless of how it renders this list.
+    """
+
+    name: str
+    description: str
+
+
+class ModelV5ObjectivesResponse(BaseModel):
+    default_objective: str
+    objectives: list[ModelV5ObjectiveDefinitionView]
+
+
+class ModelV5ValidationStatusResponse(BaseModel):
+    """Phase 8/9 (Issue #3 sections 28/29/34/36): the honest, live-measured
+    validation status the UI must show alongside any v5 ranking -- v5 is a
+    shadow challenger, not production-quality, and this response exists so
+    the frontend never has to guess or hardcode stale numbers.
+    """
+
+    decision: str
+    decision_entry_date: str
+    champion_model: str
+    challenger_model: str
+    challenger_mode: str
+    evaluation_dates_count: int
+    evaluation_date_range: list[datetime.date] | None = None
+    realized_forward_validation_count: int
+    unsupported_historical_features: list[str]
+    latest_run: ModelV5RunView | None = None
+    not_for_production: bool = True
+    warnings: list[str] = []

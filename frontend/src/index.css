@@ -1969,3 +1969,112 @@ td.negative {
 .recharts-legend-item-text {
   color: var(--text-muted) !important;
 }
+
+/* Phase 8(Issue #3 §28・§29・§34・§36):v5 Shadow Challenger専用UI。
+   既存v4のCSSトークン(--accent/--danger/--border/--radius)を再利用し、
+   v5用の独自色を増やさない——v4画面の見た目には一切影響しない
+   (v4のCSSクラスを再利用も上書きもしていないため)。 */
+.model-toggle {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+
+.model-toggle button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.model-toggle button.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.v5-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+
+.v5-badge {
+  display: inline-block;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.v5-ticker-section,
+.v5-validation-section,
+.v5-ranking-section {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 2px dashed var(--border);
+}
+
+.v5-caveat {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.v5-compare-table,
+.v5-ablation-table,
+.v5-validation-table,
+.v5-ranking-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  font-size: 0.85rem;
+}
+
+.v5-compare-table th,
+.v5-compare-table td,
+.v5-ablation-table th,
+.v5-ablation-table td,
+.v5-validation-table td,
+.v5-ranking-table th,
+.v5-ranking-table td {
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.v5-state-shift-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.v5-not-computed-reason {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.v5-not-available {
+  color: var(--text-muted);
+}
+
+.v5-insufficient-data {
+  color: var(--danger);
+}
+
+.v5-warnings {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.v5-confidence {
+  font-size: 0.85rem;
+}
