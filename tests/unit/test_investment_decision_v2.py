@@ -93,6 +93,11 @@ def test_filing_extractors_keep_source_excerpt():
     assert debts[0].maturity_year == 2028
 
 
+def test_debt_extractor_rejects_concatenated_inline_xbrl_table_cells():
+    text = "2025 total debt $379,80520249,424,32924,178,001"
+    assert extract_debt_maturities(text) == []
+
+
 def test_filing_extractors_ignore_punctuation_that_is_not_a_number():
     assert extract_operating_kpis("We serve enterprise, customers across many markets.") == []
 

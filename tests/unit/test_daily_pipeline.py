@@ -14,6 +14,8 @@ def test_pipeline_stage_sequence_is_unique_contiguous_and_matches_execution_orde
     assert sorted(sequences) == list(range(1, PIPELINE_STAGE_COUNT + 1))
     assert PIPELINE_STAGE_SEQUENCE["collection"] < PIPELINE_STAGE_SEQUENCE["consensus"]
     assert PIPELINE_STAGE_SEQUENCE["consensus"] < PIPELINE_STAGE_SEQUENCE["gates"]
+    assert PIPELINE_STAGE_SEQUENCE["macro_exposure"] < PIPELINE_STAGE_SEQUENCE["model_v5_shadow"]
+    assert PIPELINE_STAGE_SEQUENCE["model_v5_shadow"] < PIPELINE_STAGE_SEQUENCE["monitoring"]
 
 
 class _FakeRecorder:
@@ -94,6 +96,7 @@ def _stub_phase2367_steps():
         # 遅くなるだけ」の典型)。観点は骨格・順序・障害許容なので 0 件で通す。
         patch("autoscreener.batch.daily_pipeline.collect_market_opportunity", return_value={"targets": 0}) as market_opportunity,
         patch("autoscreener.batch.daily_pipeline.collect_macro_exposure", return_value={"targets": 0}) as macro_exposure,
+        patch("autoscreener.batch.daily_pipeline.run_v5_shadow", return_value={"status": "succeeded", "population": 0}) as model_v5_shadow,
         patch("autoscreener.batch.daily_pipeline.collect_filing_sections", return_value={"sections": 0}) as filing_sections,
         patch("autoscreener.batch.daily_pipeline.collect_guidance", return_value={"rows": 0}) as guidance,
         patch("autoscreener.batch.daily_pipeline.collect_concentration", return_value={"rows": 0}) as concentration,
@@ -120,6 +123,7 @@ def _stub_phase2367_steps():
             "intelligence": intelligence,
             "market_opportunity": market_opportunity,
             "macro_exposure": macro_exposure,
+            "model_v5_shadow": model_v5_shadow,
             "filing_sections": filing_sections,
             "guidance": guidance,
             "concentration": concentration,

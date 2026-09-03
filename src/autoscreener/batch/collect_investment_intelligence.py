@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import logging
 
 from autoscreener.db.models import (
     CapitalAllocationEvent, DebtInstrument, FilingSection, Guidance, LiquidityFacility,
@@ -34,6 +35,9 @@ _KPI_LABELS = {
     "book_to_bill": ("Book-to-bill", "ratio", "industrial"),
     "production": ("Production", "count", "mining_energy"),
 }
+
+
+logger = logging.getLogger(__name__)
 
 
 def collect_investment_intelligence(*, symbols: list[str] | None = None,
@@ -105,9 +109,11 @@ def collect_investment_intelligence(*, symbols: list[str] | None = None,
                         source_scope="10-k,item7;10-q,item7;8-k;def14a;20-f;6-k")
                 counts["succeeded"] += 1
             except Exception as exc:
+                detail = f"{type(exc).__name__}: {exc}"[:2000]
+                logger.exception("%s: investment intelligence extraction failed", ticker.symbol)
                 for dataset in coverage_models:
                     _record_coverage(session, ticker.id, dataset, observed_at, CoverageStatus.COLLECTION_FAILED,
-                        reason_code=CoverageReasonCode.PARSE_ERROR, reason_detail=type(exc).__name__, retryable=False,
+                        reason_code=CoverageReasonCode.PARSE_ERROR, reason_detail=detail, retryable=False,
                         source_scope="sec filing sections")
                 counts["failed"] += 1
 

@@ -12,6 +12,12 @@ import re
 
 _SCALE = {"thousand": 1e3, "million": 1e6, "billion": 1e9}
 _NUMBER = r"\d[\d,]*(?:\.\d+)?"
+# SEC inline-XBRL tables can lose cell boundaries during text extraction and
+# concatenate several monetary columns into one enormous number.  No single
+# company debt principal in this screener should approach a quadrillion USD;
+# rejecting it is safer than persisting a fabricated value (or overflowing the
+# database NUMERIC column).
+_MAX_PLAUSIBLE_USD = 1e15
 
 
 def _number(value: str) -> float | None:
@@ -80,13 +86,18 @@ def extract_debt_maturities(text: str) -> list[ExtractedDebt]:
         if number is None:
             continue
         value = number * _SCALE.get((match.group(2) or "").lower(), 1)
+        if value <= 0 or value > _MAX_PLAUSIBLE_USD:
+            continue
         results.append(ExtractedDebt(value, int(match.group(3)), match.group(0)[:500]))
     table_pattern = re.compile(rf"\b(20\d{{2}})\b[^\n]{{0,80}}\$({_NUMBER})\s*(thousand|million|billion)?", re.IGNORECASE)
     for match in table_pattern.finditer(text):
         number = _number(match.group(2))
         if number is None:
             continue
-        result = ExtractedDebt(number * _SCALE.get((match.group(3) or "").lower(), 1), int(match.group(1)), match.group(0)[:500])
+        value = number * _SCALE.get((match.group(3) or "").lower(), 1)
+        if value <= 0 or value > _MAX_PLAUSIBLE_USD:
+            continue
+        result = ExtractedDebt(value, int(match.group(1)), match.group(0)[:500])
         if result not in results:
             results.append(result)
     return results
