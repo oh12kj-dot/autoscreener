@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 
 from autoscreener.scoring.moic import MoicInputs, MoicResult
 from autoscreener.scoring.v5.growth import GrowthUpdate
+from autoscreener.scoring.v5.quality import QualityUpdate
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ def build_future_state(
     horizon_years: int,
     confidence: float,
     growth_update: GrowthUpdate | None = None,
+    quality_update: QualityUpdate | None = None,
     contract_version: str = "v5.phase2",
 ) -> FutureState:
     """Build the complete state namespace without inventing later-phase data."""
@@ -121,6 +123,49 @@ def build_future_state(
         revenue_multiple *= growth_update.revenue_multiple_ratio
         state_updates = growth_update.applied_keys
         status = "updated" if state_updates else "seeded"
+
+    # Phase 4 (docs/model_v5_phase4_handoff_2026-09-03.md 4.3): incremental
+    # ROIC only ever shortens the already-computed duration state, and
+    # per_share_economics only ever decays the already-computed revenue
+    # multiple. Neither can extend duration or amplify the multiple beyond
+    # what growth already established.
+    if quality_update is not None and quality_update.duration_multiplier < 1.0 and duration.value is not None:
+        duration = StateValue(
+            duration.value * quality_update.duration_multiplier, "updated", "v5_quality_state"
+        )
+    if quality_update is not None:
+        revenue_multiple *= quality_update.mean_multiplier
+    if quality_update is not None and quality_update.applied_keys:
+        state_updates = tuple(state_updates) + quality_update.applied_keys
+        status = "updated"
+
+    cash_conversion_effect = (
+        quality_update.signal_effects.get("cash_conversion") if quality_update is not None else None
+    )
+    if cash_conversion_effect is not None:
+        cash_conversion = StateValue(
+            cash_conversion_effect.get("cash_conversion"), "updated", "v5_quality_state"
+        )
+        reinvestment_efficiency = (
+            StateValue(cash_conversion_effect.get("reinvestment_efficiency"), "updated", "v5_quality_state")
+            if cash_conversion_effect.get("reinvestment_efficiency") is not None
+            else StateValue(None, "not_collected", "v5_quality_state")
+        )
+    elif quality_update is not None:
+        # Phase 4 quality machinery ran for this ticker, but the
+        # cash_conversion signal itself was not applied this run (coverage
+        # gate / near-zero net income / no financial history) -- genuinely
+        # missing data, not an unimplemented phase.
+        cash_conversion = StateValue(
+            inputs.fcf_margin, "seed" if inputs.fcf_margin is not None else "not_collected", "financial_statements"
+        )
+        reinvestment_efficiency = StateValue(None, "not_collected", "v5_quality_state")
+    else:
+        cash_conversion = StateValue(
+            inputs.fcf_margin, "seed" if inputs.fcf_margin is not None else "not_collected", "financial_statements"
+        )
+        reinvestment_efficiency = _unsupported("phase4")
+
     return FutureState(
         contract_version=contract_version, status=status,
         growth=GrowthState(
@@ -130,8 +175,8 @@ def build_future_state(
         ),
         economics=EconomicsState(
             _seed(result.terminal_gross_margin),
-            StateValue(inputs.fcf_margin, "seed" if inputs.fcf_margin is not None else "not_collected", "financial_statements"),
-            _unsupported("phase4"),
+            cash_conversion,
+            reinvestment_efficiency,
         ),
         capital=CapitalState(
             _seed(result.dilution_drag), _seed(inputs.net_debt),

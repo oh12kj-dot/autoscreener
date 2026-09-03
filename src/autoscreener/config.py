@@ -481,6 +481,59 @@ class ModelV5GrowthConfig(BaseModel):
         return self
 
 
+class ModelV5QualityConfig(BaseModel):
+    """Phase 4 quality/accounting/reinvestment parameters (GitHub Issue #3 §6).
+
+    Every number here is a challenger parameter that bounds a state or an
+    uncertainty adjustment; none is an additive rank score. Accounting
+    quality widens sigma/left-tail only -- it must never lower a conditional
+    mean (Issue §6.3), and the multipliers/penalties below are all upper
+    bounds enforced in ``quality.py``, not direct point deductions.
+    """
+
+    # NOPAT proxy tax rate (operating_income * (1 - rate)); this is the
+    # inverse of the 0.79 factor already hardcoded at
+    # routes.py:3539-3540/3548 for the same proxy definition.
+    nopat_tax_rate: float = Field(ge=0, le=1, default=0.21)
+    min_annual_periods: int = Field(ge=2, default=2)
+    # Periods further apart than this are not trusted for a CAGR/delta
+    # extrapolation (restated or irregular fiscal-year gaps).
+    max_measurement_years: float = Field(gt=0, default=6.0)
+    min_measurement_days: int = Field(gt=0, default=300)
+
+    # incremental_roic -> growth.duration_years (duration_multiplier <= 1).
+    # Only shortens duration, and only when both growth is positive and
+    # incremental ROIC sits below the hurdle rate; never extends duration.
+    incremental_roic_hurdle_rate: float = Field(default=0.10)
+    incremental_roic_weight: float = Field(ge=0, default=0.15)
+    max_duration_reduction_years: float = Field(gt=0, default=2.0)
+
+    # per_share_economics -> growth mean multiplier (mean_multiplier <= 1).
+    per_share_gap_weight: float = Field(ge=0, le=1, default=0.25)
+    max_mean_multiplier_reduction: float = Field(ge=0, lt=1, default=0.30)
+
+    # cash_conversion -> economics.cash_conversion / reinvestment_efficiency
+    # state values only; no distribution multiplier.
+    cash_conversion_ni_floor_ratio: float = Field(gt=0, default=0.01)
+    cash_conversion_ratio_winsor_abs: float = Field(gt=0, default=5.0)
+
+    # accounting_quality -> uncertainty only (sigma_multiplier >= 1,
+    # left_tail_extra >= 0). Never changes the conditional mean.
+    accounting_sigma_max_multiplier: float = Field(ge=1, default=1.5)
+    accounting_left_tail_extra_max: float = Field(ge=0, default=0.35)
+
+    # reconciliation_confidence -> uncertainty.model_confidence only.
+    reconciliation_confidence_penalty: float = Field(ge=0, le=1, default=0.10)
+
+    ablation_enabled: bool = True
+
+    @model_validator(mode="after")
+    def quality_bounds_ordered(self) -> ModelV5QualityConfig:
+        if self.min_measurement_days >= self.max_measurement_years * 365.25:
+            raise ValueError("min_measurement_days must be < max_measurement_years in days")
+        return self
+
+
 class ModelV5ScenarioWeights(BaseModel):
     downside: float = Field(ge=0, le=1)
     base: float = Field(ge=0, le=1)
@@ -499,12 +552,13 @@ class ModelV5Config(BaseModel):
     enabled: bool = True
     mode: Literal["shadow", "active", "legacy"] = "shadow"
     model_version: Literal["v5"] = "v5"
-    implementation_version: str = Field(default="v5.phase3", pattern=r"^v5\.phase\d+$")
+    implementation_version: str = Field(default="v5.phase4", pattern=r"^v5\.phase\d+$")
     target_horizon_years: int = Field(gt=0, le=30, default=7)
     target_moic: float = Field(gt=1, default=10.0)
     reliability: ModelV5ReliabilityConfig = Field(default_factory=ModelV5ReliabilityConfig)
     uncertainty: ModelV5UncertaintyConfig = Field(default_factory=ModelV5UncertaintyConfig)
     growth: ModelV5GrowthConfig = Field(default_factory=ModelV5GrowthConfig)
+    quality: ModelV5QualityConfig = Field(default_factory=ModelV5QualityConfig)
     scenario_weights: ModelV5ScenarioWeights
     feature_flags: dict[str, bool] = Field(default_factory=dict)
 

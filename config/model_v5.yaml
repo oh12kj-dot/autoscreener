@@ -4,7 +4,7 @@
 enabled: true
 mode: shadow
 model_version: v5
-implementation_version: v5.phase3
+implementation_version: v5.phase4
 target_horizon_years: 7
 target_moic: 10.0
 
@@ -29,6 +29,23 @@ growth:
   tam_min_headroom_ratio: 1.01
   ablation_enabled: true
 
+quality:
+  nopat_tax_rate: 0.21
+  min_annual_periods: 2
+  max_measurement_years: 6.0
+  min_measurement_days: 300
+  incremental_roic_hurdle_rate: 0.10
+  incremental_roic_weight: 0.15
+  max_duration_reduction_years: 2.0
+  per_share_gap_weight: 0.25
+  max_mean_multiplier_reduction: 0.30
+  cash_conversion_ni_floor_ratio: 0.01
+  cash_conversion_ratio_winsor_abs: 5.0
+  accounting_sigma_max_multiplier: 1.5
+  accounting_left_tail_extra_max: 0.35
+  reconciliation_confidence_penalty: 0.10
+  ablation_enabled: true
+
 scenario_weights:
   downside: 0.20
   base: 0.60
@@ -41,8 +58,11 @@ feature_flags:
   operating_kpi_nowcast: true
   consensus_revision: true
   guidance: true
-  incremental_roic: false
-  accounting_quality: false
+  incremental_roic: true
+  accounting_quality: true
+  per_share_economics: true
+  cash_conversion: true
+  reconciliation_confidence: true
   capital_allocation: false
   debt_maturity: false
   liquidity: false

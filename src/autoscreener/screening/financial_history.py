@@ -48,6 +48,13 @@ _CASH_FLOW_ROWS = {
 }
 _TOTAL_DEBT_ROW = "Total Debt"
 _SHARES_ROW = "Ordinary Shares Number"
+# Model v5 Phase 4 accounting-quality rows (financial_history.py:56-71 gap
+# documented in docs/model_v5_phase4_handoff_2026-09-03.md 4.2).
+_TOTAL_ASSETS_ROW = "Total Assets"
+_INVENTORY_ROW = "Inventory"
+_ACCOUNTS_RECEIVABLE_ROW = "Accounts Receivable"
+_GOODWILL_ROW = "Goodwill"
+_SBC_ROW = "Stock Based Compensation"
 
 _MONTHS_PER_QUARTER = 3.0
 
@@ -69,6 +76,18 @@ class FinancialPeriod:
     total_debt: float | None = None
     net_debt: float | None = None
     shares_outstanding: float | None = None
+    # Model v5 Phase 4 (docs/model_v5_phase4_quality_2026-09-03.md): optional
+    # balance-sheet/cash-flow lines needed for accrual-ratio, receivables/
+    # inventory-gap, SBC-to-revenue, and goodwill-to-assets accounting-quality
+    # checks. Added as trailing keyword-only-by-convention fields so every
+    # existing positional/keyword construction of this dataclass (v4 shares
+    # this module) is unaffected; a row this repository does not have simply
+    # stays None rather than being estimated.
+    total_assets: float | None = None
+    inventory: float | None = None
+    accounts_receivable: float | None = None
+    goodwill: float | None = None
+    stock_based_compensation: float | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +167,11 @@ def _build_periods(
     cash = _cash_row_map(balance_sheet)
     total_debt = _row_map(balance_sheet, _TOTAL_DEBT_ROW)
     shares = _row_map(balance_sheet, _SHARES_ROW)
+    total_assets = _row_map(balance_sheet, _TOTAL_ASSETS_ROW)
+    inventory = _row_map(balance_sheet, _INVENTORY_ROW)
+    accounts_receivable = _row_map(balance_sheet, _ACCOUNTS_RECEIVABLE_ROW)
+    goodwill = _row_map(balance_sheet, _GOODWILL_ROW)
+    sbc = _row_map(cash_flow, _SBC_ROW)
 
     periods: list[FinancialPeriod] = []
     for period_end in sorted(period_ends)[-limit:]:
@@ -174,6 +198,11 @@ def _build_periods(
                 total_debt=_scale(debt_v, fx),
                 net_debt=_scale(net_debt_v, fx),
                 shares_outstanding=shares.get(period_end),  # 通貨と無関係
+                total_assets=_scale(total_assets.get(period_end), fx),
+                inventory=_scale(inventory.get(period_end), fx),
+                accounts_receivable=_scale(accounts_receivable.get(period_end), fx),
+                goodwill=_scale(goodwill.get(period_end), fx),
+                stock_based_compensation=_scale(sbc.get(period_end), fx),
             )
         )
     return periods

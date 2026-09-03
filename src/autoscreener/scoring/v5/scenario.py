@@ -28,18 +28,33 @@ def build_scenarios(
     confidence: float,
     config: ModelV5Config,
     conditional_mean_multiplier: float = 1.0,
+    sigma_multiplier: float = 1.0,
+    left_tail_extra: float = 0.0,
 ) -> tuple[ReturnScenario, ...]:
     """Expand one structural seed into a mean-preserving scenario mixture.
 
     Confidence widens dispersion, not the mean. Scenario location multipliers
     are normalised so their weighted conditional expectation exactly equals the
     seed lognormal expectation. Survival is held constant until Phase 5/6.
+
+    ``sigma_multiplier``/``left_tail_extra`` are the Phase 4 accounting-quality
+    hooks (docs/model_v5_phase4_handoff_2026-09-03.md 4.5): they widen sigma
+    (uniformly, and the downside scenario further) but never enter
+    ``conditional_mean`` below, so the conditional expectation always stays
+    exactly ``seed_conditional_mean * raw_multipliers[name] / normaliser``
+    regardless of how much sigma widens -- accounting quality can only ever
+    move probability mass, never the point estimate. Their defaults (1.0/0.0)
+    reproduce Phase 2/3 output exactly.
     """
     confidence = max(0.0, min(1.0, confidence))
+    if sigma_multiplier < 1.0:
+        raise ValueError("sigma_multiplier must be >= 1.0")
+    if left_tail_extra < 0.0:
+        raise ValueError("left_tail_extra must be >= 0.0")
     uncertainty = config.uncertainty
     widened_sigma = result.log_moic_sigma * (
         1.0 + uncertainty.confidence_sigma_multiplier * (1.0 - confidence)
-    )
+    ) * sigma_multiplier
     shift = uncertainty.scenario_log_shift_sigma * result.log_moic_sigma
     weights = {
         "downside": config.scenario_weights.downside,
@@ -57,7 +72,10 @@ def build_scenarios(
 
     scenarios: list[ReturnScenario] = []
     for name in ("downside", "base", "upside"):
-        scenario_sigma = widened_sigma * (uncertainty.left_tail_multiplier if name == "downside" else 1.0)
+        tail_multiplier = (
+            uncertainty.left_tail_multiplier + left_tail_extra if name == "downside" else 1.0
+        )
+        scenario_sigma = widened_sigma * tail_multiplier
         conditional_mean = seed_conditional_mean * raw_multipliers[name] / normaliser
         log_mu = math.log(conditional_mean) - scenario_sigma**2 / 2.0
         scenarios.append(ReturnScenario(

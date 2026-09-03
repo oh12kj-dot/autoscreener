@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from autoscreener.db.models import PriceSnapshot, RawSnapshot, Ticker, UniverseSnapshot
 from autoscreener.scoring.engine import build_inputs_for_ticker
 from autoscreener.scoring.moic import MoicInputs
+from autoscreener.screening.financial_history import FinancialPeriod, build_financial_history
 from autoscreener.validation.rules import sanitize_info
 
 
@@ -23,6 +24,13 @@ class V5PitInput:
     raw_available_from: datetime.date | None
     price_as_of: datetime.date | None
     input_status: str
+    # Model v5 Phase 4 (docs/model_v5_phase4_handoff_2026-09-03.md 4.2): the
+    # same raw_snapshots.payload already loaded above, reduced to annual
+    # FinancialPeriod rows visible as of ``as_of``. Keeping the PIT filter
+    # (period_end <= as_of) here means quality.py never re-derives it and
+    # never re-queries raw_snapshots.
+    financial_annual: tuple[FinancialPeriod, ...] = ()
+    currency_conversion_unavailable: bool = False
 
     def evidence(self) -> dict:
         return {
@@ -34,7 +42,10 @@ class V5PitInput:
             "pit_rules": {
                 "raw_snapshot": "available_from <= as_of",
                 "price": "trade_date <= as_of",
+                "financial_annual": "period_end <= as_of",
             },
+            "financial_annual_periods": len(self.financial_annual),
+            "currency_conversion_unavailable": self.currency_conversion_unavailable,
         }
 
 
@@ -70,6 +81,10 @@ def build_v5_pit_inputs(session: Session, *, as_of: datetime.date) -> list[V5Pit
         info = sanitize_info(raw.payload.get("info") or {})
         sector = info.get("sector") or ticker.sector
         inputs = build_inputs_for_ticker(raw.payload, prices, as_of, sector)
+        history = build_financial_history(raw.payload)
+        financial_annual = tuple(
+            period for period in history.annual if period.period_end <= as_of
+        )
         built.append(V5PitInput(
             ticker.id,
             ticker.symbol,
@@ -79,5 +94,7 @@ def build_v5_pit_inputs(session: Session, *, as_of: datetime.date) -> list[V5Pit
             raw.available_from,
             price_as_of,
             "collected_with_data" if inputs is not None else "collected_no_finding",
+            financial_annual,
+            history.currency_conversion_unavailable,
         ))
     return built

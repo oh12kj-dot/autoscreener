@@ -85,10 +85,30 @@ FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
           notes="Same-period revision is a bounded observation update, never ground truth."),
     _spec("guidance", "management_guidance_snapshots", "revenue_growth_path", freshness_days=180,
           required_coverage=0.50, notes="Validated revenue guidance only; missing guidance remains neutral."),
-    _spec("incremental_roic", "reinvestment_quality", "growth_duration", direction="higher_better",
-          transform="robust_z", notes="Phase 4 quality and persistence state."),
-    _spec("accounting_quality", "accounting_quality", "uncertainty", direction="higher_better",
-          transform="robust_z", notes="Affects uncertainty rather than a rank penalty."),
+    _spec("incremental_roic", "raw_snapshots_financial_history", "growth_duration", direction="higher_better",
+          transform="robust_z", enabled=True, required_coverage=0.90, min_reliability=0.5,
+          notes="Phase 4: ANOPAT/AIC only shortens duration when growth is high and ROIC is below "
+                "the config hurdle; never extends duration on its own."),
+    _spec("per_share_economics", "raw_snapshots_financial_history", "growth_mean_multiplier",
+          direction="lower_better", transform="robust_z", enabled=True, required_coverage=0.90,
+          min_reliability=0.5,
+          notes="Phase 4: gross-profit/FCF per-share vs total CAGR gap decays the growth mean "
+                "multiplier; deliberately excludes revenue to avoid double-counting v4's "
+                "capital.diluted_share_factor (dilution_drag)."),
+    _spec("cash_conversion", "raw_snapshots_financial_history", "economics_cash_conversion",
+          transform="identity", enabled=True, required_coverage=0.90, min_reliability=0.5,
+          notes="Phase 4: fills economics.cash_conversion / reinvestment_efficiency (OCF/NI, "
+                "FCF/NI) which Phase 2/3 left unsupported. Diagnostic state only; no distribution "
+                "multiplier."),
+    _spec("accounting_quality", "raw_snapshots_financial_history", "uncertainty", direction="higher_better",
+          transform="robust_z", enabled=True, required_coverage=0.90, min_reliability=0.5,
+          notes="Phase 4: accrual ratio / weak cash conversion / receivables & inventory gap / "
+                "SBC / goodwill severity widens sigma and the left tail only; the conditional "
+                "mean is never lowered (Issue #3 section 6.3)."),
+    _spec("reconciliation_confidence", "xbrl_facts", "uncertainty_confidence",
+          transform="identity", enabled=True, required_coverage=0.80, min_reliability=0.5,
+          notes="Phase 4: yfinance-vs-SEC-XBRL mismatch/magnitude_mismatch only lowers "
+                "model_confidence; the state is never moved."),
     _spec("capital_allocation", "capital_allocation_events", "capital_allocation_path",
           notes="Event-to-state mapping is introduced in Phase 5."),
     _spec("debt_maturity", "debt_instruments", "refinancing_survival",
