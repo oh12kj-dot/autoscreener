@@ -534,6 +534,50 @@ class ModelV5QualityConfig(BaseModel):
         return self
 
 
+class ModelV5CapitalConfig(BaseModel):
+    """Phase 5 debt-maturity/liquidity/capital-allocation parameters (Issue #3 §7/§8/§12).
+
+    Every parameter here bounds a multiplicative *reduction* applied to
+    ``survival_probability`` -- none can ever raise it above the v4-seeded
+    baseline. Good liquidity/no near-term maturity wall/no aggressive
+    capital return gets ``1.0`` (no bonus), matching the same
+    never-reward-merely-having-data convention as growth.py/quality.py.
+    """
+
+    # debt_maturity: principal due within 12 months (routes.py:3619's exact
+    # definition, reused) vs cash + revolver_available.
+    debt_maturity_weight: float = Field(ge=0, default=0.25)
+    debt_maturity_min_survival_multiplier: float = Field(gt=0, le=1, default=0.85)
+
+    # liquidity: cash runway from the latest annual FCF burn (only when FCF
+    # is negative; a profitable/FCF-positive company gets no bonus either).
+    liquidity_runway_floor_months: float = Field(gt=0, default=12.0)
+    liquidity_weight: float = Field(ge=0, default=0.25)
+    liquidity_min_survival_multiplier: float = Field(gt=0, le=1, default=0.85)
+
+    # capital_allocation: trailing-window committed cash return (buyback +
+    # dividend) net of raised capital (debt_raise + equity_raise), relative
+    # to the cash balance. Issue §7: this reads only already-announced
+    # events in a bounded trailing window -- it never extrapolates a
+    # historical buyback rate forward.
+    capital_allocation_lookback_days: int = Field(gt=0, default=365)
+    capital_allocation_weight: float = Field(ge=0, default=0.20)
+    capital_allocation_min_survival_multiplier: float = Field(gt=0, le=1, default=0.90)
+
+    ablation_enabled: bool = True
+
+    @model_validator(mode="after")
+    def capital_bounds_ordered(self) -> ModelV5CapitalConfig:
+        floors = (
+            self.debt_maturity_min_survival_multiplier,
+            self.liquidity_min_survival_multiplier,
+            self.capital_allocation_min_survival_multiplier,
+        )
+        if any(floor <= 0 or floor > 1 for floor in floors):
+            raise ValueError("survival multiplier floors must lie in (0, 1]")
+        return self
+
+
 class ModelV5ScenarioWeights(BaseModel):
     downside: float = Field(ge=0, le=1)
     base: float = Field(ge=0, le=1)
@@ -552,13 +596,14 @@ class ModelV5Config(BaseModel):
     enabled: bool = True
     mode: Literal["shadow", "active", "legacy"] = "shadow"
     model_version: Literal["v5"] = "v5"
-    implementation_version: str = Field(default="v5.phase4", pattern=r"^v5\.phase\d+$")
+    implementation_version: str = Field(default="v5.phase5", pattern=r"^v5\.phase\d+$")
     target_horizon_years: int = Field(gt=0, le=30, default=7)
     target_moic: float = Field(gt=1, default=10.0)
     reliability: ModelV5ReliabilityConfig = Field(default_factory=ModelV5ReliabilityConfig)
     uncertainty: ModelV5UncertaintyConfig = Field(default_factory=ModelV5UncertaintyConfig)
     growth: ModelV5GrowthConfig = Field(default_factory=ModelV5GrowthConfig)
     quality: ModelV5QualityConfig = Field(default_factory=ModelV5QualityConfig)
+    capital: ModelV5CapitalConfig = Field(default_factory=ModelV5CapitalConfig)
     scenario_weights: ModelV5ScenarioWeights
     feature_flags: dict[str, bool] = Field(default_factory=dict)
 

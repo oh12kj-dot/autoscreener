@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 from autoscreener.scoring.moic import MoicInputs, MoicResult
+from autoscreener.scoring.v5.balance_sheet import CapitalUpdate
 from autoscreener.scoring.v5.growth import GrowthUpdate
 from autoscreener.scoring.v5.quality import QualityUpdate
 
@@ -94,6 +95,7 @@ def build_future_state(
     confidence: float,
     growth_update: GrowthUpdate | None = None,
     quality_update: QualityUpdate | None = None,
+    capital_update: CapitalUpdate | None = None,
     contract_version: str = "v5.phase2",
 ) -> FutureState:
     """Build the complete state namespace without inventing later-phase data."""
@@ -166,6 +168,21 @@ def build_future_state(
         )
         reinvestment_efficiency = _unsupported("phase4")
 
+    # Phase 5 (docs/model_v5_phase5_capital_allocation_2026-09-03.md):
+    # debt-maturity/liquidity/capital-allocation shortfalls only ever shrink
+    # survival_probability below the v4 seed (never a bonus) -- the first
+    # phase to move it; Phase 2/3/4 held it fixed.
+    survival_value = result.survival_probability
+    if capital_update is not None and capital_update.applied_keys:
+        survival_value = result.survival_probability * capital_update.survival_multiplier
+        state_updates = tuple(state_updates) + capital_update.applied_keys
+        status = "updated"
+    survival = StateValue(
+        survival_value,
+        "updated" if capital_update is not None and capital_update.applied_keys else "seed",
+        "v5_capital_state" if capital_update is not None and capital_update.applied_keys else "v4_structural_model",
+    )
+
     return FutureState(
         contract_version=contract_version, status=status,
         growth=GrowthState(
@@ -184,7 +201,7 @@ def build_future_state(
         ),
         valuation=ValuationState(_seed(result.current_ev_to_gross_profit), _seed(terminal_multiple)),
         competing_risk=CompetingRiskState(
-            _seed(result.survival_probability), _unsupported("phase6"), _unsupported("phase6"),
+            survival, _unsupported("phase6"), _unsupported("phase6"),
         ),
         uncertainty=UncertaintyState(
             _seed(result.log_moic_sigma),

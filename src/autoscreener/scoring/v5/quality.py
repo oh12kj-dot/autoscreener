@@ -645,6 +645,14 @@ def apply_quality_features(
             incremental_ratio = (
                 reduced_multiple / baseline_multiple if baseline_multiple > 0 else 1.0
             )
+            # Audit fix 2 (2026-09-03): when initial_rate < terminal_rate (a
+            # company whose starting growth is below its own terminal rate),
+            # accelerating fade toward the terminal rate *raises* the path
+            # instead of shortening it -- 22/105 real ablations showed this
+            # sign flip (a low-incremental-ROIC penalty must never become a
+            # bonus). The ratio is a compression effect only; it must never
+            # exceed 1.0 regardless of which direction the path moved.
+            incremental_ratio = min(1.0, incremental_ratio)
             # Composes multiplicatively with per_share_economics below and
             # with growth_update.revenue_multiple_ratio in engine.py, so the
             # duration compression this signal adds on top of Phase 3's

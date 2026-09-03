@@ -109,12 +109,23 @@ FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
           transform="identity", enabled=True, required_coverage=0.80, min_reliability=0.5,
           notes="Phase 4: yfinance-vs-SEC-XBRL mismatch/magnitude_mismatch only lowers "
                 "model_confidence; the state is never moved."),
-    _spec("capital_allocation", "capital_allocation_events", "capital_allocation_path",
-          notes="Event-to-state mapping is introduced in Phase 5."),
+    _spec("capital_allocation", "capital_allocation_events", "refinancing_survival",
+          direction="lower_better", transform="bounded_trailing_window", enabled=True,
+          required_coverage=0.50, min_reliability=0.5,
+          notes="Phase 5: trailing-window committed cash return (buyback+dividend) net of "
+                "raised capital (debt_raise+equity_raise), relative to cash balance. Reads "
+                "only already-announced events in a bounded window -- never extrapolates a "
+                "historical buyback rate forward (Issue #3 section 7)."),
     _spec("debt_maturity", "debt_instruments", "refinancing_survival",
-          notes="Maturity walls affect survival and left-tail scenarios."),
+          direction="lower_better", transform="bounded_ratio", enabled=True,
+          required_coverage=0.50, min_reliability=0.5,
+          notes="Phase 5: 12-month debt maturity wall (routes.py:3619's due_12m definition, "
+                "reused) vs cash + revolver_available. Only ever shortens survival_probability "
+                "(Phase 2/3/4 held it fixed); never grants a bonus for being well covered."),
     _spec("liquidity", "liquidity_facilities", "refinancing_survival", direction="higher_better",
-          notes="Separates short-term liquidity from long-term leverage."),
+          transform="bounded_runway", enabled=True, required_coverage=0.50, min_reliability=0.5,
+          notes="Phase 5: cash runway from the latest annual FCF burn, separate from the "
+                "long-term-leverage-driven debt_maturity signal above."),
     _spec("customer_concentration", "customer_concentrations", "tail_risk",
           notes="Concentration widens idiosyncratic left tail."),
     _spec("litigation", "litigation_events", "tail_risk", historical=False,

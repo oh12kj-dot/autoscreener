@@ -272,7 +272,7 @@ def test_shadow_run_persists_feature_ablation_without_touching_v4(monkeypatch):
             run = session.get(ModelRun, run_id)
             score = session.query(ModelScore).filter_by(run_id=run_id).one()
             impact = score.features["ablation"]["consensus_revision"]
-            assert score.states["contract_version"] == "v5.phase4"
+            assert score.states["contract_version"] == "v5.phase5"
             assert score.states["state_updates_applied"] == ["consensus_revision"]
             assert impact["scenario_impact"]["expected_cagr"] > 0
             assert impact["status"] == "computed"

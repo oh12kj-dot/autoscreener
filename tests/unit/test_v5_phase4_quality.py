@@ -160,6 +160,35 @@ def test_incremental_roic_zero_growth_is_reported_as_no_change_not_applied():
     assert no_growth.mean_multiplier == pytest.approx(1.0)
 
 
+def test_incremental_roic_never_increases_mean_multiplier_when_initial_below_terminal():
+    """Audit fix 2 (2026-09-03): when initial_rate < terminal_rate,
+    accelerating fade toward the terminal rate raises the path instead of
+    shortening it (22/105 real 2026-09-02 ablations showed a positive
+    DeltaP(target) from a signal meant to be a penalty). The incremental
+    ratio must be clamped to <= 1.0 regardless of which direction the
+    recomposed path moves."""
+    from autoscreener.scoring.v5.growth import GrowthUpdate
+
+    config = load_model_v5_config()
+    low_roic_signal = _signal("incremental_roic", 0.30, evidence={})
+    growth_update = GrowthUpdate(
+        baseline_initial_rate=0.10, updated_initial_rate=0.10, terminal_rate=0.50,
+        baseline_duration_years=2.4, updated_duration_years=2.4,
+        baseline_fade=0.75, updated_fade=0.75, revenue_multiple_ratio=1.0,
+        applied_keys=(), signal_effects={},
+    )
+    update = apply_quality_features(
+        _result(initial=0.10, terminal=0.50), _features(low_roic_signal), config=config,
+        growth_update=growth_update,
+    )
+    assert update.applied_keys == ("incremental_roic",)
+    assert update.mean_multiplier <= 1.0 + 1e-12
+    assert (
+        update.signal_effects["incremental_roic"]["revenue_multiple_ratio_from_duration"]
+        <= 1.0 + 1e-12
+    )
+
+
 def test_incremental_roic_above_hurdle_never_extends_duration():
     config = load_model_v5_config()
     # value is the shortfall below the hurdle rate; 0.0 = at/above hurdle,
@@ -552,7 +581,7 @@ def test_shadow_run_persists_quality_ablation_without_touching_v4(monkeypatch):
             run = session.get(ModelRun, run_id)
             score = session.query(ModelScore).filter_by(run_id=run_id).one()
             impact = score.features["ablation"]["accounting_quality"]
-            assert score.states["contract_version"] == "v5.phase4"
+            assert score.states["contract_version"] == "v5.phase5"
             assert score.states["state_updates_applied"] == ["accounting_quality"]
             assert score.states["economics"]["reinvestment_efficiency"]["status"] == "not_collected"
             assert impact["status"] == "computed"

@@ -4,7 +4,7 @@
 enabled: true
 mode: shadow
 model_version: v5
-implementation_version: v5.phase4
+implementation_version: v5.phase5
 target_horizon_years: 7
 target_moic: 10.0
 
@@ -46,6 +46,17 @@ quality:
   reconciliation_confidence_penalty: 0.10
   ablation_enabled: true
 
+capital:
+  debt_maturity_weight: 0.25
+  debt_maturity_min_survival_multiplier: 0.85
+  liquidity_runway_floor_months: 12.0
+  liquidity_weight: 0.25
+  liquidity_min_survival_multiplier: 0.85
+  capital_allocation_lookback_days: 365
+  capital_allocation_weight: 0.20
+  capital_allocation_min_survival_multiplier: 0.90
+  ablation_enabled: true
+
 scenario_weights:
   downside: 0.20
   base: 0.60
@@ -63,9 +74,14 @@ feature_flags:
   per_share_economics: true
   cash_conversion: true
   reconciliation_confidence: true
-  capital_allocation: false
-  debt_maturity: false
-  liquidity: false
+  capital_allocation: true
+  debt_maturity: true
+  liquidity: true
+  # future_dilution_capacity is deliberately NOT introduced in Phase 5:
+  # collect_dilution.py's own docstring states dilution_capacity is never
+  # read by evaluate_gates or scoring/ ("原則3"). Wiring it into v5 scoring
+  # (even as an uncertainty-only signal) would silently override that
+  # explicit existing principle; see the Phase 5 doc's Deviations section.
   customer_concentration: false
   litigation: false
   macro_regime: false

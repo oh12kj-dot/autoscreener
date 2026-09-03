@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import subprocess
 import uuid
 from dataclasses import replace
 
@@ -20,6 +21,12 @@ from autoscreener.db.models import ModelRun, ModelScore, ObjectiveScore
 from autoscreener.db.session import session_scope
 from autoscreener.scoring.engine import cross_section_for
 from autoscreener.scoring.moic import MoicResult, compute_moic
+from autoscreener.scoring.v5.balance_sheet import (
+    CapitalFeatureSet,
+    CapitalUpdate,
+    apply_capital_features,
+    build_capital_feature_sets,
+)
 from autoscreener.scoring.v5.distribution import scenario_distribution, unavailable_distribution
 from autoscreener.scoring.v5.feature_registry import feature_registry_payload
 from autoscreener.scoring.v5.growth import (
@@ -44,6 +51,38 @@ from autoscreener.scoring.v5.state_model import build_future_state
 # separate module constant can never silently drift from config/model_v5.yaml.
 
 
+def _code_revision_info() -> dict:
+    """Best-effort ``git rev-parse HEAD`` + working-tree dirty flag.
+
+    Audit finding (2026-09-03): two real runs shared the identical
+    ``config_hash``/``implementation_version`` (``v5.phase4``) while running
+    different code -- config_hash only fingerprints config/registry content,
+    never the Python source, so a config-only comparison cannot tell two
+    such runs apart. This is a diagnostic best-effort read, not a scoring
+    input: any failure (git missing, not a repo, timeout) is recorded as an
+    explicit ``null`` + reason rather than failing the run. Never backfilled
+    onto pre-existing runs -- the append-only history is not rewritten.
+    """
+    from autoscreener.config import PROJECT_ROOT
+
+    def _run(args: list[str]) -> str | None:
+        try:
+            result = subprocess.run(
+                args, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=5, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    commit = _run(["git", "rev-parse", "HEAD"])
+    status = _run(["git", "status", "--porcelain"])
+    return {
+        "commit": commit,
+        "dirty": (bool(status) if status is not None else None) if commit is not None else None,
+        "reason": None if commit is not None else "git_unavailable_or_not_a_repo",
+    }
+
+
 def v5_config_hash(model_config: ModelV5Config, objectives_config: ObjectivesConfig) -> str:
     canonical = json.dumps(
         {
@@ -62,12 +101,14 @@ def _feature_payload(
     registry: list[dict],
     growth_features: GrowthFeatureSet,
     quality_features: QualityFeatureSet,
+    capital_features: CapitalFeatureSet,
     growth_update: GrowthUpdate | None,
     quality_update: QualityUpdate | None,
+    capital_update: CapitalUpdate | None,
     ablation: dict,
 ) -> dict:
     payload = {
-        "registry_version": "phase4",
+        "registry_version": "phase5",
         "pit_evidence": item.evidence(),
         "contracts": [
             {
@@ -80,20 +121,24 @@ def _feature_payload(
         ],
         "growth_features": growth_features.to_dict(),
         "quality_features": quality_features.to_dict(),
+        "capital_features": capital_features.to_dict(),
         "ablation": ablation,
     }
     if growth_update is not None:
         payload["growth_update"] = growth_update.to_dict()
     if quality_update is not None:
         payload["quality_update"] = quality_update.to_dict()
+    if capital_update is not None:
+        payload["capital_update"] = capital_update.to_dict()
     return payload
 
 
 def _score_warnings(
     item: V5PitInput, has_distribution: bool,
     growth_features: GrowthFeatureSet, quality_features: QualityFeatureSet,
+    capital_features: CapitalFeatureSet,
 ) -> list[str]:
-    warnings = ["phase4_state_updates_shadow_only", "not_for_production"]
+    warnings = ["phase5_state_updates_shadow_only", "not_for_production"]
     if item.raw_snapshot_id is not None:
         warnings.append("financial_statement_pit_is_approximate")
     if item.input_status == "not_collected":
@@ -101,7 +146,8 @@ def _score_warnings(
     elif not has_distribution:
         warnings.append("distribution_unavailable")
     disabled = [
-        signal.key for signal in (*growth_features.signals, *quality_features.signals)
+        signal.key
+        for signal in (*growth_features.signals, *quality_features.signals, *capital_features.signals)
         if signal.status == "runtime_disabled_low_coverage"
     ]
     if disabled:
@@ -114,37 +160,45 @@ def _distribution_for(
     *,
     growth_features: GrowthFeatureSet,
     quality_features: QualityFeatureSet,
+    capital_features: CapitalFeatureSet,
     base_confidence: float,
     model_config: ModelV5Config,
-) -> tuple[GrowthUpdate, QualityUpdate, float, dict]:
-    """Compute one (growth_update, quality_update, confidence, distribution) tuple.
+) -> tuple[GrowthUpdate, QualityUpdate, CapitalUpdate, float, dict]:
+    """Compute one (growth_update, quality_update, capital_update, confidence,
+    distribution) tuple.
 
-    The single place both Phase 3 and Phase 4 state updates are combined into
-    a distribution, so the leave-one-out ablation loop below can call this
-    with any signal excluded from either feature set and get a directly
+    The single place Phase 3, 4, and 5 state updates are combined into a
+    distribution, so the leave-one-out ablation loop below can call this
+    with any signal excluded from any feature set and get a directly
     comparable counterfactual, instead of duplicating the combination logic
     per phase (handoff 4.8: do not copy-paste the Phase 3 ablation loop).
     """
     confidence = max(
         0.0,
-        min(1.0, base_confidence + growth_features.confidence_delta + quality_features.confidence_delta),
+        min(
+            1.0,
+            base_confidence + growth_features.confidence_delta
+            + quality_features.confidence_delta + capital_features.confidence_delta,
+        ),
     )
     growth_update = apply_growth_features(result, growth_features, config=model_config)
     quality_update = apply_quality_features(
         result, quality_features, config=model_config, growth_update=growth_update,
     )
+    capital_update = apply_capital_features(result, capital_features, config=model_config)
     mean_multiplier = growth_update.revenue_multiple_ratio * quality_update.mean_multiplier
     scenarios = build_scenarios(
         result, confidence=confidence, config=model_config,
         conditional_mean_multiplier=mean_multiplier,
         sigma_multiplier=quality_update.sigma_multiplier,
         left_tail_extra=quality_update.left_tail_extra,
+        survival_multiplier=capital_update.survival_multiplier,
     )
     distribution = scenario_distribution(
         scenarios, horizon_years=model_config.target_horizon_years,
         target_moic=model_config.target_moic, confidence=confidence,
     )
-    return growth_update, quality_update, confidence, distribution
+    return growth_update, quality_update, capital_update, confidence, distribution
 
 
 def _ablate(
@@ -153,20 +207,31 @@ def _ablate(
     result: MoicResult,
     growth_features: GrowthFeatureSet,
     quality_features: QualityFeatureSet,
+    capital_features: CapitalFeatureSet,
     base_confidence: float,
     model_config: ModelV5Config,
     full_growth_update: GrowthUpdate,
     full_quality_update: QualityUpdate,
+    full_capital_update: CapitalUpdate,
     full_confidence: float,
     full_distribution: dict,
 ) -> dict:
-    """Leave-one-feature-out counterfactual, growth or quality key alike."""
+    """Leave-one-feature-out counterfactual, growth/quality/capital key alike."""
     is_growth_key = any(signal.key == key for signal in growth_features.signals)
+    is_quality_key = any(signal.key == key for signal in quality_features.signals)
     without_growth = growth_features.excluding(key) if is_growth_key else growth_features
-    without_quality = quality_features if is_growth_key else quality_features.excluding(key)
-    without_growth_update, without_quality_update, without_confidence, without_distribution = _distribution_for(
+    without_quality = quality_features.excluding(key) if is_quality_key else quality_features
+    without_capital = (
+        capital_features.excluding(key) if not is_growth_key and not is_quality_key
+        else capital_features
+    )
+    (
+        without_growth_update, without_quality_update, without_capital_update,
+        without_confidence, without_distribution,
+    ) = _distribution_for(
         result, growth_features=without_growth, quality_features=without_quality,
-        base_confidence=base_confidence, model_config=model_config,
+        capital_features=without_capital, base_confidence=base_confidence,
+        model_config=model_config,
     )
     full_duration = full_growth_update.updated_duration_years * full_quality_update.duration_multiplier
     without_duration = without_growth_update.updated_duration_years * without_quality_update.duration_multiplier
@@ -182,15 +247,20 @@ def _ablate(
             "revenue_multiple_ratio": full_mean - without_mean,
             "sigma_multiplier": full_quality_update.sigma_multiplier - without_quality_update.sigma_multiplier,
             "left_tail_extra": full_quality_update.left_tail_extra - without_quality_update.left_tail_extra,
+            "survival_multiplier": full_capital_update.survival_multiplier - without_capital_update.survival_multiplier,
             "model_confidence": full_confidence - without_confidence,
         },
         "scenario_impact": {
             "p_target": full_distribution["p_target"] - without_distribution["p_target"],
             "expected_cagr": full_distribution["expected_cagr"] - without_distribution["expected_cagr"],
+            "p_moic_below_1_0": (
+                full_distribution["p_moic_below_1_0"] - without_distribution["p_moic_below_1_0"]
+            ),
         },
         "without_feature": {
             "p_target": without_distribution["p_target"],
             "expected_cagr": without_distribution["expected_cagr"],
+            "p_moic_below_1_0": without_distribution["p_moic_below_1_0"],
             "model_confidence": without_confidence,
         },
     }
@@ -243,6 +313,7 @@ def run_v5_shadow(
 
     registry = feature_registry_payload(model_config.feature_flags)
     current_hash = v5_config_hash(model_config, objectives_config)
+    code_revision = _code_revision_info()
     run_id = uuid.uuid4()
     started_at = datetime.datetime.now(datetime.timezone.utc)
     with session_scope() as session:
@@ -255,8 +326,12 @@ def run_v5_shadow(
             status="running",
             population_count=0,
             started_at=started_at,
-            metrics=None,
-            warnings=["phase4_quality_state_updates", "v4_champion_unchanged"],
+            # code_revision is recorded here (not only at completion) so it
+            # survives even a run that later fails -- config_hash alone
+            # cannot distinguish two runs on different code with identical
+            # config/registry content (2026-09-03 audit finding).
+            metrics={"code_revision": code_revision},
+            warnings=["phase5_capital_state_updates", "v4_champion_unchanged"],
         ))
 
     try:
@@ -277,6 +352,9 @@ def run_v5_shadow(
             quality_feature_sets = build_quality_feature_sets(
                 session, items, as_of=as_of, config=model_config
             )
+            capital_feature_sets = build_capital_feature_sets(
+                session, items, as_of=as_of, config=model_config
+            )
             base_count = 0
             empty_count = 0
             objective_rows: dict[str, list[ObjectiveScore]] = {}
@@ -295,7 +373,10 @@ def run_v5_shadow(
                 empty_count += int(not has_distribution)
                 growth_features = growth_feature_sets[item.ticker_id]
                 quality_features = quality_feature_sets[item.ticker_id]
-                all_signals = (*growth_features.signals, *quality_features.signals)
+                capital_features = capital_feature_sets[item.ticker_id]
+                all_signals = (
+                    *growth_features.signals, *quality_features.signals, *capital_features.signals,
+                )
                 total_signal_slots += len(all_signals)
                 base_confidence = (
                     model_config.reliability.ready_input_confidence
@@ -313,15 +394,19 @@ def run_v5_shadow(
                 }
                 growth_update: GrowthUpdate | None = None
                 quality_update: QualityUpdate | None = None
+                capital_update: CapitalUpdate | None = None
                 if result is None:
                     confidence = base_confidence
                     distribution = unavailable_distribution(
                         target_moic=model_config.target_moic, confidence=confidence
                     )
                 else:
-                    growth_update, quality_update, confidence, distribution = _distribution_for(
+                    (
+                        growth_update, quality_update, capital_update, confidence, distribution,
+                    ) = _distribution_for(
                         result, growth_features=growth_features, quality_features=quality_features,
-                        base_confidence=base_confidence, model_config=model_config,
+                        capital_features=capital_features, base_confidence=base_confidence,
+                        model_config=model_config,
                     )
                     if quality_update.no_effect_keys:
                         quality_features = _reconcile_quality_features(quality_features, quality_update)
@@ -330,9 +415,14 @@ def run_v5_shadow(
                                 "status": "not_computed",
                                 "reason": "no_change_zero_growth_or_reduction",
                             }
-                    applied_keys = (*growth_update.applied_keys, *quality_update.applied_keys)
+                    applied_keys = (
+                        *growth_update.applied_keys, *quality_update.applied_keys,
+                        *capital_update.applied_keys,
+                    )
                     ablation_enabled = (
-                        model_config.growth.ablation_enabled and model_config.quality.ablation_enabled
+                        model_config.growth.ablation_enabled
+                        and model_config.quality.ablation_enabled
+                        and model_config.capital.ablation_enabled
                     )
                     for key in applied_keys:
                         applied_counts[key] = applied_counts.get(key, 0) + 1
@@ -340,9 +430,10 @@ def run_v5_shadow(
                             continue
                         ablation[key] = _ablate(
                             key, result=result, growth_features=growth_features,
-                            quality_features=quality_features, base_confidence=base_confidence,
-                            model_config=model_config, full_growth_update=growth_update,
-                            full_quality_update=quality_update, full_confidence=confidence,
+                            quality_features=quality_features, capital_features=capital_features,
+                            base_confidence=base_confidence, model_config=model_config,
+                            full_growth_update=growth_update, full_quality_update=quality_update,
+                            full_capital_update=capital_update, full_confidence=confidence,
                             full_distribution=distribution,
                         )
                         ablation_count += 1
@@ -353,6 +444,7 @@ def run_v5_shadow(
                     confidence=confidence,
                     growth_update=growth_update,
                     quality_update=quality_update,
+                    capital_update=capital_update,
                     contract_version=model_config.implementation_version,
                 )
                 session.add(ModelScore(
@@ -363,11 +455,13 @@ def run_v5_shadow(
                     distribution=distribution,
                     states=future_state.to_dict(),
                     features=_feature_payload(
-                        item, registry, growth_features, quality_features,
-                        growth_update, quality_update, ablation,
+                        item, registry, growth_features, quality_features, capital_features,
+                        growth_update, quality_update, capital_update, ablation,
                     ),
                     confidence=confidence,
-                    warnings=_score_warnings(item, has_distribution, growth_features, quality_features),
+                    warnings=_score_warnings(
+                        item, has_distribution, growth_features, quality_features, capital_features
+                    ),
                 ))
                 objective_results = evaluate_objectives(
                     distribution,
@@ -406,12 +500,19 @@ def run_v5_shadow(
                 feature_universe_coverage.update(next(iter(growth_feature_sets.values())).universe_coverage)
             if quality_feature_sets:
                 feature_universe_coverage.update(next(iter(quality_feature_sets.values())).universe_coverage)
+            if capital_feature_sets:
+                feature_universe_coverage.update(next(iter(capital_feature_sets.values())).universe_coverage)
             run.metrics = {
+                # code_revision was already stored at creation; carried
+                # forward here rather than lost when this dict replaces
+                # run.metrics wholesale on success.
+                "code_revision": code_revision,
                 "input_ready": len(ready),
                 "base_distributions": base_count,
                 "phase2_distributions": base_count,
                 "phase3_distributions": base_count,
                 "phase4_distributions": base_count,
+                "phase5_distributions": base_count,
                 "empty_distributions": empty_count,
                 "objective_scores": sum(len(rows) for rows in objective_rows.values()),
                 "enabled_objectives": sorted(objective_rows),
@@ -431,6 +532,7 @@ def run_v5_shadow(
             "phase2_distributions": base_count,
             "phase3_distributions": base_count,
             "phase4_distributions": base_count,
+            "phase5_distributions": base_count,
             "empty_distributions": empty_count,
             "objective_scores": sum(len(rows) for rows in objective_rows.values()),
             "ablation_results": ablation_count,

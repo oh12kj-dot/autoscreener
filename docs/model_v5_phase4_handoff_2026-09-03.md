@@ -266,6 +266,16 @@ cd frontend; npm test; npm run build
 - v4 `scores` の行数とフィンガープリントが run 前後で不変
 - API smoke（`/api/v1/models/v5/runs/latest`、`/scores?objective=...`、`/scores/{ticker}`）が 200 で `v5.phase4` を返す
 
+**v4 フィンガープリント照合はテストを実行していない状態で取ること（2026-09-03 追記）。**
+`tests/unit/test_api_routes.py` 等は本物の `scores` テーブルへ実際に `Score` 行を
+INSERT し、テスト終了時に自分で削除する（専用のテスト用DBは無く、`session_scope()`
+は `.env` の `DATABASE_URL` が指す開発DBをそのまま使う — `tests/conftest.py` に
+DB分離のフィクスチャは無い）。監査中、`pytest` 実行中に `run-v5-shadow` を重ねて
+実行したところ、フィンガープリント照合の途中で行数が一時的に 8,225→8,226 に
+見えた（テスト終了後に 8,225 へ戻った）。**テストと shadow run を同時に走らせない
+こと。** フィンガープリントは「pytest が完全に終了してから」「次の pytest を
+開始する前に」の静止した瞬間に取る。
+
 **完了条件:** 上記が揃い、`docs/model_v5_phase4_quality_<日付>.md` に「実データで実際に効いた feature」と「coverage gate で効かなかった feature」を分けて記録できていること。効かなかったことは失敗ではない（Phase 3 の TAM/KPI/guidance と同じ扱い）。
 
 ---
