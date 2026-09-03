@@ -937,6 +937,10 @@ export interface ModelV5Distribution {
   survival_probability: number | null;
   acquisition_probability: number | null;
   model_confidence: number;
+  // Phase 10 (docs/model_v5_phase10_*.md): additive diagnostic fields.
+  expected_moic_given_loss: number | null;
+  reliability_sigma_multiplier: number | null;
+  reliability_left_tail_extra: number | null;
   scenarios: ModelV5Scenario[];
 }
 

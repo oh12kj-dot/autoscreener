@@ -72,6 +72,51 @@ def _expected_shortfall(
     return survival * truncated / alpha
 
 
+def _conditional_expected_moic_below(
+    cutoff: float, scenarios: tuple[ReturnScenario, ...], survival: float
+) -> float | None:
+    """``E[MOIC | MOIC < cutoff]`` -- Phase 10 fix (docs/model_v5_phase10_*.md).
+
+    ``expected_shortfall_10pct`` (``_expected_shortfall`` above) is defined
+    at a *fixed probability level* (its own 10% quantile). When the failure
+    atom alone already exceeds that level -- true for essentially every
+    ticker in the real universe, since ``1.0 - survival`` commonly exceeds
+    0.10 -- the 10%-quantile falls exactly on MOIC=0 and the whole measure
+    collapses to a constant 0.0 for every ticker (measured: 100% of 1,164
+    available rows on 2026-09-02). A constant carries no ranking
+    information, which is why ``risk_adjusted`` was silently reproducing
+    ``expected_return``'s exact rank order.
+
+    This is a *fixed-cutoff* conditional expectation instead: "if this
+    investment loses money (MOIC < 1.0), how much is lost on average,
+    across both the failure atom (contributes exactly 0 to the numerator,
+    same math as `_expected_shortfall`) and the surviving-but-low-return
+    part of the continuous mixture below 1.0x". Because the *ratio* of
+    failure-atom mass to sub-1.0x continuous mass differs by ticker
+    (varying survival, sigma, conditional means), this does not collapse
+    to a constant the way the alpha-quantile measure does -- see the
+    Phase 10 evidence doc for the measured cross-sectional spread.
+
+    Returns ``None`` (not 0.0) when essentially nobody loses money at this
+    cutoff (``P(MOIC < cutoff)`` below a numerical floor) -- an honest
+    "undefined", not a fabricated worst-case or best-case number.
+    """
+    mass_below = _cdf(cutoff, scenarios, survival)
+    if mass_below < 1e-9:
+        return None
+    truncated = 0.0
+    for scenario in scenarios:
+        z = (
+            math.log(cutoff) - scenario.log_mu - scenario.log_sigma**2
+        ) / scenario.log_sigma
+        truncated += (
+            scenario.weight
+            * scenario.conditional_expected_moic
+            * _NORMAL.cdf(z)
+        )
+    return survival * truncated / mass_below
+
+
 def unavailable_distribution(*, target_moic: float, confidence: float) -> dict:
     fields = {
         "p_moic_below_0_5": None, "p_moic_below_1_0": None,
@@ -82,6 +127,12 @@ def unavailable_distribution(*, target_moic: float, confidence: float) -> dict:
         "p25_moic": None, "p50_moic": None, "p75_moic": None,
         "p90_moic": None, "survival_probability": None,
         "acquisition_probability": None,
+        # Phase 10 additions (docs/model_v5_phase10_*.md): additive-only,
+        # never populated for an unavailable distribution, same as every
+        # other field above.
+        "expected_moic_given_loss": None,
+        "reliability_sigma_multiplier": None,
+        "reliability_left_tail_extra": None,
     }
     return {
         "contract_version": "v5.phase2", "status": "unavailable",
@@ -98,8 +149,23 @@ def scenario_distribution(
     horizon_years: int,
     target_moic: float,
     confidence: float,
+    sigma_multiplier: float = 1.0,
+    left_tail_extra: float = 0.0,
 ) -> dict:
-    """Return the full Phase 2 contract, including failure mass and ES10."""
+    """Return the full Phase 2 contract, including failure mass and ES10.
+
+    ``sigma_multiplier``/``left_tail_extra`` (Phase 10 addition) are the
+    *same* values already passed into ``build_scenarios`` by the caller --
+    they do not change anything about how ``scenarios`` was built (this
+    function never re-derives or second-guesses the scenario mixture it is
+    handed). They are recorded here purely as diagnostic passthrough fields
+    (``reliability_sigma_multiplier``/``reliability_left_tail_extra``) so
+    ``objectives.py`` can read, from the persisted distribution alone, how
+    much of this ticker's dispersion was widened by a reliability/quality
+    signal -- needed to stop ``ten_bagger`` from mechanically rewarding
+    that widening (see docs/model_v5_phase10_*.md). Purely additive: no
+    existing field's value changes because of these two parameters.
+    """
     if not scenarios:
         return unavailable_distribution(
             target_moic=target_moic, confidence=confidence
@@ -143,4 +209,9 @@ def scenario_distribution(
         "acquisition_probability": None,
         "model_confidence": confidence,
         "scenarios": [s.to_dict() for s in scenarios],
+        "expected_moic_given_loss": _conditional_expected_moic_below(
+            1.0, scenarios, survival
+        ),
+        "reliability_sigma_multiplier": sigma_multiplier,
+        "reliability_left_tail_extra": left_tail_extra,
     }

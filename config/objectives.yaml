@@ -4,6 +4,14 @@ default_objective: ten_bagger
 objectives:
   ten_bagger:
     description: Probability of reaching the configured target MOIC.
+    # Phase 10 (docs/model_v5_phase10_*.md): discounts P(target) for the
+    # part of that probability mechanically attributable to a
+    # reliability/quality-driven widening of the distribution (see
+    # ObjectiveDefinition in config.py for the full rationale). Values
+    # tuned empirically against the real 2026-09-02 universe -- see the
+    # Phase 10 evidence doc for the measured before/after correlation.
+    reliability_sigma_lambda: 20.0
+    reliability_left_tail_lambda: 20.0
   expected_return:
     enabled: true
     description: Expected compound annual return.

@@ -1216,6 +1216,10 @@ class ModelV5DistributionView(BaseModel):
     survival_probability: float | None = None
     acquisition_probability: float | None = None
     model_confidence: float
+    # Phase 10 (docs/model_v5_phase10_*.md): additive diagnostic fields.
+    expected_moic_given_loss: float | None = None
+    reliability_sigma_multiplier: float | None = None
+    reliability_left_tail_extra: float | None = None
     scenarios: list[ModelV5ScenarioView] = []
 
 

@@ -671,6 +671,18 @@ class ObjectiveDefinition(BaseModel):
     description: str
     downside_lambda: float | None = Field(default=None, ge=0)
     right_tail_moic: float | None = Field(default=None, gt=1)
+    # Phase 10 (docs/model_v5_phase10_*.md): discount factors so a purely
+    # reliability/quality-driven widening of the return distribution (which
+    # mechanically raises any far-right-tail exceedance probability under
+    # mean preservation -- a mathematical fact about the lognormal family,
+    # not a bug in the distribution) does not also mechanically raise this
+    # objective's rank. Read from `distribution["reliability_sigma_multiplier"]`
+    # / `distribution["reliability_left_tail_extra"]` (Phase 10 additions to
+    # the distribution contract), never from `model_confidence` -- confidence
+    # stays reserved for missingness alone (Issue: "missingnessとconfidenceが
+    # 分離"), not for how unreliable a *collected* signal says the company is.
+    reliability_sigma_lambda: float | None = Field(default=None, ge=0)
+    reliability_left_tail_lambda: float | None = Field(default=None, ge=0)
 
 
 class ObjectivesConfig(BaseModel):

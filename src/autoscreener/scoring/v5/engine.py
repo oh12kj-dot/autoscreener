@@ -228,6 +228,8 @@ def _distribution_for(
     distribution = scenario_distribution(
         scenarios, horizon_years=model_config.target_horizon_years,
         target_moic=model_config.target_moic, confidence=confidence,
+        sigma_multiplier=quality_update.sigma_multiplier,
+        left_tail_extra=left_tail_extra,
     )
     return growth_update, quality_update, capital_update, tail_update, confidence, distribution
 
