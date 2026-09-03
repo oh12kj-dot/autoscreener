@@ -219,3 +219,103 @@ Two evidence runs were taken via `run_v5_shadow(...)`, both with no
   would need revisiting if the universe grows by an order of magnitude.
 - It does not add a "v4 rank" value automatically on page load — that is
   a deliberate cost/staleness tradeoff (see above), not an oversight.
+
+## Phase 9: rollback path verification (live, real DB)
+
+Per Issue #3 section 34, the rollback path was exercised live rather than
+inspected only by reading code. No `pytest` process was running during
+any of these checks (checked immediately before each).
+
+1. **`enabled: false` writes nothing.** Before:
+   `model_runs` count = 29, v4 `scores` count = 8,225. Called
+   `run_v5_shadow(2026-09-02, model_config=base_config.model_copy(update=
+   {"enabled": False}))` -> returned
+   `{"status": "skipped", "reason": "disabled_by_config", "population": 0,
+   ...}` with **no** `session.add(ModelRun(...))` ever reached (confirmed
+   by reading `engine.py`'s early-return branch, and by the after-counts
+   below). After: `model_runs` count = 29 (unchanged), v4 `scores` count =
+   8,225 (unchanged).
+2. **`mode != "shadow"` raises before writing.** Called
+   `run_v5_shadow(2026-09-02, model_config=base_config.model_copy(update=
+   {"mode": "live"}))` -> raised `ValueError("v5 shadow runner requires
+   mode=shadow")`. `model_runs` count after: 29 (unchanged).
+3. Both checks used `ModelV5Config.model_copy(update=...)` in-process
+   overrides rather than editing the real `config/model_v5.yaml` on disk --
+   confirmed via `git status --porcelain config/model_v5.yaml` (empty)
+   throughout -- so there was no window where the real config diverged
+   from what the (untouched) 09:00 JST scheduled batch would read.
+4. **DB stayed append-only and v4 history intact** -- the v4 `scores` count
+   (8,225) was identical before and after every check above; nothing in
+   this verification path touches the `scores` table at all (confirmed by
+   code inspection: `run_v5_shadow` never imports or queries `Score`
+   except read-only via `MoicInputs.from_dict()` on already-written v4
+   rows, which none of the disabled/error branches above even reach).
+
+## Phase 9: migration reversibility (offline SQL, not executed against the shared DB)
+
+The shared dev database is also where all of this session's v5 evidence
+runs live (29 `model_runs` rows accumulated across Phases 0-8). Actually
+running `alembic downgrade` against it would destroy that accumulated
+audit trail, so reversibility was instead confirmed by generating (not
+executing) the SQL:
+
+- `alembic current` -> `2c4e6f8a1b3d (head)`, single head, matches the tip
+  of the local revision chain (`e9b1c3d5f7a9 -> f0a1b2c3d4e5 ->
+  1d2e3f4a5b6c -> 2c4e6f8a1b3d`).
+- `alembic downgrade --sql 2c4e6f8a1b3d:e9b1c3d5f7a9` -> generated SQL that
+  is **exactly** 4 `DROP TABLE` statements (`model_v5_forward_returns`,
+  `objective_scores`, `model_scores`, `model_runs`), their indexes'
+  `DROP INDEX` statements, and 3 `UPDATE alembic_version SET version_num=
+  ...` bookkeeping statements. No `ALTER`, `DROP`, `DELETE`, or `UPDATE`
+  referencing any other table appears anywhere in the output.
+- `alembic upgrade --sql e9b1c3d5f7a9:2c4e6f8a1b3d` -> grepped for any
+  statement touching `scores`/`tickers`/`universe_snapshots`/
+  `raw_snapshots`/`price_snapshots` -> zero matches.
+
+This structurally confirms the four v5 migrations are additive-only and
+safely reversible without any risk to v4 data, without needing to actually
+run the destructive direction against the one shared database this
+project has.
+
+## Issue #3 section 36 -- Definition of Done, evaluated item by item
+
+Fetched from the issue (read-only) for this evaluation. Each item is
+marked **達成** (achieved), **未達成** (not achieved), or **構造的に不可能**
+(structurally impossible right now) -- never achieved-when-it-isn't.
+
+| # | Item (as written in §36) | Status | Basis |
+|---|---|---|---|
+| 1 | v4 Champion benchmarkが再現可能 | 達成(条件付き) | `run-backtest` reproduces v4's benchmark on demand. v4's own backtest quality has known open issues (`INSUFFICIENT_DATA`, 0% delisting settlement, coverage-bias `REVIEW_REQUIRED` -- Entry 1) that are a separate, pre-existing v4 track, not a v5/Phase 8/9 gap. |
+| 2 | v5 Challengerが独立versionとして実装 | 達成 | Separate scoring pipeline (`scoring/v5/*`), separate tables (`model_runs`/`model_scores`/`objective_scores`/`model_v5_forward_returns`), separate config (`config/model_v5.yaml`), never reads/writes v4's `scores` table (Phase 8 evidence + `test_v5_phase8_ui_endpoints.py::test_v5_validation_status_never_touches_v4_scores`). |
+| 3 | PIT contractがfeature全体に適用 | 達成 | Every implemented growth/quality/capital/tail signal uses `available_from`/`filed_date`/`observed_at` cutoffs (Phases 3-6). Features not yet PIT-safe (`macro_regime`, `litigation`, `acquisition_competing_risk`) are force-disabled in historical mode by `historical_feature_flags()`, which is the PIT contract working as designed, not a gap. |
+| 4 | TAM known bug修正・既存誤値再検証 | **未達成** | `collect_market_opportunity.py`'s `_SCALE` still lacks a `trillion` unit and `delisting_events` still has 592/592 `unknown` `event_type` -- tracked separately in `live_intelligence_ui_gap_handoff_2026-09-01.md` Step 3, not touched this round. This is why `tam_headroom` shows up in this phase's live `coverage_gated_features` warning. |
+| 5 | distribution outputsが保存/API/UIで利用可能 | 達成 | `ModelScore.distribution` stored; `/models/v5/scores`, `/models/v5/scores/{ticker}` APIs; `V5RankingSection`/`V5TickerDetailSection` render it (this phase). |
+| 6 | P10x以外の目的関数を同一distributionから計算 | 達成 | 5 enabled objectives computed from the same per-ticker distribution (live-verified on PACS: `ten_bagger`/`expected_return`/`risk_adjusted`/`asymmetric`/`capital_preservation` all present with distinct values from one `ModelScore` row). |
+| 7 | missingnessとconfidenceが分離 | 達成 | Structural rule enforced since Phase 2-6: missing data moves `confidence` (bounded +/-0.20), never a state value. |
+| 8 | Live intelligenceの主要signalが適切なfuture stateへ接続 | 達成(配線は完了、実効果は限定的) | All ~20 signals wired into `engine.py`'s growth/quality/capital/tail updates. Today's live evidence run shows 11 of them universe-wide coverage-gated off (`coverage_gated_features:...` warning on every scored row) -- this is the coverage-gate mechanism working as designed against real (currently thin) collected data, not an implementation defect. |
+| 9 | v4/v5同日比較backtest | 達成 | `backtest/v5_comparison.py`'s same-day cross-sectional comparison (Phase 7), independently re-verified this round (Spearman 0.907 reproduced by the coordinator). |
+| 10 | ablation / bootstrap / regime / bias監査 | 分割評価 | Ablation: 達成 (leave-one-out, now UI-exposed). Bootstrap: infrastructure built (`date_block_bootstrap_ci()`) but blocked -- needs >=30 distinct evaluation dates, only 9 exist. Regime layering and bias audit: **構造的に不可能** -- both require realized returns to stratify/audit against, and `realized_forward_validation_count=0` (confirmed live this round); the Phase 7 coordinator's own review explicitly endorsed not attempting these while that precondition is unmet. |
+| 11 | forward shadow validation | 達成(基盤のみ、結果はまだ無い) | `model_v5_forward_returns` + `run_forward_validation_v5()` exist and run; 0 matured observations exist yet because no scored ticker has reached `target_horizon_years` -- a time-gated structural limit, not a code defect. |
+| 12 | Validation UIでChampion/Challenger比較 | 達成(このラウンドで実装) | `V5ValidationSection` on `ValidationPage.tsx`. |
+| 13 | Ranking UIでModelとObjectiveを切替可能 | 達成(このラウンドで実装) | Model toggle + objective `<select>` restricted to config-enabled objectives on `RankingPage.tsx`. |
+| 14 | v5の「なぜ」がstate shiftとして説明可能 | 達成(このラウンドで実装) | `V5TickerDetailSection`'s ablation rendering, verified against real `PACS` data above. |
+| 15 | migration upgrade/downgrade検証 | 達成 | Verified via offline SQL generation this round (see above) -- full round trip confirmed additive-only and reversible without touching any v4 table. |
+| 16 | backend tests全通過 | 達成 | 941 passed (>= the 938 baseline this round started with). |
+| 17 | frontend tests全通過 | 達成(母数は薄い) | 2/2 passed -- the entire frontend unit-test suite is 2 tests; this phase relied on TypeScript + production build + backend endpoint tests for its own coverage rather than adding frontend unit tests, so "全通過" is true but the safety margin it provides is thin. |
+| 18 | frontend production build成功 | 達成 | `npm run build` succeeded, 641 modules, 0 type errors. |
+| 19 | scheduled pipeline smoke成功 | **未達成(意図的)** | Every phase of this multi-round effort has deliberately avoided starting, stopping, or invoking the 09:00 JST scheduled daily pipeline, per an explicit standing rule repeated in every round's instructions. `forward_validation_v5` remains in `RESERVED_STAGE_NUMBERS`, not wired into `PIPELINE_STAGE_SEQUENCE`, specifically because it has not been smoke-tested inside that pipeline. This item cannot be marked achieved without violating the standing rule; it is an open item for whoever is authorized to run that smoke test. |
+| 20 | 実DB coverage確認 | 達成 | Measured repeatedly with real numbers: universe/raw snapshot date ranges (Phase 7), feature coverage-gate warnings on real scored rows (Phase 8, this round). |
+| 21 | Promotion Decision Record作成 | 達成 | `docs/model_v5_validation.md`, Entry 1 (Phase 7) and Entry 2 (this round), both `CONTINUE_SHADOW`. |
+| 22 | rollback経路確認 | 達成(このラウンドで実施) | Live-verified this round: `enabled: false` -> zero writes; `mode != shadow` -> raises before writing; v4 `scores` count unchanged throughout (see above). |
+
+**Summary: 15 of 22 achieved, 2 not achieved (items 4, 19 -- both
+pre-existing, separately tracked, and explicitly not attempted this round
+for stated reasons), 2 structurally impossible right now (regime
+stratification and bias audit within item 10, both gated on realized
+returns that do not exist yet), 1 partially achieved with an explicit
+caveat about margin (item 17), 1 achieved-but-caveated (item 1, v4's own
+backtest quality), 1 achieved-with-limited-real-effect (item 8, coverage
+gating suppressing 11/20 signals against today's thin real data).** None
+of the 22 items is marked achieved where it is not; the point of this
+table is that a reader can tell the difference between "done" and
+"correctly not yet done" at a glance.

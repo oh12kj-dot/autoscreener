@@ -108,5 +108,105 @@ above says so directly to prevent a later reader from over-reading it.
 
 ---
 
+## Entry 2 — 2026-09-03 (Phase 8 UI + Phase 9 promotion-decision infrastructure)
+
+```json
+{
+  "entry": 2,
+  "review_date": "2026-09-03",
+  "phase": "Phase 8 (frontend UI) + Phase 9 (promotion-decision infrastructure)",
+  "decision": "CONTINUE_SHADOW",
+  "decision_confidence": "high",
+  "code_revision": {
+    "commit": "64f185bd18e69a2c53d918bd64f907f0828d8be8",
+    "dirty": false
+  },
+  "reasons": [
+    "no_new_realized_outcome_evidence_was_created_this_phase_phase_8_9_are_ui_and_infrastructure_only",
+    "entry_1s_reasons_are_unchanged_and_still_apply",
+    "forward_validation_v5_matured_observations_still_0"
+  ],
+  "measured_evidence": {
+    "backend_tests_passed": 941,
+    "frontend_tests_passed": 2,
+    "frontend_production_build": "succeeded",
+    "frontend_lint_errors": 0,
+    "v5_evidence_run_2026_09_02": {
+      "population": 1273,
+      "input_ready": 1215,
+      "base_distributions": 1164,
+      "objective_scores": 6365,
+      "ablation_results": 2568,
+      "enabled_objectives": ["asymmetric", "capital_preservation", "expected_return", "risk_adjusted", "ten_bagger"]
+    },
+    "validation_status_endpoint_live_read": {
+      "evaluation_dates_count": 9,
+      "evaluation_date_range": ["2026-08-23", "2026-09-02"],
+      "realized_forward_validation_count": 0,
+      "unsupported_historical_features": ["acquisition_competing_risk", "litigation", "macro_regime"]
+    },
+    "rollback_path_verified_live": {
+      "model_runs_count_before": 29,
+      "enabled_false_override_result": {"status": "skipped", "reason": "disabled_by_config"},
+      "model_runs_count_after_enabled_false": 29,
+      "v4_scores_count_before": 8225,
+      "v4_scores_count_after_enabled_false": 8225,
+      "mode_live_override_result": "raised ValueError('v5 shadow runner requires mode=shadow')",
+      "model_runs_count_after_mode_override": 29,
+      "config_file_config_model_v5_yaml_modified_on_disk": false,
+      "note": "verified via ModelV5Config.model_copy(update=...) in-process overrides, not by editing the real config/model_v5.yaml file, to avoid any window where the real config diverges from what the (unmodified) 09:00 JST batch would read"
+    },
+    "migration_reversibility_verified_via_offline_sql": {
+      "method": "alembic downgrade --sql / upgrade --sql (offline SQL generation, not executed against the shared dev DB, to avoid destroying the accumulated v5 run history that DB also holds)",
+      "revision_chain": "e9b1c3d5f7a9 -> f0a1b2c3d4e5 -> 1d2e3f4a5b6c -> 2c4e6f8a1b3d (head)",
+      "downgrade_sql_touches_only": ["model_runs", "model_scores", "objective_scores", "model_v5_forward_returns", "alembic_version"],
+      "no_v4_table_referenced_in_generated_sql": true
+    }
+  },
+  "what_would_change_this_decision": [
+    "same as Entry 1 -- nothing in Phase 8/9 changes the underlying realized-outcome-evidence gap"
+  ],
+  "evidence_docs": [
+    "docs/model_v5_phase7_backtest_infrastructure_2026-09-03.md",
+    "docs/model_v5_phase8_ui_2026-09-03.md"
+  ],
+  "not_claimed": [
+    "v5 is ready for production use",
+    "the UI work changes the evidence available for a PROMOTE_V5/KEEP_V4 decision",
+    "the rollback and migration checks above were run against a full production-scale rehearsal -- they confirm code-path and SQL correctness, not operational runbook execution"
+  ]
+}
+```
+
+### Narrative
+
+Phase 8 added a v5 surface to the frontend (model/objective selector on
+`RankingPage`, ablation-based state-shift explanation and a v4-vs-v5
+comparison table on `TickerDetailPage`, and a champion/challenger
+validation-status section on `ValidationPage`) with zero changes to any
+existing v4 rendering path, and two new read-only backend endpoints
+(`/models/v5/objectives`, `/models/v5/validation-status`). Phase 9 verified
+the promotion-decision infrastructure itself rather than producing new
+model evidence: the rollback path (`config/model_v5.yaml` `enabled: false`
+writes zero rows and leaves `model_runs` and v4's `scores` table counts
+unchanged; requesting a non-`shadow` `mode` raises before any write) was
+exercised live against the real database, and migration reversibility was
+confirmed by generating (not executing) the offline downgrade/upgrade SQL
+for the full v5 migration chain, showing it only ever creates or drops the
+four v5-specific tables and never references any v4 table.
+
+None of this changes Entry 1's central finding: no realized-outcome
+backtest exists for either model yet, so `PROMOTE_V5`/`KEEP_V4` remain
+unavailable per Issue #3 section 31. This entry exists to record that the
+UI and rollback/migration infrastructure pieces of Issue #3 section 36's
+Definition of Done are now in place and independently verified, distinct
+from the still-open realized-outcome-evidence gap that section 31 gates on.
+See the Definition-of-Done item-by-item assessment in
+[model_v5_phase8_ui_2026-09-03.md](model_v5_phase8_ui_2026-09-03.md) for
+which of section 36's 22 checklist items are achieved, not yet achieved,
+or structurally blocked and why.
+
+---
+
 *Future entries append below this line, in the same JSON + narrative shape,
 oldest first.*
