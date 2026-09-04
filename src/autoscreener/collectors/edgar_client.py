@@ -47,6 +47,10 @@ COMPANY_CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/{ta
 # `form.idx` は Form Type でソートされた固定幅テキスト。上場廃止届(Form 25/15)を
 # 全期間走査して、期間中に消えた企業を復元するのに使う。
 FULL_INDEX_FORM_URL = "https://www.sec.gov/Archives/edgar/full-index/{year}/QTR{quarter}/form.idx"
+DAILY_INDEX_MASTER_URL = (
+    "https://www.sec.gov/Archives/edgar/daily-index/{year}/QTR{quarter}/"
+    "master.{stamp}.idx"
+)
 
 # 30.3.1:8-Kの `items` は "2.02,9.01" のようなカンマ区切りのこともあれば
 # "Item 2.02: Results of Operations..." のような説明つきのこともある。
@@ -266,6 +270,33 @@ class EdgarClient:
         """`full-index/{year}/QTR{q}/form.idx` の生テキスト(B-1)。"""
         response = self._get(FULL_INDEX_FORM_URL.format(year=year, quarter=quarter))
         return response.text
+
+    def fetch_daily_index_ciks(
+        self, filing_date: datetime.date, *, forms: set[str] | None = None
+    ) -> set[str]:
+        """Return zero-padded CIKs present in one official EDGAR daily master index."""
+        quarter = (filing_date.month - 1) // 3 + 1
+        url = DAILY_INDEX_MASTER_URL.format(
+            year=filing_date.year,
+            quarter=quarter,
+            stamp=filing_date.strftime("%Y%m%d"),
+        )
+        response = self._get(url)
+        if not any(
+            line.startswith("CIK|Company Name|Form Type|Date Filed|")
+            for line in response.text.splitlines()
+        ):
+            raise ParseFailure(f"daily master index has an unexpected format: {url}")
+        ciks: set[str] = set()
+        for line in response.text.splitlines():
+            parts = line.split("|")
+            if len(parts) != 5 or not parts[0].strip().isdigit():
+                continue
+            form = parts[2].strip()
+            if forms is not None and form not in forms:
+                continue
+            ciks.add(f"{int(parts[0]):010d}")
+        return ciks
 
     def fetch_company_facts(self, cik: str) -> dict:
         """companyfacts の生JSON。フェーズ4で使う。"""

@@ -5,6 +5,7 @@ from unittest.mock import ANY, patch
 import pytest
 
 from autoscreener.batch.daily_pipeline import run_daily_pipeline
+from autoscreener.batch.market_session import MarketSessionDecision
 from autoscreener.batch.pipeline_recorder import PipelineRecorder as RealPipelineRecorder
 from autoscreener.db.models import PipelineRun, PipelineStageRun
 from autoscreener.db.session import session_scope as real_session_scope
@@ -174,6 +175,16 @@ def _stub_phase2367_steps():
             patch("autoscreener.batch.daily_pipeline.run_forward_validation_v5", return_value={"computed": 0})
         )
         orphan_sweep = stack.enter_context(patch("autoscreener.batch.daily_pipeline.sweep_orphan_runs", return_value=[]))
+        market_session = stack.enter_context(patch(
+            "autoscreener.batch.daily_pipeline.assess_market_session",
+            return_value=MarketSessionDecision(
+                should_run=True,
+                expected_session=datetime.date(2026, 8, 24),
+                latest_covered_session=None,
+                covered_count=0,
+                target_count=0,
+            ),
+        ))
         filing_sections = stack.enter_context(
             patch("autoscreener.batch.daily_pipeline.collect_filing_sections", return_value={"sections": 0})
         )
@@ -209,6 +220,7 @@ def _stub_phase2367_steps():
             "model_v5_shadow": model_v5_shadow,
             "forward_validation_v5": forward_validation_v5,
             "orphan_sweep": orphan_sweep,
+            "market_session": market_session,
             "filing_sections": filing_sections,
             "guidance": guidance,
             "concentration": concentration,
@@ -327,7 +339,10 @@ def test_always_runs_collection_gates_scoring_and_forward_validation(
     # collection_config はパイプラインが1度だけ読み、対象の選定(隔離銘柄の
     # 再挑戦期限判定)と収集本体の両方へ同じインスタンスを渡す。
     mock_collect.assert_called_once_with(
-        ["AAPL", "MSFT"], collection_config=ANY, snapshot_date=datetime.date(2026, 8, 25)
+        ["AAPL", "MSFT"],
+        collection_config=ANY,
+        snapshot_date=datetime.date(2026, 8, 25),
+        market_session_date=datetime.date(2026, 8, 24),
     )
     mock_gates.assert_called_once_with(datetime.date(2026, 8, 25))
     mock_scoring.assert_called_once_with(datetime.date(2026, 8, 25))
@@ -339,6 +354,42 @@ def test_always_runs_collection_gates_scoring_and_forward_validation(
     assert results["gates"] == {"included": 5}
     assert results["scoring"] == {"scored": 5}
     assert results["forward_validation"] == {"computed": 3}
+
+
+@patch("autoscreener.batch.daily_pipeline.utc_today", return_value=datetime.date(2026, 9, 8))
+def test_completed_market_session_skips_market_stages_without_health_error(
+    mock_utc_today, _stub_phase2367_steps
+):
+    _stub_phase2367_steps["market_session"].return_value = MarketSessionDecision(
+        should_run=False,
+        expected_session=datetime.date(2026, 9, 4),
+        latest_covered_session=datetime.date(2026, 9, 4),
+        covered_count=1,
+        target_count=1,
+        reason="no_new_market_session",
+    )
+    with (
+        patch("autoscreener.batch.daily_pipeline.select_collectable_symbols", return_value=["AAPL"]),
+        patch("autoscreener.batch.daily_pipeline.collection_population_counts", return_value=(0, 1)),
+        patch("autoscreener.batch.daily_pipeline.select_tracked_tickers", return_value=[]),
+        patch("autoscreener.batch.daily_pipeline.run_daily_collection") as collection,
+        patch("autoscreener.batch.daily_pipeline.apply_gates") as gates,
+        patch("autoscreener.batch.daily_pipeline.run_scoring") as scoring,
+        patch("autoscreener.batch.daily_pipeline.run_forward_validation") as forward,
+        patch("autoscreener.batch.daily_pipeline.run_backup"),
+        patch("autoscreener.batch.daily_pipeline.check_pipeline_health", return_value=[]) as health_check,
+        patch("autoscreener.batch.daily_pipeline.check_quarantine_health", return_value=[]),
+    ):
+        results = run_daily_pipeline()
+
+    collection.assert_not_called()
+    gates.assert_not_called()
+    scoring.assert_not_called()
+    forward.assert_not_called()
+    _stub_phase2367_steps["consensus"].assert_not_called()
+    assert results["collection"]["skipped_reason"] == "no_new_market_session"
+    assert results["scoring"]["skipped_reason"] == "no_new_market_session"
+    assert health_check.call_args.kwargs["scoring_result"] is None
 
 
 @patch("autoscreener.batch.daily_pipeline.check_quarantine_health", return_value=[])
@@ -539,6 +590,7 @@ def test_resume_does_not_redo_an_already_succeeded_expensive_stage(
     mock_backup,
     mock_check_collection,
     mock_check_quarantine,
+    _stub_phase2367_steps,
 ):
     """A-6の受け入れ条件(docs/racr_wp_a_operational_safety_2026-09-04.md、
     監査§10.3「2時間超のcollection後にgateで落ちても、checkpoint/resumeが
@@ -553,6 +605,16 @@ def test_resume_does_not_redo_an_already_succeeded_expensive_stage(
     """
     resume_date = datetime.date(2026, 8, 26)  # Wednesday, no weekly stages
     mock_utc_today.return_value = resume_date
+    # The succeeded collection can make the DB look current on resume.  That
+    # must suppress only a second collection, not unfinished downstream work.
+    _stub_phase2367_steps["market_session"].return_value = MarketSessionDecision(
+        should_run=False,
+        expected_session=datetime.date(2026, 8, 25),
+        latest_covered_session=datetime.date(2026, 8, 25),
+        covered_count=999,
+        target_count=999,
+        reason="no_new_market_session",
+    )
 
     # 前回の途中失敗runを再現する:collectionはsucceeded、gatesはfailed。
     pre_recorder = RealPipelineRecorder(resume_date, is_weekly=False)

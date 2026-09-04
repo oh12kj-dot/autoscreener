@@ -11,14 +11,19 @@ from __future__ import annotations
 
 import datetime
 
+import responses
+
 from autoscreener.collectors.litigation_source import (
     EdgarFullTextSearchClient,
+    FULL_TEXT_SEARCH_URL,
     LitigationHit,
     detect_litigation_mentions,
     fetch_litigation,
+    fetch_litigation_batched,
     parse_litigation_hits,
 )
 from autoscreener.collectors.rate_limit import get_shared_limiter
+from autoscreener.config import EdgarRetryConfig
 
 _USER_AGENT = "TENX test <test@example.com>"
 
@@ -38,6 +43,34 @@ def test_full_text_search_client_shares_the_sec_limiter_with_edgar_client():
     (専用のprivateなRateLimiterを持たないこと)。"""
     client = EdgarFullTextSearchClient(_USER_AGENT)
     assert client._rate_limiter is get_shared_limiter("sec")
+
+
+def test_full_text_search_client_applies_explicit_sec_rate():
+    client = EdgarFullTextSearchClient(_USER_AGENT, requests_per_second=3.25)
+    assert client._rate_limiter is get_shared_limiter("sec")
+    assert client._rate_limiter.requests_per_second == 3.25
+
+
+@responses.activate
+def test_full_text_search_retries_transient_500_through_shared_limiter():
+    responses.add(responses.GET, FULL_TEXT_SEARCH_URL, status=500)
+    responses.add(
+        responses.GET,
+        FULL_TEXT_SEARCH_URL,
+        json={"hits": {"total": {"value": 0}, "hits": []}},
+        status=200,
+    )
+    client = EdgarFullTextSearchClient(
+        _USER_AGENT,
+        retry_config=EdgarRetryConfig(
+            max_attempts=2,
+            backoff_base_seconds=0.001,
+            backoff_max_seconds=0.001,
+        ),
+    )
+    payload = client.search('"Wells notice"')
+    assert payload["hits"]["total"]["value"] == 0
+    assert len(responses.calls) == 2
 
 # --- detect_litigation_mentions(Item 3 本文の正規表現抽出) ---------------------
 
@@ -241,3 +274,49 @@ def test_fetch_litigation_aggregates_and_dedupes_hits():
     # 同じaccessionが2つのフレーズ双方にヒットしても1件にまとめる。
     assert len(hits) == 1
     assert hits[0].source_accession == "0001-26-000001"
+
+
+def test_batched_litigation_search_groups_by_cik_and_consumes_pagination():
+    ciks = ["0000000001", "0000000002"]
+
+    def _hit(cik: str, accession: str) -> dict:
+        return {
+            "_id": f"{accession}:ex991.htm",
+            "_source": {
+                "ciks": [cik],
+                "display_names": [f"CIK {cik}"],
+                "form": "8-K",
+                "file_date": "2026-09-03",
+                "adsh": accession,
+            },
+        }
+
+    class _PagedClient:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def search(self, q, *, forms=None, ciks=None, start_date=None, end_date=None, offset=0):
+            self.calls.append({"q": q, "ciks": ciks, "offset": offset})
+            if q != '"securities class action"':
+                return {"hits": {"total": {"value": 0}, "hits": []}}
+            page = (
+                [_hit("0000000001", "0001-26-000001")]
+                if offset == 0
+                else [_hit("0000000002", "0002-26-000002")]
+            )
+            return {"hits": {"total": {"value": 2}, "hits": page}}
+
+    client = _PagedClient()
+    grouped, failures = fetch_litigation_batched(
+        client,
+        ciks,
+        start_date=datetime.date(2026, 9, 1),
+        end_date=datetime.date(2026, 9, 4),
+        batch_size=50,
+    )
+    assert failures == 0
+    assert [hit.source_accession for hit in grouped["0000000001"]] == ["0001-26-000001"]
+    assert [hit.source_accession for hit in grouped["0000000002"]] == ["0002-26-000002"]
+    paged_calls = [call for call in client.calls if call["q"] == '"securities class action"']
+    assert [call["offset"] for call in paged_calls] == [0, 1]
+    assert all(call["ciks"] == ciks for call in client.calls)

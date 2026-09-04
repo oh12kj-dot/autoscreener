@@ -70,6 +70,7 @@ import re
 from dataclasses import dataclass
 
 import requests
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential_jitter
 
 from autoscreener.collectors.errors import (
     CollectionError,
@@ -77,7 +78,8 @@ from autoscreener.collectors.errors import (
     PermanentFailure,
     TransientFailure,
 )
-from autoscreener.collectors.rate_limit import get_shared_limiter
+from autoscreener.collectors.rate_limit import configure_shared_limiter, get_shared_limiter
+from autoscreener.config import EdgarRetryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,7 @@ class LitigationHit:
     source_url: str | None
     source_accession: str | None
     detail: str | None
+    cik: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,19 +146,35 @@ class EdgarFullTextSearchClient:
     (`EdgarClient`と同じリミッター)へ揃える。
     """
 
-    def __init__(self, user_agent: str, *, timeout_seconds: float = 10.0) -> None:
+    def __init__(
+        self,
+        user_agent: str,
+        *,
+        timeout_seconds: float = 10.0,
+        retry_config: EdgarRetryConfig | None = None,
+        requests_per_second: float | None = None,
+    ) -> None:
         if not user_agent or user_agent.strip() in _PLACEHOLDER_USER_AGENTS:
             raise ValueError(
                 "EDGAR_USER_AGENT が未設定です。.env に EDGAR_USER_AGENT を設定してください"
                 "(30.3.1と同じ制約:連絡先メールアドレスを含むUser-Agentが必須)。"
             )
         self._timeout = timeout_seconds
+        self._retry = retry_config or EdgarRetryConfig(
+            max_attempts=3,
+            backoff_base_seconds=2.0,
+            backoff_max_seconds=30.0,
+        )
         # **プロセスで1つの共有リミッター**(`EdgarClient`と同じキー)。
         # `configure_shared_limiter`はここでは呼ばない——設定(`edgar.
         # requests_per_second`)を読む場所は`EdgarClient.__init__`だけに
         # 限定する(`rate_limit.py`のdocstring:「呼ぶのは設定を読んだ場所
         # だけにすること」)。未設定なら安全側の既定(5.0 req/秒)が使われる。
-        self._rate_limiter = get_shared_limiter("sec")
+        self._rate_limiter = (
+            configure_shared_limiter("sec", requests_per_second)
+            if requests_per_second is not None
+            else get_shared_limiter("sec")
+        )
         self._session = requests.Session()
         self._session.headers.update(
             {"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}
@@ -169,9 +188,12 @@ class EdgarFullTextSearchClient:
         ciks: list[str] | None = None,
         start_date: datetime.date | None = None,
         end_date: datetime.date | None = None,
+        offset: int = 0,
     ) -> dict:
         """全文検索APIを1回叩き、生JSONを返す(上記docstring参照)。"""
         params: dict[str, str] = {"q": q}
+        if offset:
+            params["from"] = str(offset)
         if forms:
             params["forms"] = forms
         if ciks:
@@ -181,21 +203,37 @@ class EdgarFullTextSearchClient:
             params["startdt"] = start_date.isoformat()
             params["enddt"] = end_date.isoformat()
 
-        self._rate_limiter.acquire()
-        try:
-            response = self._session.get(FULL_TEXT_SEARCH_URL, params=params, timeout=self._timeout)
-            response.raise_for_status()
-        except requests.exceptions.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else None
-            if status == 403:
-                raise PermanentFailure(
-                    f"EDGAR full text search returned 403 (likely a ToS violation): {exc}"
-                ) from exc
-            if status in (429, 500, 502, 503, 504):
+        @retry(
+            retry=retry_if_exception_type(TransientFailure),
+            stop=stop_after_attempt(self._retry.max_attempts),
+            wait=wait_exponential_jitter(
+                initial=self._retry.backoff_base_seconds,
+                max=self._retry.backoff_max_seconds,
+            ),
+            reraise=True,
+        )
+        def _call() -> requests.Response:
+            # Every retry consumes a slot from the same SEC-wide limiter.
+            self._rate_limiter.acquire()
+            try:
+                response = self._session.get(
+                    FULL_TEXT_SEARCH_URL, params=params, timeout=self._timeout
+                )
+                response.raise_for_status()
+                return response
+            except requests.exceptions.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if status == 403:
+                    raise PermanentFailure(
+                        f"EDGAR full text search returned 403 (likely a ToS violation): {exc}"
+                    ) from exc
+                if status in (429, 500, 502, 503, 504):
+                    raise TransientFailure(str(exc)) from exc
+                raise ParseFailure(f"unexpected HTTP status {status}: {exc}") from exc
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
                 raise TransientFailure(str(exc)) from exc
-            raise ParseFailure(f"unexpected HTTP status {status}: {exc}") from exc
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-            raise TransientFailure(str(exc)) from exc
+
+        response = _call()
 
         try:
             return response.json()
@@ -236,6 +274,11 @@ def parse_litigation_hits(payload: dict, kind: str) -> list[LitigationHit]:
                 acc_nodash = adsh.replace("-", "")
                 source_url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_nodash}/{filename}"
 
+        try:
+            normalized_cik = f"{int(ciks[0]):010d}" if ciks else None
+        except (TypeError, ValueError):
+            normalized_cik = None
+
         results.append(
             LitigationHit(
                 kind=kind,
@@ -244,6 +287,7 @@ def parse_litigation_hits(payload: dict, kind: str) -> list[LitigationHit]:
                 source_url=source_url,
                 source_accession=adsh,
                 detail=None,
+                cik=normalized_cik,
             )
         )
     return results
@@ -288,6 +332,65 @@ def fetch_litigation(
                 seen.add(key)
                 results.append(candidate)
     return results
+
+
+def fetch_litigation_batched(
+    client: EdgarFullTextSearchClient,
+    ciks: list[str],
+    *,
+    start_date: datetime.date,
+    end_date: datetime.date,
+    batch_size: int,
+) -> tuple[dict[str, list[LitigationHit]], int]:
+    """Search all phrases for CIK batches and return hits keyed by CIK.
+
+    This replaces up to ``ticker_count * 7`` identical two-year searches with
+    a small, rate-limited batch set. Pagination is consumed fully; a failed
+    page keeps the caller's durable cursor unchanged so the window is retried.
+    """
+    by_cik: dict[str, list[LitigationHit]] = {cik: [] for cik in ciks}
+    failed_queries = 0
+    for start in range(0, len(ciks), batch_size):
+        batch = ciks[start : start + batch_size]
+        for kind, phrases in LITIGATION_QUERY_PHRASES.items():
+            for phrase in phrases:
+                offset = 0
+                while True:
+                    try:
+                        payload = client.search(
+                            f'"{phrase}"',
+                            forms=_FORMS,
+                            ciks=batch,
+                            start_date=start_date,
+                            end_date=end_date,
+                            offset=offset,
+                        )
+                    except CollectionError:
+                        logger.warning(
+                            "batched litigation search failed for phrase %r ciks=%d offset=%d",
+                            phrase,
+                            len(batch),
+                            offset,
+                            exc_info=True,
+                        )
+                        failed_queries += 1
+                        break
+                    raw_hits = ((payload.get("hits") or {}).get("hits")) or []
+                    candidates = parse_litigation_hits(payload, kind)
+                    for candidate in candidates:
+                        if candidate.cik in by_cik:
+                            by_cik[candidate.cik].append(candidate)
+                    total_raw = (payload.get("hits") or {}).get("total") or 0
+                    total = int(total_raw.get("value", 0)) if isinstance(total_raw, dict) else int(total_raw)
+                    offset += len(raw_hits)
+                    if not raw_hits or offset >= total:
+                        break
+    for cik, hits in by_cik.items():
+        unique: dict[tuple[str, str], LitigationHit] = {}
+        for hit in hits:
+            unique[(hit.kind, hit.source_accession or hit.source_url or "")] = hit
+        by_cik[cik] = list(unique.values())
+    return by_cik, failed_queries
 
 
 # --- Item 3(訴訟)本文の正規表現抽出 --------------------------------------------

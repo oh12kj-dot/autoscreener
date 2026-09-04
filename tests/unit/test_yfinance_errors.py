@@ -1,5 +1,7 @@
+import datetime
 from unittest.mock import Mock
 
+import pandas as pd
 import pytest
 import requests
 from yfinance.exceptions import YFDataException, YFRateLimitError, YFTickerMissingError
@@ -10,6 +12,8 @@ from autoscreener.collectors.errors import (
     TransientFailure,
     classify_exception,
 )
+from autoscreener.collectors.yfinance_client import fetch_latest_price
+from autoscreener.config import RetryConfig
 
 
 def test_rate_limit_error_is_transient():
@@ -54,3 +58,29 @@ def test_timeout_is_transient():
 def test_unknown_exception_is_parse_failure_not_swallowed():
     # 18.1: 未知の例外は「一時的失敗」に丸めず、仕様変更の疑いとして表面化させる
     assert isinstance(classify_exception(ValueError("totally unexpected")), ParseFailure)
+
+
+def test_latest_price_forces_share_refresh_when_split_is_present(monkeypatch):
+    index = pd.DatetimeIndex([datetime.datetime(2026, 9, 3, tzinfo=datetime.UTC)])
+    history = pd.DataFrame(
+        {
+            "Open": [10.0], "High": [11.0], "Low": [9.0], "Close": [10.5],
+            "Volume": [1000], "Dividends": [0.0], "Stock Splits": [2.0],
+        },
+        index=index,
+    )
+    ticker = Mock()
+    ticker.history.return_value = history
+    ticker.get_shares_full.return_value = pd.Series([2_000_000], index=index)
+    monkeypatch.setattr("autoscreener.collectors.yfinance_client.yf.Ticker", lambda _symbol: ticker)
+
+    result = fetch_latest_price(
+        "ZZSPLIT",
+        RetryConfig(max_attempts=1, backoff_base_seconds=0.001, backoff_max_seconds=0.001),
+        include_shares=False,
+    )
+
+    ticker.get_shares_full.assert_called_once()
+    assert result is not None
+    assert result["shares_outstanding"] == 2_000_000
+    assert result["_shares_requested"] is True

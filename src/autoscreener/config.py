@@ -170,6 +170,8 @@ class CollectionConfig(BaseModel):
     # 発表前の古い値を掴んで終わってしまう(`snapshot_collector.py`の
     # `_earnings_triggered_refetch`docstring参照)。0にすると決算日当日のみ。
     statement_refresh_grace_days: int = Field(ge=0, default=3)
+    shares_refresh_interval_days: int = Field(gt=0, default=7)
+    market_session_min_coverage: float = Field(gt=0, le=1, default=0.90)
     retry: RetryConfig
     circuit_breaker: CircuitBreakerConfig
     quarantine: QuarantineConfig
@@ -813,6 +815,8 @@ class EdgarConfig(BaseModel):
     # の間隔より長いと並列度1では間隔いっぱいに送信できず遊びが生じる。
     # その遊びを埋めるだけの値であり、レート上限を動かす設定ではない。
     max_workers: int = Field(gt=0, default=10)
+    litigation_cik_batch_size: int = Field(gt=0, le=100, default=50)
+    litigation_overlap_days: int = Field(ge=1, le=30, default=2)
     retry: EdgarRetryConfig
 
 

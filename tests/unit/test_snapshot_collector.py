@@ -13,7 +13,7 @@ from autoscreener.config import (
     QuarantineConfig,
     RetryConfig,
 )
-from autoscreener.db.models import CollectionLog, EventCalendar, PriceSnapshot, RawSnapshot, Ticker, TickerAlias
+from autoscreener.db.models import CollectionLog, EventCalendar, Filing, PriceSnapshot, RawSnapshot, Ticker, TickerAlias
 from autoscreener.db.session import session_scope
 
 
@@ -64,6 +64,7 @@ def _cleanup(symbol: str) -> None:
             session.query(RawSnapshot).filter_by(ticker_id=ticker.id).delete()
             session.query(PriceSnapshot).filter_by(ticker_id=ticker.id).delete()
             session.query(EventCalendar).filter_by(ticker_id=ticker.id).delete()
+            session.query(Filing).filter_by(ticker_id=ticker.id).delete()
             session.delete(ticker)
 
 
@@ -929,5 +930,166 @@ def test_grace_window_boundary_does_not_trigger_the_day_after(
 
         _, kwargs = mock_fetch_financials.call_args
         assert kwargs.get("include_statements") is False
+    finally:
+        _cleanup(symbol)
+
+
+# --- Incremental shares-outstanding refresh ---------------------------------
+
+
+def _seed_incremental_inputs(session, symbol: str, observed_at: datetime.date) -> Ticker:
+    ticker = Ticker(symbol=symbol, market="US", cik="0000320193")
+    session.add(ticker)
+    session.flush()
+    session.add(RawSnapshot(
+        ticker_id=ticker.id,
+        snapshot_date=observed_at,
+        source="yfinance",
+        payload=_financials_payload(),
+        content_hash=f"shares-{symbol}",
+        last_seen_date=observed_at,
+        available_from=observed_at,
+    ))
+    session.add(PriceSnapshot(
+        ticker_id=ticker.id,
+        trade_date=observed_at,
+        close=10.0,
+        volume=1_000,
+        shares_outstanding=1_000_000,
+        shares_observed_at=observed_at,
+        shares_coverage_status="collected_with_data",
+    ))
+    return ticker
+
+
+@patch("autoscreener.collectors.snapshot_collector.fetch_isin", return_value=None)
+@patch("autoscreener.collectors.snapshot_collector.fetch_latest_price")
+@patch("autoscreener.collectors.snapshot_collector.fetch_raw_financials")
+def test_recent_shares_are_carried_without_an_extra_shares_request(
+    mock_fetch_financials, mock_fetch_price, mock_fetch_isin
+):
+    symbol = "ZZSHARES1"
+    day = datetime.date(2099, 3, 4)  # Wednesday
+    _cleanup(symbol)
+    try:
+        mock_fetch_financials.return_value = {"info": {"marketCap": 1_000_000_000}}
+        mock_fetch_price.return_value = {
+            "trade_date": day,
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.0,
+            "close": 10.5,
+            "volume": 2_000,
+            "shares_outstanding": None,
+            "_shares_requested": False,
+            "dividend": None,
+            "recent_splits": [],
+            "recent_closes": {},
+        }
+        with session_scope() as session:
+            ticker = _seed_incremental_inputs(session, symbol, day - datetime.timedelta(days=1))
+            config = _make_config(threshold=5)
+            assert collect_one(
+                session, uuid.uuid4(), symbol, config, day, market_session_date=day
+            ) == "success"
+            session.flush()
+            current = session.query(PriceSnapshot).filter_by(
+                ticker_id=ticker.id, trade_date=day
+            ).one()
+            assert current.shares_outstanding == 1_000_000
+            assert current.shares_observed_at == day - datetime.timedelta(days=1)
+            assert current.shares_coverage_status == "carried_forward"
+        assert mock_fetch_price.call_args.kwargs["include_shares"] is False
+    finally:
+        _cleanup(symbol)
+
+
+@patch("autoscreener.collectors.snapshot_collector.fetch_isin", return_value=None)
+@patch("autoscreener.collectors.snapshot_collector.fetch_latest_price")
+@patch("autoscreener.collectors.snapshot_collector.fetch_raw_financials")
+def test_new_sec_filing_triggers_immediate_shares_refresh(
+    mock_fetch_financials, mock_fetch_price, mock_fetch_isin
+):
+    symbol = "ZZSHARES2"
+    day = datetime.date(2099, 3, 4)
+    _cleanup(symbol)
+    try:
+        mock_fetch_financials.return_value = {"info": {"marketCap": 1_000_000_000}}
+        mock_fetch_price.return_value = {
+            "trade_date": day,
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.0,
+            "close": 10.5,
+            "volume": 2_000,
+            "shares_outstanding": 2_000_000,
+            "_shares_requested": True,
+            "dividend": None,
+            "recent_splits": [],
+            "recent_closes": {},
+        }
+        with session_scope() as session:
+            ticker = _seed_incremental_inputs(session, symbol, day - datetime.timedelta(days=1))
+            session.add(Filing(
+                ticker_id=ticker.id,
+                cik=ticker.cik,
+                accession_number="0000320193-99-000001",
+                form="10-Q",
+                filed_date=day,
+            ))
+            config = _make_config(threshold=5)
+            assert collect_one(
+                session, uuid.uuid4(), symbol, config, day, market_session_date=day
+            ) == "success"
+            session.flush()
+            current = session.query(PriceSnapshot).filter_by(
+                ticker_id=ticker.id, trade_date=day
+            ).one()
+            assert current.shares_outstanding == 2_000_000
+            assert current.shares_observed_at == day
+            assert current.shares_coverage_status == "collected_with_data"
+        assert mock_fetch_price.call_args.kwargs["include_shares"] is True
+    finally:
+        _cleanup(symbol)
+
+
+@patch("autoscreener.collectors.snapshot_collector.fetch_isin", return_value=None)
+@patch("autoscreener.collectors.snapshot_collector.fetch_latest_price")
+@patch("autoscreener.collectors.snapshot_collector.fetch_raw_financials")
+def test_stale_provider_price_does_not_overwrite_historical_shares(
+    mock_fetch_financials, mock_fetch_price, mock_fetch_isin
+):
+    symbol = "ZZSHARES3"
+    day = datetime.date(2099, 3, 11)
+    prior_day = day - datetime.timedelta(days=8)
+    _cleanup(symbol)
+    try:
+        mock_fetch_financials.return_value = {"info": {"marketCap": 1_000_000_000}}
+        mock_fetch_price.return_value = {
+            "trade_date": prior_day,
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.0,
+            "close": 10.5,
+            "volume": 2_000,
+            "shares_outstanding": 2_000_000,
+            "_shares_requested": True,
+            "dividend": None,
+            "recent_splits": [],
+            "recent_closes": {},
+        }
+        with session_scope() as session:
+            ticker = _seed_incremental_inputs(session, symbol, prior_day)
+            config = _make_config(threshold=5)
+            assert collect_one(
+                session, uuid.uuid4(), symbol, config, day, market_session_date=day
+            ) == "success"
+            session.flush()
+            historical = session.query(PriceSnapshot).filter_by(
+                ticker_id=ticker.id, trade_date=prior_day
+            ).one()
+            assert historical.shares_outstanding == 1_000_000
+            assert historical.shares_observed_at == prior_day
+        assert mock_fetch_price.call_args.kwargs["include_shares"] is True
     finally:
         _cleanup(symbol)

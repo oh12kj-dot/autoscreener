@@ -20,7 +20,9 @@ def _make_config(min_sample: int, threshold: float) -> CollectionConfig:
     )
 
 
-def _fake_collect_one(session, run_id, symbol, collection_config, snapshot_date):
+def _fake_collect_one(
+    session, run_id, symbol, collection_config, snapshot_date, *, market_session_date=None
+):
     return "transient_failure" if symbol.startswith("FAIL") else "success"
 
 

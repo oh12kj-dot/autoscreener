@@ -7,14 +7,15 @@ DBに触れるテストはローカル開発用Postgres(`docker compose up -d`)�
 from __future__ import annotations
 
 import datetime
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
 from autoscreener.batch.collect_filings import collect_filings, select_tracked_tickers
 from autoscreener.collectors.edgar_client import FilingRecord
+from autoscreener.collectors.errors import EmptyResponseError, TransientFailure
 from autoscreener.config import EdgarConfig, EdgarRetryConfig
-from autoscreener.db.models import Filing, Score, Ticker
+from autoscreener.db.models import CollectionCursor, Filing, Score, Ticker
 from autoscreener.db.session import session_scope
 
 _SYMBOL = "ZZFIL1"
@@ -147,3 +148,94 @@ def test_collect_filings_disabled_returns_zero_counts():
         mock_settings.return_value.edgar_user_agent = "TENX research <test@example.com>"
         counts = collect_filings(edgar_config=disabled)
     assert counts == {"tickers": 0, "new_filings": 0, "skipped_no_cik": 0, "failures": 0}
+
+
+def _clear_daily_index_cursor() -> None:
+    with session_scope() as session:
+        session.query(CollectionCursor).filter_by(
+            source="sec_edgar", scope="tracked_filings_daily_index"
+        ).delete()
+
+
+def test_daily_index_fetches_only_changed_ciks_and_advances_cursor(ticker_with_cik):
+    as_of = datetime.date(2026, 9, 5)
+    record = FilingRecord(
+        accession_number="0001234567-26-000099",
+        form="8-K",
+        filed_date=datetime.date(2026, 9, 3),
+        report_date=None,
+        items=["2.02"],
+        primary_document="earnings.htm",
+        document_url="https://www.sec.gov/example/earnings.htm",
+    )
+    _clear_daily_index_cursor()
+    try:
+        with (
+            patch("autoscreener.batch.collect_filings.EdgarClient") as mock_client_cls,
+            patch("autoscreener.batch.collect_filings.get_settings") as mock_settings,
+            patch("autoscreener.batch.collect_filings.load_positions_config") as mock_positions,
+            patch("autoscreener.batch.collect_filings.load_all_notes", return_value={}),
+        ):
+            mock_settings.return_value.edgar_user_agent = "TENX research <test@example.com>"
+            mock_positions.return_value.positions = []
+
+            def _index(day, *, forms):
+                if day == datetime.date(2026, 9, 3):
+                    return {"0000320193"}
+                raise EmptyResponseError("no index for calendar day")
+
+            mock_client_cls.return_value.fetch_daily_index_ciks.side_effect = _index
+            mock_client_cls.return_value.fetch_filings.return_value = [record]
+            counts = collect_filings(
+                symbols=[ticker_with_cik],
+                edgar_config=_edgar_config(),
+                use_daily_index=True,
+                as_of=as_of,
+            )
+
+        assert counts["tickers"] == 1
+        assert counts["new_filings"] == 1
+        assert counts["changed_symbols"] == [ticker_with_cik]
+        mock_client_cls.return_value.fetch_filings.assert_called_once_with(
+            "0000320193", forms=ANY
+        )
+        requested_index_dates = {
+            call.args[0] for call in mock_client_cls.return_value.fetch_daily_index_ciks.call_args_list
+        }
+        assert all(day.weekday() < 5 for day in requested_index_dates)
+        with session_scope() as session:
+            cursor = session.query(CollectionCursor).filter_by(
+                source="sec_edgar", scope="tracked_filings_daily_index"
+            ).one()
+            assert cursor.cursor_date == datetime.date(2026, 9, 3)
+    finally:
+        _clear_daily_index_cursor()
+
+
+def test_daily_index_cursor_does_not_advance_when_ticker_fetch_fails(ticker_with_cik):
+    as_of = datetime.date(2026, 9, 5)
+    _clear_daily_index_cursor()
+    try:
+        with (
+            patch("autoscreener.batch.collect_filings.EdgarClient") as mock_client_cls,
+            patch("autoscreener.batch.collect_filings.get_settings") as mock_settings,
+            patch("autoscreener.batch.collect_filings.load_positions_config") as mock_positions,
+            patch("autoscreener.batch.collect_filings.load_all_notes", return_value={}),
+        ):
+            mock_settings.return_value.edgar_user_agent = "TENX research <test@example.com>"
+            mock_positions.return_value.positions = []
+            mock_client_cls.return_value.fetch_daily_index_ciks.return_value = {"0000320193"}
+            mock_client_cls.return_value.fetch_filings.side_effect = TransientFailure("retry later")
+            counts = collect_filings(
+                symbols=[ticker_with_cik],
+                edgar_config=_edgar_config(),
+                use_daily_index=True,
+                as_of=as_of,
+            )
+        assert counts["failures"] == 1
+        with session_scope() as session:
+            assert session.query(CollectionCursor).filter_by(
+                source="sec_edgar", scope="tracked_filings_daily_index"
+            ).one_or_none() is None
+    finally:
+        _clear_daily_index_cursor()

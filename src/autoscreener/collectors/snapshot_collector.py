@@ -26,7 +26,7 @@ from autoscreener.collectors.yfinance_client import (
 )
 from autoscreener.config import CollectionConfig
 from autoscreener.dates import WEEKLY_REFRESH_WEEKDAY
-from autoscreener.db.models import CollectionLog, EventCalendar, PriceSnapshot, RawSnapshot, Ticker, TickerAlias
+from autoscreener.db.models import CollectionLog, EventCalendar, Filing, PriceSnapshot, RawSnapshot, Ticker, TickerAlias
 from autoscreener.validation.rules import detect_day_over_day_spike, validate_info
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,58 @@ _STATEMENT_KEYS = (
 # 標準の`json.dumps`を通るため、`date`オブジェクトのまま入れるとシリアライズに
 # 失敗する(他の日付列も`_df_to_json`で文字列化している理由と同じ)。
 _STATEMENTS_AS_OF_KEY = "_statements_as_of"
+
+_SHARE_REFRESH_FORMS = frozenset({"10-K", "10-Q", "20-F", "40-F", "S-3", "S-3ASR", "424B4", "424B5", "8-K"})
+
+
+def _latest_shares_observation(
+    session: Session, ticker_id: int
+) -> tuple[int | None, date | None]:
+    row = (
+        session.query(PriceSnapshot.shares_outstanding, PriceSnapshot.shares_observed_at)
+        .filter(
+            PriceSnapshot.ticker_id == ticker_id,
+            PriceSnapshot.shares_outstanding.isnot(None),
+        )
+        .order_by(PriceSnapshot.trade_date.desc())
+        .first()
+    )
+    if row is None:
+        return None, None
+    return int(row[0]), row[1]
+
+
+def _shares_refresh_due(
+    session: Session,
+    ticker_id: int,
+    market_session_date: date,
+    interval_days: int,
+    *,
+    recovering_from_quarantine: bool,
+) -> tuple[bool, str]:
+    """Return whether the sparse shares series needs a provider refresh."""
+    _value, observed_at = _latest_shares_observation(session, ticker_id)
+    if observed_at is None:
+        return True, "missing_observation"
+    if recovering_from_quarantine:
+        return True, "quarantine_recovery"
+    if market_session_date.weekday() == WEEKLY_REFRESH_WEEKDAY:
+        return True, "weekly"
+    if (market_session_date - observed_at).days >= interval_days:
+        return True, "interval_elapsed"
+    relevant_filing = (
+        session.query(Filing.id)
+        .filter(
+            Filing.ticker_id == ticker_id,
+            Filing.form.in_(_SHARE_REFRESH_FORMS),
+            Filing.filed_date > observed_at,
+            Filing.filed_date <= market_session_date,
+        )
+        .first()
+    )
+    if relevant_filing is not None:
+        return True, "sec_filing"
+    return False, "carry_forward"
 
 
 def _carry_forward_statements(session: Session, ticker_id: int, payload: dict[str, Any]) -> None:
@@ -443,9 +495,12 @@ def collect_one(
     symbol: str,
     collection_config: CollectionConfig,
     snapshot_date: date,
+    market_session_date: date | None = None,
 ) -> str:
     """1銘柄を収集しDBに反映する。戻り値は collection_logs.status に相当する文字列。"""
     ticker = get_or_create_ticker(session, symbol)
+    market_session_date = market_session_date or snapshot_date
+    recovering_from_quarantine = bool(ticker.is_quarantined)
 
     if ticker.is_quarantined:
         days_since_attempt = (
@@ -500,13 +555,14 @@ def collect_one(
     has_prior_snapshot = (
         session.query(RawSnapshot.id).filter_by(ticker_id=ticker.id).first() is not None
     )
+    earnings_refresh = _earnings_triggered_refetch(
+        session, ticker.id, snapshot_date, collection_config.statement_refresh_grace_days
+    )
     include_statements = (
         snapshot_date.weekday() == WEEKLY_REFRESH_WEEKDAY
         or ticker.delisted_at is not None
         or not has_prior_snapshot
-        or _earnings_triggered_refetch(
-            session, ticker.id, snapshot_date, collection_config.statement_refresh_grace_days
-        )
+        or earnings_refresh
     )
 
     try:
@@ -638,18 +694,75 @@ def collect_one(
         )
 
     try:
-        price = fetch_latest_price(symbol, collection_config.retry)
+        fetch_shares, shares_refresh_reason = _shares_refresh_due(
+            session,
+            ticker.id,
+            market_session_date,
+            collection_config.shares_refresh_interval_days,
+            recovering_from_quarantine=recovering_from_quarantine,
+        )
+        if earnings_refresh and not fetch_shares:
+            # 決算トリガーで財務諸表を取り直す日は希薄化入力も同期する。
+            fetch_shares = True
+            shares_refresh_reason = "earnings_refresh"
+        price = fetch_latest_price(
+            symbol, collection_config.retry, include_shares=fetch_shares
+        )
     except CollectionError as exc:
         price = None
         _log(session, run_id, ticker.id, snapshot_date, "price_fetch_failed", {"error": str(exc)})
 
+    if price is not None and price["trade_date"] < market_session_date:
+        # Some provider responses return a stale last row for halted or
+        # otherwise unavailable symbols.  Never overwrite that historical row
+        # with shares learned today; doing so would create point-in-time
+        # leakage even though shares_observed_at exposes the mismatch.
+        _log(
+            session,
+            run_id,
+            ticker.id,
+            snapshot_date,
+            "price_stale",
+            {
+                "trade_date": price["trade_date"].isoformat(),
+                "expected_session": market_session_date.isoformat(),
+            },
+        )
+        price = None
+
     if price is not None:
+        shares_requested = bool(price.pop("_shares_requested", True))
         # PriceSnapshotの列ではないメタ情報を先に取り出す(13.4の遡及調整)。
         _reconcile_splits(
             session,
             ticker.id,
             price.pop("recent_splits", []),
             price.pop("recent_closes", {}),
+        )
+
+        if shares_requested and price.get("shares_outstanding") is not None:
+            price["shares_observed_at"] = market_session_date
+            price["shares_coverage_status"] = "collected_with_data"
+        else:
+            carried_shares, carried_observed_at = _latest_shares_observation(session, ticker.id)
+            if carried_shares is not None:
+                price["shares_outstanding"] = carried_shares
+                price["shares_observed_at"] = carried_observed_at
+                price["shares_coverage_status"] = (
+                    "carried_forward_no_finding" if shares_requested else "carried_forward"
+                )
+            else:
+                price["shares_observed_at"] = None
+                price["shares_coverage_status"] = (
+                    "collected_no_finding" if shares_requested else "not_collected"
+                )
+        logger.debug(
+            "%s: shares refresh=%s reason=%s observed_at=%s status=%s",
+            symbol,
+            shares_requested,
+            shares_refresh_reason,
+            price.get("shares_observed_at"),
+            price.get("shares_coverage_status"),
         )
 
         existing_price = (

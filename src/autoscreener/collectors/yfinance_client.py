@@ -259,7 +259,12 @@ def _recent_splits(hist: pd.DataFrame) -> list[tuple[Any, float]]:
     return sorted(splits, key=lambda p: p[0])
 
 
-def fetch_latest_price(symbol: str, retry_config: RetryConfig) -> dict[str, Any] | None:
+def fetch_latest_price(
+    symbol: str,
+    retry_config: RetryConfig,
+    *,
+    include_shares: bool = True,
+) -> dict[str, Any] | None:
     """直近の株価・出来高・発行済株式数を取得する(price_snapshots用)。
 
     価格が取得できないこと自体は財務情報の欠如ほど致命的ではないため、例外では
@@ -288,15 +293,22 @@ def fetch_latest_price(symbol: str, retry_config: RetryConfig) -> dict[str, Any]
             dividend = None
             if "Dividends" in hist.columns and not pd.isna(last["Dividends"]) and last["Dividends"] != 0:
                 dividend = float(last["Dividends"])
+            recent_splits = _recent_splits(hist)
+
+            # A split changes the share-count unit immediately.  Even on a
+            # normal carry-forward day, force one provider observation so the
+            # newly written row is checked against the adjusted history.
+            shares_requested = include_shares or bool(recent_splits)
 
             # 発行済株式数は不定期更新のため、直近日付だけを窓にすると
             # 観測点が1件もなくNoneが返る(実データ検証で確認)。過去に
             # 遡って直近の観測値を拾えるよう十分広い窓を指定する。
             shares_outstanding: int | None = None
-            lookback_start = trade_date - timedelta(days=400)
-            shares = ticker.get_shares_full(start=lookback_start.isoformat())
-            if shares is not None and not shares.empty:
-                shares_outstanding = int(shares.iloc[-1])
+            if shares_requested:
+                lookback_start = trade_date - timedelta(days=400)
+                shares = ticker.get_shares_full(start=lookback_start.isoformat())
+                if shares is not None and not shares.empty:
+                    shares_outstanding = int(shares.iloc[-1])
 
             return {
                 "trade_date": trade_date,
@@ -306,8 +318,9 @@ def fetch_latest_price(symbol: str, retry_config: RetryConfig) -> dict[str, Any]
                 "close": float(last["Close"]),
                 "volume": int(last["Volume"]),
                 "shares_outstanding": shares_outstanding,
+                "_shares_requested": shares_requested,
                 "dividend": dividend,  # D-11:総リターン算出用
-                "recent_splits": _recent_splits(hist),
+                "recent_splits": recent_splits,
                 # 13.4の遡及調整の判定材料。`history()` が返す終値は常に
                 # **現在の単位に分割調整済み**なので、保存済み行と同じ取引日を
                 # 比べれば、保存側が調整済みかどうかが分かる。

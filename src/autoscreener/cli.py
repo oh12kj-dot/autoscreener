@@ -49,6 +49,7 @@ from autoscreener.batch.daily_pipeline import run_daily_pipeline
 from autoscreener.batch.pipeline_recorder import sweep_orphan_runs
 from autoscreener.batch.refresh_cik_map import refresh_cik_map
 from autoscreener.batch.run_daily_collection import run_daily_collection, select_collectable_symbols
+from autoscreener.batch.market_session import latest_completed_us_session
 from autoscreener.batch.universe_refresh import refresh_universe
 from autoscreener.config import load_collection_config
 from autoscreener.dates import utc_today
@@ -109,7 +110,11 @@ def collect_cmd(
         raise typer.Exit(code=1)
 
     typer.echo(f"collecting {len(target_symbols)} symbols...")
-    status_counts = run_daily_collection(target_symbols, snapshot_date=utc_today())
+    status_counts = run_daily_collection(
+        target_symbols,
+        snapshot_date=utc_today(),
+        market_session_date=latest_completed_us_session(),
+    )
     for status, count in sorted(status_counts.items()):
         typer.echo(f"  {status}: {count}")
 

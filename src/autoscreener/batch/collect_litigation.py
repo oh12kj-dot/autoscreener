@@ -30,11 +30,11 @@ from autoscreener.collectors.litigation_source import (
     EdgarFullTextSearchClient,
     LitigationHit,
     detect_litigation_mentions,
-    fetch_litigation,
+    fetch_litigation_batched,
 )
 from autoscreener.config import get_settings, load_edgar_config
 from autoscreener.dates import utc_today
-from autoscreener.db.models import FilingSection, LitigationEvent, Ticker
+from autoscreener.db.models import CollectionCursor, FilingSection, LitigationEvent, Ticker
 from autoscreener.db.session import session_scope
 
 logger = logging.getLogger(__name__)
@@ -114,27 +114,6 @@ def _collect_from_item3(
     return found_kinds
 
 
-def _default_fetcher() -> LitigationFetcher | None:
-    """既定の全文検索フェッチャーを組み立てる。`EDGAR_USER_AGENT` 未設定なら
-    無効(全文検索なしでItem3経路のみ動作させる)。"""
-    settings = get_settings()
-    if not settings.edgar_user_agent:
-        logger.info("EDGAR_USER_AGENT is not set; full text search fallback disabled")
-        return None
-    try:
-        client = EdgarFullTextSearchClient(settings.edgar_user_agent)
-    except ValueError:
-        logger.warning("failed to build EdgarFullTextSearchClient", exc_info=True)
-        return None
-
-    def _fetch(ticker: Ticker, kinds: frozenset[str]) -> list[LitigationHit]:
-        if not ticker.cik:
-            return []
-        return fetch_litigation(client, ticker.symbol, ticker.cik, kinds=kinds)
-
-    return _fetch
-
-
 def _process_ticker(
     session: Session, ticker_id: int, active_fetcher: LitigationFetcher | None
 ) -> dict[str, int]:
@@ -181,7 +160,7 @@ def collect_litigation(
     へ upsert する。
 
     `fetcher` はテストでネットワークに出ないように差し替え可能(既定は
-    `_default_fetcher()` が組み立てるEDGAR全文検索クライアント。
+    本番経路はCIKをまとめたEDGAR全文検索クライアントを使う。
     `EDGAR_USER_AGENT` 未設定ならItem3経路のみで動作する)。
 
     S-5(daily_pipeline_throughput_plan_2026-09-04):以前は
@@ -192,16 +171,60 @@ def collect_litigation(
     戻り値は {"tickers": n, "new_events": n, "existing": n, "failures": n}。
     """
     config = load_edgar_config()
-    active_fetcher = fetcher if fetcher is not None else (_default_fetcher() if config.enabled else None)
+    settings = get_settings()
+    batched_search_enabled = bool(
+        fetcher is None and config.enabled and settings.edgar_user_agent
+    )
+    active_fetcher = fetcher
+    cursor_date_to_advance: datetime.date | None = None
+    cursor_cik_count = 0
 
     with session_scope() as session:
         if symbols:
-            ticker_ids = [
-                row[0]
-                for row in session.query(Ticker.id).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
-            ]
+            ticker_rows = session.query(Ticker.id, Ticker.symbol, Ticker.cik).filter(
+                Ticker.symbol.in_([s.upper() for s in symbols])
+            ).all()
         else:
-            ticker_ids = [t.id for t in select_tracked_tickers(session, limit=limit)]
+            ticker_rows = [
+                (t.id, t.symbol, t.cik) for t in select_tracked_tickers(session, limit=limit)
+            ]
+
+        ticker_ids = [row[0] for row in ticker_rows]
+
+        # Caller-injected fetchers retain the single-ticker contract used by tests.
+        # Production uses one batched search set and a durable overlap cursor.
+        if batched_search_enabled:
+            client = EdgarFullTextSearchClient(
+                settings.edgar_user_agent or "",
+                timeout_seconds=config.timeout_seconds,
+                retry_config=config.retry,
+                requests_per_second=config.requests_per_second,
+            )
+            cursor = session.query(CollectionCursor).filter_by(
+                source="sec_edgar", scope="tracked_litigation_fts"
+            ).one_or_none()
+            as_of = utc_today()
+            start_date = (
+                cursor.cursor_date - datetime.timedelta(days=config.litigation_overlap_days - 1)
+                if cursor is not None
+                else as_of - datetime.timedelta(days=365 * 2)
+            )
+            ciks = sorted({row[2] for row in ticker_rows if row[2]})
+            batched_hits, failed_queries = fetch_litigation_batched(
+                client,
+                ciks,
+                start_date=start_date,
+                end_date=as_of,
+                batch_size=config.litigation_cik_batch_size,
+            )
+
+            def active_fetcher(ticker: Ticker, kinds: frozenset[str]) -> list[LitigationHit]:
+                return [hit for hit in batched_hits.get(ticker.cik or "", []) if hit.kind in kinds]
+
+            cursor_date_to_advance = as_of
+            cursor_cik_count = len(ciks)
+        else:
+            failed_queries = 0
 
     counts = run_parallel_tickers(
         ticker_ids,
@@ -209,4 +232,27 @@ def collect_litigation(
         max_workers=max_workers or config.max_workers,
     )
     zeros = {"tickers": 0, "new_events": 0, "existing": 0, "failures": 0}
-    return {**zeros, **counts}
+    result = {**zeros, **counts, "search_failures": failed_queries}
+
+    # Advance only after both the remote search and every local persistence job
+    # completed.  Advancing before the workers commit would lose the failed
+    # window on the next run.
+    if (
+        cursor_date_to_advance is not None
+        and failed_queries == 0
+        and int(result["failures"]) == 0
+    ):
+        with session_scope() as session:
+            cursor = session.query(CollectionCursor).filter_by(
+                source="sec_edgar", scope="tracked_litigation_fts"
+            ).one_or_none()
+            if cursor is None:
+                session.add(CollectionCursor(
+                    source="sec_edgar", scope="tracked_litigation_fts",
+                    cursor_date=cursor_date_to_advance,
+                    detail={"ciks": cursor_cik_count},
+                ))
+            elif cursor_date_to_advance > cursor.cursor_date:
+                cursor.cursor_date = cursor_date_to_advance
+                cursor.detail = {"ciks": cursor_cik_count}
+    return result

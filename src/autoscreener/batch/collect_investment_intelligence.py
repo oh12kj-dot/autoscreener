@@ -6,6 +6,7 @@ import datetime
 import hashlib
 import logging
 
+from autoscreener.batch.processing_ledger import processed_source_keys, record_processing
 from autoscreener.db.models import (
     CapitalAllocationEvent, DebtInstrument, FilingSection, Guidance, LiquidityFacility,
     ManagementGuidanceSnapshot, ManagementIncentiveSnapshot,
@@ -39,11 +40,14 @@ _KPI_LABELS = {
 
 logger = logging.getLogger(__name__)
 
+_PROCESSOR_VERSION = "1"
+
 
 def collect_investment_intelligence(*, symbols: list[str] | None = None,
                                     observed_at: datetime.datetime | None = None) -> dict[str, int]:
     observed_at = observed_at or datetime.datetime.now(datetime.timezone.utc)
     counts = {"targets": 0, "succeeded": 0, "no_finding": 0, "failed": 0, "outside_scope": 0,
+              "already_processed": 0,
               "sections": 0, "kpis": 0, "debt": 0, "capital_events": 0, "liquidity": 0,
               "incentives": 0, "guidance": 0, "milestones": 0, "rows_written": 0}
     with session_scope() as session:
@@ -68,12 +72,27 @@ def collect_investment_intelligence(*, symbols: list[str] | None = None,
         targets = target_query.order_by(Ticker.symbol).all()
         target_ids = {ticker.id for ticker in targets}
         counts["targets"] = len(targets)
-        section_rows = session.query(FilingSection).filter(FilingSection.ticker_id.in_(target_ids)).order_by(
+        processed_section_ids = {
+            int(key) for key in processed_source_keys(
+                session,
+                source_type="filing_section",
+                processor="investment_intelligence",
+                processor_version=_PROCESSOR_VERSION,
+            ) if key.isdigit()
+        }
+        section_query = session.query(FilingSection).filter(FilingSection.ticker_id.in_(target_ids))
+        if processed_section_ids:
+            section_query = section_query.filter(FilingSection.id.notin_(processed_section_ids))
+        section_rows = section_query.order_by(
             FilingSection.ticker_id, FilingSection.filed_date.asc(), FilingSection.id.asc()
         ).all() if target_ids else []
         sections_by_ticker: dict[int, list[FilingSection]] = {ticker.id: [] for ticker in targets}
         for section in section_rows:
             sections_by_ticker.setdefault(section.ticker_id, []).append(section)
+        tickers_with_any_sections = {
+            row[0] for row in session.query(FilingSection.ticker_id)
+            .filter(FilingSection.ticker_id.in_(target_ids)).distinct().all()
+        } if target_ids else set()
         # uq_kpi_observation は source_accession ではなくこの4列を一意キーにする。
         # 同一日に提出された複数section/accessionから同じKPIが抽出される場合、
         # DB照会だけでは同じトランザクション内の未flush行を判定できず、後続照会の
@@ -89,6 +108,9 @@ def collect_investment_intelligence(*, symbols: list[str] | None = None,
         for ticker in targets:
             ticker_sections = sections_by_ticker[ticker.id]
             if not ticker_sections:
+                if ticker.id in tickers_with_any_sections:
+                    counts["already_processed"] += 1
+                    continue
                 for dataset in coverage_models:
                     _record_coverage(session, ticker.id, dataset, observed_at, CoverageStatus.NOT_COLLECTED,
                         reason_code=CoverageReasonCode.NO_SUPPORTED_FILING, source_scope="10-k,item7;10-q,item7;8-k;def14a;20-f;6-k")
@@ -107,6 +129,20 @@ def collect_investment_intelligence(*, symbols: list[str] | None = None,
                         CoverageStatus.COLLECTED_WITH_DATA if has_data else CoverageStatus.COLLECTED_NO_FINDING,
                         reason_code=None if has_data else CoverageReasonCode.SOURCE_SCANNED_NO_MATCH,
                         source_scope="10-k,item7;10-q,item7;8-k;def14a;20-f;6-k")
+                # Mark source rows complete only after both extraction and the
+                # corresponding coverage records succeeded.  Otherwise a
+                # coverage-write failure could make the source permanently
+                # invisible to the retry.
+                for section in ticker_sections:
+                    record_processing(
+                        session,
+                        ticker_id=section.ticker_id,
+                        source_type="filing_section",
+                        source_key=str(section.id),
+                        processor="investment_intelligence",
+                        processor_version=_PROCESSOR_VERSION,
+                        status="succeeded",
+                    )
                 counts["succeeded"] += 1
             except Exception as exc:
                 detail = f"{type(exc).__name__}: {exc}"[:2000]

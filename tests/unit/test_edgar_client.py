@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import time
 
 import pytest
@@ -9,6 +10,7 @@ import responses
 
 from autoscreener.collectors.edgar_client import (
     COMPANY_TICKERS_URL,
+    DAILY_INDEX_MASTER_URL,
     SUBMISSIONS_URL,
     EdgarClient,
     RateLimiter,
@@ -122,6 +124,34 @@ def test_fetch_filings_filters_by_forms():
     records = client.fetch_filings("0000320193", forms={"10-K"})
     assert len(records) == 1
     assert records[0].form == "10-K"
+
+
+@responses.activate
+def test_fetch_daily_index_returns_only_requested_form_ciks():
+    filing_date = datetime.date(2026, 9, 3)
+    url = DAILY_INDEX_MASTER_URL.format(year=2026, quarter=3, stamp="20260903")
+    responses.add(
+        responses.GET,
+        url,
+        body=(
+            "CIK|Company Name|Form Type|Date Filed|Filename\n"
+            "320193|APPLE INC|8-K|2026-09-03|edgar/data/320193/a.txt\n"
+            "789019|MICROSOFT CORP|4|2026-09-03|edgar/data/789019/b.txt\n"
+        ),
+        status=200,
+    )
+    client = EdgarClient(_config(), "TENX research <test@example.com>")
+    assert client.fetch_daily_index_ciks(filing_date, forms={"8-K"}) == {"0000320193"}
+
+
+@responses.activate
+def test_fetch_daily_index_rejects_unexpected_success_page():
+    filing_date = datetime.date(2026, 9, 3)
+    url = DAILY_INDEX_MASTER_URL.format(year=2026, quarter=3, stamp="20260903")
+    responses.add(responses.GET, url, body="<html>temporary page</html>", status=200)
+    client = EdgarClient(_config(), "TENX research <test@example.com>")
+    with pytest.raises(ParseFailure, match="unexpected format"):
+        client.fetch_daily_index_ciks(filing_date)
 
 
 @responses.activate

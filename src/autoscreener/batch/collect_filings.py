@@ -15,14 +15,17 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
+
+from pandas.tseries.holiday import USFederalHolidayCalendar
 
 from sqlalchemy.orm import Session
 
 from autoscreener.collectors.edgar_client import EdgarClient, FilingRecord
 from autoscreener.collectors.errors import CollectionError, EmptyResponseError
 from autoscreener.config import EdgarConfig, get_settings, load_edgar_config, load_positions_config
-from autoscreener.db.models import Filing, Score, Ticker
+from autoscreener.db.models import CollectionCursor, Filing, Score, Ticker
 from autoscreener.db.session import session_scope
 from autoscreener.research.notes import load_all_notes
 
@@ -134,8 +137,13 @@ def _upsert_filings(session: Session, ticker: Ticker, records: list[FilingRecord
 
 
 def collect_filings(
-    *, symbols: list[str] | None = None, edgar_config: EdgarConfig | None = None
-) -> dict[str, int]:
+    *,
+    symbols: list[str] | None = None,
+    edgar_config: EdgarConfig | None = None,
+    full_refresh: bool = False,
+    use_daily_index: bool = False,
+    as_of: datetime.date | None = None,
+) -> dict[str, int | list[str]]:
     """追跡対象銘柄の提出書類メタデータを取得し `filings` へ upsert する。
 
     戻り値は {"tickers": n, "new_filings": n, "skipped_no_cik": n, "failures": n}。
@@ -149,29 +157,95 @@ def collect_filings(
 
     client = EdgarClient(config, settings.edgar_user_agent or "")
 
-    counts = {"tickers": 0, "new_filings": 0, "skipped_no_cik": 0, "failures": 0}
+    counts: dict[str, int | list[str]] = {
+        "tickers": 0,
+        "new_filings": 0,
+        "skipped_no_cik": 0,
+        "failures": 0,
+        "changed_symbols": [],
+        "index_ciks": 0,
+    }
+    as_of = as_of or datetime.datetime.now(datetime.UTC).date()
     with session_scope() as session:
         if symbols:
             tickers = session.query(Ticker).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
         else:
             tickers = select_tracked_tickers(session, limit=config.max_tracked_tickers)
 
+        cursor = session.query(CollectionCursor).filter_by(
+            source="sec_edgar", scope="tracked_filings_daily_index"
+        ).one_or_none()
+        latest_index_date: datetime.date | None = None
+        index_ciks: set[str] = set()
+        if use_daily_index and not full_refresh:
+            # EDGAR builds each business-day index after 22:00 ET.  At this app's
+            # 09:00 JST schedule the immediately preceding U.S. day's index can
+            # still be incomplete.  Use one settled-day lag; it is picked up on
+            # the next run rather than probing an archive URL that SEC answers
+            # with 403 when the file does not exist yet.
+            floor = cursor.cursor_date + datetime.timedelta(days=1) if cursor else as_of - datetime.timedelta(days=7)
+            end_date = as_of - datetime.timedelta(days=2)
+            federal_holidays = {
+                timestamp.date()
+                for timestamp in USFederalHolidayCalendar().holidays(start=floor, end=end_date)
+            }
+            # Catch up every unprocessed calendar day after downtime.  Missing
+            # weekend/holiday indexes are expected and simply return no data.
+            candidate = floor
+            while candidate <= end_date:
+                if candidate.weekday() >= 5 or candidate in federal_holidays:
+                    candidate += datetime.timedelta(days=1)
+                    continue
+                try:
+                    ciks = client.fetch_daily_index_ciks(candidate, forms=set(TRACKED_FORMS))
+                except EmptyResponseError:
+                    candidate += datetime.timedelta(days=1)
+                    continue
+                index_ciks.update(ciks)
+                latest_index_date = max(latest_index_date or candidate, candidate)
+                candidate += datetime.timedelta(days=1)
+            priority_symbols = {
+                p.ticker.upper() for p in load_positions_config().positions if p.closed_on is None
+            } | set(load_all_notes().keys())
+            tickers = [
+                ticker for ticker in tickers
+                if ticker.cik in index_ciks or ticker.symbol in priority_symbols
+            ]
+            counts["index_ciks"] = len(index_ciks)
+
+        changed_symbols: list[str] = []
         for ticker in tickers:
             if not ticker.cik:
-                counts["skipped_no_cik"] += 1
+                counts["skipped_no_cik"] = int(counts["skipped_no_cik"]) + 1
                 continue
             try:
                 records = client.fetch_filings(ticker.cik, forms=TRACKED_FORMS)
             except EmptyResponseError:
                 # CIKはあるが提出が無い(新規上場直後等)。失敗として数えない。
-                counts["tickers"] += 1
+                counts["tickers"] = int(counts["tickers"]) + 1
                 continue
             except CollectionError:
                 logger.exception("%s: failed to fetch filings", ticker.symbol)
-                counts["failures"] += 1
+                counts["failures"] = int(counts["failures"]) + 1
                 continue
 
-            counts["tickers"] += 1
-            counts["new_filings"] += _upsert_filings(session, ticker, records)
+            counts["tickers"] = int(counts["tickers"]) + 1
+            new_count = _upsert_filings(session, ticker, records)
+            counts["new_filings"] = int(counts["new_filings"]) + new_count
+            if new_count:
+                changed_symbols.append(ticker.symbol)
+
+        counts["changed_symbols"] = sorted(changed_symbols)
+        if latest_index_date is not None and int(counts["failures"]) == 0:
+            if cursor is None:
+                session.add(CollectionCursor(
+                    source="sec_edgar",
+                    scope="tracked_filings_daily_index",
+                    cursor_date=latest_index_date,
+                    detail={"ciks": len(index_ciks)},
+                ))
+            elif latest_index_date > cursor.cursor_date:
+                cursor.cursor_date = latest_index_date
+                cursor.detail = {"ciks": len(index_ciks)}
 
     return counts

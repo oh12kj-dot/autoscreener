@@ -150,12 +150,57 @@ class PriceSnapshot(Base):
     volume: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 13.4: 分割調整後の発行済株式数。希薄化率計算の基礎データ。
     shares_outstanding: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # 発行済株式数は週次＋イベント時取得。値を持ち越した日を「当日観測」と
+    # 誤認しないよう、実取得日と状態を価格日付から独立して保持する。
+    shares_observed_at: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    shares_coverage_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # D-11(docs/defect_and_edge_audit_2026-08-28.md):その取引日の1株あたり配当(ex-date)。
     # `_realized_return` を価格リターンから**総リターン**へ変えるのに使う。配当が
     # 抜けているとユニバース基準率(リフトの分母)が系統的に低く出て、リフトが
     # 過大に見える。分割と同じ経路(yfinance actions 列)で拾う。
     dividend: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CollectionCursor(Base):
+    """外部増分収集の完了カーソル。失敗時は進めず、次回に再取得する。"""
+
+    __tablename__ = "collection_cursors"
+    __table_args__ = (UniqueConstraint("source", "scope", name="uq_collection_cursor_source_scope"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(40))
+    scope: Mapped[str] = mapped_column(String(80))
+    cursor_date: Mapped[datetime.date] = mapped_column(Date)
+    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SourceProcessingLedger(Base):
+    """原文×抽出器バージョンの処理結果。no-findingも保存して再走査を防ぐ。"""
+
+    __tablename__ = "source_processing_ledger"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_type", "source_key", "processor", "processor_version",
+            name="uq_source_processing_ledger_key",
+        ),
+        Index("ix_source_processing_ledger_processor", "processor", "processor_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tickers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(30))
+    source_key: Mapped[str] = mapped_column(String(100))
+    processor: Mapped[str] = mapped_column(String(60))
+    processor_version: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(30))
+    attempted_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
+    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class CollectionLog(Base):

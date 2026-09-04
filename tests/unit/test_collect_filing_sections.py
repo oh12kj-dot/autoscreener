@@ -18,7 +18,7 @@ from __future__ import annotations
 import datetime
 
 from autoscreener.batch.collect_filing_sections import SectionSource, collect_filing_sections
-from autoscreener.db.models import Filing, FilingSection, Ticker
+from autoscreener.db.models import Filing, FilingSection, SourceProcessingLedger, Ticker
 from autoscreener.db.session import session_scope
 
 _SYMBOLS = ["ZZSEC1", "ZZSEC2"]
@@ -27,6 +27,10 @@ _EX99_TEXT = "Q3 revenue grew 20% year over year."
 
 def _cleanup() -> None:
     with session_scope() as session:
+        session.query(SourceProcessingLedger).filter(
+            SourceProcessingLedger.source_type == "filing",
+            SourceProcessingLedger.source_key.like("0001-99-%"),
+        ).delete(synchronize_session=False)
         tickers = session.query(Ticker).filter(Ticker.symbol.in_(_SYMBOLS)).all()
         for ticker in tickers:
             session.query(FilingSection).filter_by(ticker_id=ticker.id).delete()
@@ -104,5 +108,42 @@ def test_collect_filing_sections_skips_8k_without_earnings_item():
         assert stats["tickers"] == 1
         assert stats["new_sections"] == 0
         assert not calls  # フェッチャーに一切触れていない
+    finally:
+        _cleanup()
+
+
+def test_no_ex99_result_is_cached_and_not_requested_again():
+    symbol = "ZZSEC1"
+    _cleanup()
+    try:
+        with session_scope() as session:
+            ticker = Ticker(symbol=symbol, market="US", cik="0000000001")
+            session.add(ticker)
+            session.flush()
+            session.add(Filing(
+                ticker_id=ticker.id,
+                cik=ticker.cik,
+                accession_number="0001-99-000098",
+                form="8-K",
+                filed_date=datetime.date(2026, 7, 2),
+                items=["2.02"],
+            ))
+
+        calls: list[str] = []
+
+        def filing_index(cik: str, accession: str):
+            calls.append(accession)
+            return []
+
+        source = SectionSource(
+            document_text=lambda _url: ("", False),
+            filing_index=filing_index,
+            file_url=lambda cik, accession, filename: f"https://example.test/{filename}",
+        )
+        first = collect_filing_sections(symbols=[symbol], forms={"8-K"}, fetcher=source)
+        second = collect_filing_sections(symbols=[symbol], forms={"8-K"}, fetcher=source)
+        assert first["no_ex99"] == 1
+        assert second["existing"] == 1
+        assert calls == ["0001-99-000098"]
     finally:
         _cleanup()

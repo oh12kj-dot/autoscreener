@@ -62,6 +62,14 @@ yfinance_requests_per_second: 6.0
 # 3日程度あればyfinance側の反映ラグ(通常1〜2日)を吸収できる。
 statement_refresh_grace_days: 3
 
+# 発行済株式数は毎取引日変わる値ではない。直近観測値をPITメタデータ付きで
+# 持ち越し、週次または決算・希薄化関連SEC提出・株式分割時に再取得する。
+shares_refresh_interval_days: 7
+
+# 市場系工程を実行済みとみなす最低価格カバレッジ。1銘柄だけ未来日付を持つ
+# ケースで全体を誤ってskipしないため、active universeの90%以上を要求する。
+market_session_min_coverage: 0.90
+
 retry:
   # TransientFailureのみ対象。PermanentFailure/ParseFailureはリトライしない(18.1)
   max_attempts: 3
@@ -98,6 +106,10 @@ edgar:
   # ここを大きくしても実効レートは上がらない(1リクエストの往復時間が
   # リミッターの間隔より長いぶんの「遊び」を埋めるだけ)。
   max_workers: 10
+  # EDGAR全文検索はCIKをこの件数ずつまとめ、銘柄ごとの同一検索を避ける。
+  litigation_cik_batch_size: 50
+  # 増分検索は境界訂正・遅延indexを拾うため直近成功日から重複して検索する。
+  litigation_overlap_days: 2
   timeout_seconds: 30.0
   # 本文取得(going concern等の検出)を行うか。1銘柄あたり数MBの転送になるため、
   # 追跡対象銘柄(30.3.4)に限って実行する。

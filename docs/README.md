@@ -11,6 +11,7 @@
 - [`live_intelligence_ui_gap_handoff_2026-09-01.md`](live_intelligence_ui_gap_handoff_2026-09-01.md): TAM・マイルストーン・M&A・資本配分が画面に出ない原因分析と、未マージブランチのマージから始める着手順
 - [`outside_tenx_implementation_plan_2026-08-28.md`](outside_tenx_implementation_plan_2026-08-28.md): EDGAR、マクロ、保有管理などの実装計画
 - [`daily_job_status_screen_2026-08-30.md`](daily_job_status_screen_2026-08-30.md): 日次ジョブ実行状況画面の設計
+- [`daily_pipeline_incremental_efficiency_2026-09-04.md`](daily_pipeline_incremental_efficiency_2026-09-04.md): 休場日判定、発行済株式数、SEC提出・抽出の増分化と安全規則
 - [`ui_llm_provider_selection_2026-08-30.md`](ui_llm_provider_selection_2026-08-30.md): UI からの LLM 接続・モデル選択の設計と実装記録
 
 ## 投資判断機能の棚卸し

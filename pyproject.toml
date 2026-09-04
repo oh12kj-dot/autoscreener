@@ -5,6 +5,7 @@ description = "10-bagger candidate screening app — data collection foundation 
 requires-python = ">=3.12"
 dependencies = [
     "yfinance==1.4.1",
+    "exchange-calendars>=4.11,<5.0",
     "sqlalchemy>=2.0,<3.0",
     "alembic>=1.13,<2.0",
     "psycopg[binary]>=3.1,<4.0",

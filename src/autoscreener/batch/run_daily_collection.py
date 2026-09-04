@@ -77,6 +77,7 @@ def run_daily_collection(
     symbols: list[str],
     collection_config: CollectionConfig | None = None,
     snapshot_date: date | None = None,
+    market_session_date: date | None = None,
 ) -> dict[str, int]:
     """候補銘柄リストを収集する。戻り値は状態ごとの件数。"""
     collection_config = collection_config or load_collection_config()
@@ -84,7 +85,14 @@ def run_daily_collection(
 
     def worker(symbol: str, run_id: uuid.UUID) -> str:
         with session_scope() as session:
-            return collect_one(session, run_id, symbol, collection_config, snapshot_date)
+            return collect_one(
+                session,
+                run_id,
+                symbol,
+                collection_config,
+                snapshot_date,
+                market_session_date=market_session_date,
+            )
 
     # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):広域障害でブレーカーが
     # 作動したら、その実行で積み上がった consecutive_failures を巻き戻して

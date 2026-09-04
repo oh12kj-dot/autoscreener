@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from autoscreener.batch.collect_filings import select_tracked_tickers
 from autoscreener.batch.parallel_runner import run_parallel_tickers
+from autoscreener.batch.processing_ledger import is_processed, record_processing
 from autoscreener.collectors.edgar_client import EdgarClient, filing_file_url
 from autoscreener.collectors.errors import CollectionError
 from autoscreener.collectors.filing_text import split_sections
@@ -34,6 +35,33 @@ from autoscreener.db.models import Filing, FilingSection, Ticker
 from autoscreener.db.session import session_scope
 
 logger = logging.getLogger(__name__)
+
+_PROCESSOR_VERSION = "1"
+
+
+def _already_processed(session: Session, filing: Filing, processor: str) -> bool:
+    return is_processed(
+        session,
+        source_type="filing",
+        source_key=filing.accession_number,
+        processor=processor,
+        processor_version=_PROCESSOR_VERSION,
+    )
+
+
+def _record_filing_processing(
+    session: Session, filing: Filing, processor: str, status: str, detail: dict | None = None
+) -> None:
+    record_processing(
+        session,
+        ticker_id=filing.ticker_id,
+        source_type="filing",
+        source_key=filing.accession_number,
+        processor=processor,
+        processor_version=_PROCESSOR_VERSION,
+        status=status,
+        detail=detail,
+    )
 
 _DEFAULT_TICKER_LIMIT = 300
 _DEFAULT_FORMS: frozenset[str] = frozenset({"10-K", "10-Q", "8-K", "DEF 14A", "20-F", "40-F", "6-K"})
@@ -110,6 +138,10 @@ def _process_body_filing(
     counts: dict[str, int],
 ) -> None:
     """10-K/10-Q本体をItem単位に切り出して保存する。"""
+    processor = f"filing_sections:{filing.form.upper()}"
+    if _already_processed(session, filing, processor):
+        counts["existing"] += 1
+        return
     if not filing.document_url:
         counts["skipped_no_url"] += 1
         return
@@ -122,9 +154,13 @@ def _process_body_filing(
         # 既に全セクション保存済み。本文の再取得(EDGARへの再アクセス)を
         # 避けるためここで打ち切る。
         counts["existing"] += len(target_keys)
+        _record_filing_processing(session, filing, processor, "succeeded")
         return
 
     text, _truncated = source.document_text(filing.document_url)
+    if not text.strip():
+        counts["not_found"] += len(target_keys - existing)
+        return
     sections = split_sections(text, filing.form)
     for key in target_keys:
         if key in existing:
@@ -137,6 +173,14 @@ def _process_body_filing(
             continue
         _save_section(session, ticker, filing, key, sections[key], filing.document_url, today)
         counts["new_sections"] += 1
+    found = len(target_keys & (existing | set(sections)))
+    _record_filing_processing(
+        session,
+        filing,
+        processor,
+        "succeeded" if found else "no_finding",
+        {"found": found, "target_count": len(target_keys)},
+    )
 
 
 def _process_ex99_filing(
@@ -148,14 +192,20 @@ def _process_ex99_filing(
     counts: dict[str, int],
 ) -> None:
     """決算発表8-KのEX-99添付をそのまま保存する(K-4への入力)。"""
+    processor = "filing_sections:ex99"
+    if _already_processed(session, filing, processor):
+        counts["existing"] += 1
+        return
     if "ex99" in _existing_sections(session, filing.accession_number):
         counts["existing"] += 1
+        _record_filing_processing(session, filing, processor, "succeeded")
         return
 
     items = source.filing_index(filing.cik, filing.accession_number)
     match = next((item for item in items if _EX99_NAME_RE.search(str(item.get("name") or ""))), None)
     if match is None:
         counts["no_ex99"] += 1
+        _record_filing_processing(session, filing, processor, "no_finding", {"reason": "no_ex99"})
         return
 
     url = source.file_url(filing.cik, filing.accession_number, str(match["name"]))
@@ -165,13 +215,19 @@ def _process_ex99_filing(
         return
     _save_section(session, ticker, filing, "ex99", text, url, today)
     counts["new_sections"] += 1
+    _record_filing_processing(session, filing, processor, "succeeded")
 
 
 def _process_proxy_filing(session: Session, ticker: Ticker, filing: Filing,
                           source: SectionSource, today: Any, counts: dict[str, int]) -> None:
     """Store the latest DEF 14A as one source-preserving proxy section."""
+    processor = "filing_sections:proxy"
+    if _already_processed(session, filing, processor):
+        counts["existing"] += 1
+        return
     if "proxy" in _existing_sections(session, filing.accession_number):
         counts["existing"] += 1
+        _record_filing_processing(session, filing, processor, "succeeded")
         return
     if not filing.document_url:
         counts["skipped_no_url"] += 1
@@ -182,6 +238,7 @@ def _process_proxy_filing(session: Session, ticker: Ticker, filing: Filing,
         return
     _save_section(session, ticker, filing, "proxy", text, filing.document_url, today)
     counts["new_sections"] += 1
+    _record_filing_processing(session, filing, processor, "succeeded")
 
 
 def foreign_form_section_names(form: str) -> set[str]:
@@ -197,8 +254,13 @@ def foreign_form_section_names(form: str) -> set[str]:
 def _process_foreign_filing(session: Session, ticker: Ticker, filing: Filing,
                              source: SectionSource, today: Any, counts: dict[str, int]) -> None:
     names = foreign_form_section_names(filing.form)
+    processor = f"filing_sections:{filing.form.upper()}"
+    if _already_processed(session, filing, processor):
+        counts["existing"] += 1
+        return
     if not names or names <= _existing_sections(session, filing.accession_number):
         counts["existing"] += len(names)
+        _record_filing_processing(session, filing, processor, "succeeded")
         return
     if not filing.document_url:
         counts["skipped_no_url"] += 1
@@ -210,6 +272,7 @@ def _process_foreign_filing(session: Session, ticker: Ticker, filing: Filing,
     for name in names:
         _save_section(session, ticker, filing, name, text, filing.document_url, today)
         counts["new_sections"] += 1
+    _record_filing_processing(session, filing, processor, "succeeded")
 
 
 def _process_ticker(

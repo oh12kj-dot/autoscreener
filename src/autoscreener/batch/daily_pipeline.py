@@ -50,6 +50,7 @@ from autoscreener.batch.collect_guidance import collect_guidance
 from autoscreener.batch.collect_concentration import collect_concentration
 from autoscreener.batch.collect_dilution import collect_dilution
 from autoscreener.batch.collect_litigation import collect_litigation
+from autoscreener.batch.market_session import assess_market_session
 from autoscreener.batch.pipeline_recorder import PipelineRecorder, sweep_orphan_runs
 from autoscreener.batch.refresh_cik_map import refresh_cik_map
 from autoscreener.batch.run_daily_collection import (
@@ -74,7 +75,7 @@ logger = logging.getLogger(__name__)
 
 def _run_stage_unless_resumed(
     recorder: PipelineRecorder,
-    results: dict[str, dict[str, int]],
+    results: dict[str, dict],
     previous_results: dict[str, dict],
     name: str,
     sequence: int,
@@ -95,6 +96,20 @@ def _run_stage_unless_resumed(
         return
     with recorder.stage(name, sequence) as st:
         st.result = results[name] = work()
+
+
+def _skip_stage_unless_resumed(
+    recorder: PipelineRecorder,
+    results: dict[str, dict],
+    previous_results: dict[str, dict],
+    name: str,
+    reason: str,
+) -> None:
+    if name in previous_results:
+        results[name] = previous_results[name]
+        return
+    recorder.skip(name, PIPELINE_STAGE_SEQUENCE[name], reason)
+    results[name] = {"skipped": 1, "skipped_reason": reason}
 
 
 def _find_resumable_run_id(today: datetime.date) -> uuid.UUID | None:
@@ -277,8 +292,24 @@ def _run_daily_pipeline_body(
     collection_config = load_collection_config()
     with session_scope() as session:
         symbols = select_collectable_symbols(session, collection_config)
+        market_decision = assess_market_session(
+            session,
+            target_count=len(symbols),
+            minimum_coverage=collection_config.market_session_min_coverage,
+            symbols=symbols,
+        )
 
-    logger.info("daily collection: %d symbols", len(symbols))
+    collection_symbols = (
+        list(market_decision.symbols_to_collect)
+        if market_decision.should_run and market_decision.symbols_to_collect
+        else symbols
+    )
+    logger.info(
+        "daily collection: %d/%d symbols need session %s",
+        len(collection_symbols),
+        len(symbols),
+        market_decision.expected_session,
+    )
     # A-6:collectionはこのpipelineで最も時間のかかる工程(数十分〜数時間、
     # 監査§10.3「2時間超のcollection」)であり、resumeの主眼はまさにこれを
     # 捨てないこと。`quarantined`/`universe_size` は `st.result` にのみ添える
@@ -291,10 +322,13 @@ def _run_daily_pipeline_body(
         results["collection"] = previous_results["collection"]
         quarantined_count = previous_results["collection"].get("quarantined", 0)
         universe_size = previous_results["collection"].get("universe_size", 0)
-    else:
+    elif market_decision.should_run:
         with recorder.stage("collection", PIPELINE_STAGE_SEQUENCE["collection"]) as st:
             results["collection"] = run_daily_collection(
-                symbols, collection_config=collection_config, snapshot_date=today
+                collection_symbols,
+                collection_config=collection_config,
+                snapshot_date=today,
+                market_session_date=market_decision.expected_session,
             )
             # 18.1/18.7:隔離状態は収集工程(`collect_one`)でのみ更新され、以降の
             # 工程では変わらない。ここで1度だけ読み、隔離健全性判定と画面の
@@ -303,24 +337,50 @@ def _run_daily_pipeline_body(
             with session_scope() as session:
                 quarantined_count, universe_size = collection_population_counts(session)
             st.result = {**results["collection"], "quarantined": quarantined_count, "universe_size": universe_size}
-    health.extend(check_collection_health(results["collection"]))  # 18.7
+    else:
+        logger.info(
+            "market stages skipped: expected_session=%s latest_covered=%s coverage=%d/%d",
+            market_decision.expected_session,
+            market_decision.latest_covered_session,
+            market_decision.covered_count,
+            market_decision.target_count,
+        )
+        _skip_stage_unless_resumed(
+            recorder, results, previous_results, "collection", market_decision.reason or "no_new_market_session"
+        )
+        with session_scope() as session:
+            quarantined_count, universe_size = collection_population_counts(session)
+    # A resumed run may see the just-written market session as fully covered.
+    # In that case the collection stage must be reused, while its unfinished
+    # downstream stages still need to run.
+    market_work_available = market_decision.should_run or "collection" in previous_results
+    if market_work_available:
+        health.extend(check_collection_health(results["collection"]))  # 18.7
 
     # TENX v2: append-only current consensus. This is a display/PIT-history
     # layer and failures must not prevent the deterministic core score.
     logger.info("collecting analyst consensus snapshots")
-    try:
-        _run_stage_unless_resumed(
-            recorder, results, previous_results,
-            "consensus", PIPELINE_STAGE_SEQUENCE["consensus"], collect_consensus,
+    if market_work_available:
+        try:
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "consensus", PIPELINE_STAGE_SEQUENCE["consensus"], collect_consensus,
+            )
+        except Exception:
+            logger.exception("consensus collection failed")
+    else:
+        _skip_stage_unless_resumed(
+            recorder, results, previous_results, "consensus", "no_new_market_session"
         )
-    except Exception:
-        logger.exception("consensus collection failed")
 
     logger.info("applying gates")
-    _run_stage_unless_resumed(
-        recorder, results, previous_results,
-        "gates", PIPELINE_STAGE_SEQUENCE["gates"], lambda: apply_gates(today),
-    )
+    if market_work_available:
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "gates", PIPELINE_STAGE_SEQUENCE["gates"], lambda: apply_gates(today),
+        )
+    else:
+        _skip_stage_unless_resumed(recorder, results, previous_results, "gates", "no_new_market_session")
 
     if is_weekly:
         # 28.8:較正写像を最新の観測で学習し直す。**スコアリングより前**に
@@ -339,17 +399,21 @@ def _run_daily_pipeline_body(
     else:
         recorder.skip("backtest", PIPELINE_STAGE_SEQUENCE["backtest"], "not_weekly")
 
-    logger.info("running scoring")
-    _run_stage_unless_resumed(
-        recorder, results, previous_results,
-        "scoring", PIPELINE_STAGE_SEQUENCE["scoring"], lambda: run_scoring(today),
-    )
+    if market_work_available:
+        logger.info("running scoring")
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "scoring", PIPELINE_STAGE_SEQUENCE["scoring"], lambda: run_scoring(today),
+        )
 
-    logger.info("running forward validation")
-    _run_stage_unless_resumed(
-        recorder, results, previous_results,
-        "forward_validation", PIPELINE_STAGE_SEQUENCE["forward_validation"], lambda: run_forward_validation(today),
-    )
+        logger.info("running forward validation")
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "forward_validation", PIPELINE_STAGE_SEQUENCE["forward_validation"], lambda: run_forward_validation(today),
+        )
+    else:
+        _skip_stage_unless_resumed(recorder, results, previous_results, "scoring", "no_new_market_session")
+        _skip_stage_unless_resumed(recorder, results, previous_results, "forward_validation", "no_new_market_session")
 
     # 30.3.6:追跡対象の選定に当日のランキングを使うため、スコアが確定してから
     # (run_scoringの後)実行する。EDGAR_USER_AGENT未設定なら EdgarClient が
@@ -366,74 +430,123 @@ def _run_daily_pipeline_body(
     try:
         _run_stage_unless_resumed(
             recorder, results, previous_results,
-            "filings", PIPELINE_STAGE_SEQUENCE["filings"], lambda: collect_filings(symbols=tracked_symbols),
+            "filings", PIPELINE_STAGE_SEQUENCE["filings"],
+            lambda: collect_filings(
+                symbols=tracked_symbols,
+                full_refresh=is_weekly,
+                use_daily_index=not is_weekly,
+                as_of=today,
+            ),
         )
     except Exception:
         logger.exception("collect_filings failed (EDGAR_USER_AGENT not set, or SEC unavailable?)")
 
-    logger.info("extracting source sections from new SEC filings")
-    try:
-        _run_stage_unless_resumed(
-            recorder, results, previous_results,
-            "filing_sections", PIPELINE_STAGE_SEQUENCE["filing_sections"],
-            lambda: collect_filing_sections(symbols=tracked_symbols),
+    changed_symbols = list((results.get("filings") or {}).get("changed_symbols") or [])
+    derived_symbols = tracked_symbols if is_weekly else changed_symbols
+
+    logger.info("extracting source sections for %d changed/reconciliation tickers", len(derived_symbols))
+    if derived_symbols:
+        try:
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "filing_sections", PIPELINE_STAGE_SEQUENCE["filing_sections"],
+                lambda: collect_filing_sections(symbols=derived_symbols),
+            )
+        except Exception:
+            logger.exception("filing section extraction failed")
+    else:
+        _skip_stage_unless_resumed(
+            recorder, results, previous_results, "filing_sections", "no_new_filings"
         )
-    except Exception:
-        logger.exception("filing section extraction failed")
 
     disclosure_jobs = (
         ("guidance", collect_guidance),
         ("customer_concentration", collect_concentration),
         ("dilution", collect_dilution),
-        ("litigation", collect_litigation),
     )
     for stage_name, job in disclosure_jobs:
+        if derived_symbols:
+            try:
+                _run_stage_unless_resumed(
+                    recorder, results, previous_results,
+                    stage_name, PIPELINE_STAGE_SEQUENCE[stage_name], lambda job=job: job(symbols=derived_symbols),
+                )
+            except Exception:
+                logger.exception("%s extraction failed", stage_name)
+        else:
+            _skip_stage_unless_resumed(
+                recorder, results, previous_results, stage_name, "no_new_filings"
+            )
+
+    # Litigation uses a batched CIK query and its own overlap cursor, so it must
+    # see the complete tracked set rather than only issuers with new submissions.
+    try:
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "litigation", PIPELINE_STAGE_SEQUENCE["litigation"],
+            lambda: collect_litigation(symbols=tracked_symbols),
+        )
+    except Exception:
+        logger.exception("litigation extraction failed")
+
+    logger.info("extracting investment intelligence from stored filing sections")
+    if derived_symbols:
         try:
             _run_stage_unless_resumed(
                 recorder, results, previous_results,
-                stage_name, PIPELINE_STAGE_SEQUENCE[stage_name], lambda job=job: job(symbols=tracked_symbols),
+                "investment_intelligence", PIPELINE_STAGE_SEQUENCE["investment_intelligence"],
+                lambda: collect_investment_intelligence(symbols=derived_symbols),
             )
         except Exception:
-            logger.exception("%s extraction failed", stage_name)
-
-    logger.info("extracting investment intelligence from stored filing sections")
-    try:
-        _run_stage_unless_resumed(
-            recorder, results, previous_results,
-            "investment_intelligence", PIPELINE_STAGE_SEQUENCE["investment_intelligence"],
-            lambda: collect_investment_intelligence(symbols=tracked_symbols),
+            logger.exception("investment intelligence extraction failed")
+    else:
+        _skip_stage_unless_resumed(
+            recorder, results, previous_results, "investment_intelligence", "no_new_filings"
         )
-    except Exception:
-        logger.exception("investment intelligence extraction failed")
 
-    try:
-        _run_stage_unless_resumed(
-            recorder, results, previous_results,
-            "market_opportunity", PIPELINE_STAGE_SEQUENCE["market_opportunity"],
-            lambda: collect_market_opportunity(symbols=tracked_symbols),
+    if derived_symbols:
+        try:
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "market_opportunity", PIPELINE_STAGE_SEQUENCE["market_opportunity"],
+                lambda: collect_market_opportunity(symbols=derived_symbols),
+            )
+        except Exception:
+            logger.exception("market opportunity collection failed")
+    else:
+        _skip_stage_unless_resumed(
+            recorder, results, previous_results, "market_opportunity", "no_new_filings"
         )
-    except Exception:
-        logger.exception("market opportunity collection failed")
 
-    try:
-        _run_stage_unless_resumed(
-            recorder, results, previous_results,
-            "macro_exposure", PIPELINE_STAGE_SEQUENCE["macro_exposure"],
-            lambda: collect_macro_exposure(symbols=tracked_symbols),
+    if market_work_available:
+        try:
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "macro_exposure", PIPELINE_STAGE_SEQUENCE["macro_exposure"],
+                lambda: collect_macro_exposure(symbols=tracked_symbols),
+            )
+        except Exception:
+            logger.exception("macro exposure calculation failed")
+    else:
+        _skip_stage_unless_resumed(
+            recorder, results, previous_results, "macro_exposure", "no_new_market_session"
         )
-    except Exception:
-        logger.exception("macro exposure calculation failed")
 
     # Issue #3 Phase 1: v5 is append-only and shadow-only.  A failure is
     # recorded as a non-core failed stage but never prevents v4 scoring or the
     # remaining operational stages from completing.
-    try:
-        _run_stage_unless_resumed(
-            recorder, results, previous_results,
-            "model_v5_shadow", PIPELINE_STAGE_SEQUENCE["model_v5_shadow"], lambda: run_v5_shadow(today),
+    if market_work_available:
+        try:
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "model_v5_shadow", PIPELINE_STAGE_SEQUENCE["model_v5_shadow"], lambda: run_v5_shadow(today),
+            )
+        except Exception:
+            logger.exception("Model v5 shadow run failed")
+    else:
+        _skip_stage_unless_resumed(
+            recorder, results, previous_results, "model_v5_shadow", "no_new_market_session"
         )
-    except Exception:
-        logger.exception("Model v5 shadow run failed")
 
     # A-4(2026-09-04、docs/racr_wp_a_operational_safety_2026-09-04.md、
     # 監査§10.1「`forward_validation_v5` は予約済みの26番だがdaily
@@ -445,20 +558,31 @@ def _run_daily_pipeline_body(
     # v4スコアリング・後続の運用工程を止める理由にはならないため、v4とは
     # 異なりnon-core(try/exceptで囲む)扱いにする——model_v5_shadowの後、
     # monitoringの前に実行する。
-    try:
-        _run_stage_unless_resumed(
-            recorder, results, previous_results,
-            "forward_validation_v5", PIPELINE_STAGE_SEQUENCE["forward_validation_v5"],
-            lambda: run_forward_validation_v5(today),
+    if market_work_available:
+        try:
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "forward_validation_v5", PIPELINE_STAGE_SEQUENCE["forward_validation_v5"],
+                lambda: run_forward_validation_v5(today),
+            )
+        except Exception:
+            logger.exception("Model v5 forward validation failed")
+    else:
+        _skip_stage_unless_resumed(
+            recorder, results, previous_results, "forward_validation_v5", "no_new_market_session"
         )
-    except Exception:
-        logger.exception("Model v5 forward validation failed")
 
     for stage_name in ("investment_intelligence", "market_opportunity", "macro_exposure"):
         stage_result = results.get(stage_name) or {}
         failed = int(stage_result.get("failed", 0))
         targets = int(stage_result.get("targets", 0))
-        attempted = int(stage_result.get("succeeded", 0)) + int(stage_result.get("no_finding", 0)) + failed + int(stage_result.get("with_data", 0))
+        attempted = (
+            int(stage_result.get("succeeded", 0))
+            + int(stage_result.get("no_finding", 0))
+            + int(stage_result.get("already_processed", 0))
+            + failed
+            + int(stage_result.get("with_data", 0))
+        )
         if failed:
             health.append(HealthFinding(code="live_intelligence_collection_failed", severity="warning",
                 message=f"{stage_name} recorded {failed} failed collection attempts", detail={"stage": stage_name, "failed": failed, "targets": targets}))
@@ -506,7 +630,9 @@ def _run_daily_pipeline_body(
         check_pipeline_health(
             target_count=len(symbols),
             universe_size=universe_size,
-            scoring_result=results.get("scoring"),
+            # An intentional no-session skip is healthy.  Passing the explicit
+            # skip result here would be misclassified as a silent scoring loss.
+            scoring_result=results.get("scoring") if market_work_available else None,
             previous_scored=recorder.previous_scored(),
             failed_stages=recorder.non_core_failed_stages(),
         )

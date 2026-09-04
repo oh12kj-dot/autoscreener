@@ -367,6 +367,12 @@ uv run python -m autoscreener.cli estimate-elasticity
 
 Windows Task Scheduler にタスク `AutoScreenerDailyPipeline` が登録済みで、**毎日09:00(日本時間)** に `scripts/run_daily_pipeline.bat` が自動実行されます。実行内容は `run-daily-pipeline` と同じです。
 
+パイプラインはNYSEの取引カレンダーとDBの銘柄別カバレッジを見て、休場日には
+市場系工程を飛ばし、部分実行後は不足銘柄だけを補完します。SEC提出書類と原文抽出も
+日次は変更銘柄だけ、月曜は全件照合です。発行済株式数は週次・決算・関連SEC提出時に
+更新し、通常日の持ち越しには実観測日を保持します。詳細は
+[`docs/daily_pipeline_incremental_efficiency_2026-09-04.md`](docs/daily_pipeline_incremental_efficiency_2026-09-04.md) を参照してください。
+
 **月曜日は追加で2つ走ります。** ユニバースの再取得(週次)と、擬似バックテストの
 再実行です。後者は確率の較正写像を最新の観測で学習し直すためのもので、
 **スコアリングより前**に実行されます——順序が逆だと、その週のスコアは1週間古い
@@ -491,7 +497,7 @@ Live Intelligence API は `as_of` を受け取り、その日より後に観測�
 | `/ready` が200なのに画面が動かない | v4以降はこの状態にならないようにしてあります(`/ready` はDBだけでなく設定ファイルの検証も行い、噛み合っていなければ503を返します)。それでも起きる場合はブラウザではなく `curl` で直接叩き、`/ready` の `scoring_version` が期待どおりかを確認してください |
 | 全画面に「Failed to fetch」が出る | ほぼ必ず**APIプロセスの再起動忘れ**です。`http://localhost:8000/ready` を開いて確認してください(`/health` はDBを見ないので、スキーマが古くても200を返します)。マイグレーション後は必ずAPIを再起動してください。`--reload` 付きで起動していれば自動的に読み直されます |
 | `docker compose up -d --wait` がタイムアウトする | Docker Desktopが起動しているか確認 |
-| 収集中に`HTTP Error 401/429`が多発する | Yahoo Finance側のレート制限。短時間に何度も全銘柄収集を実行すると起きやすい。自動的にリトライ・隔離される設計だが、頻発する場合は時間を空けて再実行する。秒あたりの上限は `config/collection.yaml` の `yfinance_requests_per_second`(既定2.0)で下げられます |
+| 収集中に`HTTP Error 401/429`が多発する | Yahoo Finance側のレート制限。短時間に何度も全銘柄収集を実行すると起きやすい。自動的にリトライ・隔離される設計だが、頻発する場合は時間を空けて再実行する。秒あたりの上限は `config/collection.yaml` の `yfinance_requests_per_second`(既定6.0)で下げられます |
 | EDGARが403や429を返す | SECの制限は**IP単位**です。`config/collection.yaml` の `edgar.requests_per_second`(既定5.0、SECの上限は約10)を下げてください。403/429を受けると `edgar.throttle_cooldown_seconds`(既定60秒)だけSEC向けリクエスト全体が自動で止まります。**同じマシンで日次パイプラインとテストスイートを同時に走らせない**こと——レートは単純に足し算になります |
 | APIから`http://localhost:5173`のCORSエラーが出る | `autoscreener/api/main.py`のCORS許可オリジンを確認(既定は`localhost:5173`のみ許可) |
 | スコアが表示されない・空になる | `collect` → `apply-gates` → `run-scoring` の順で実行されているか確認。`GET /api/v1/universe/status` で直近の実行状況を確認できる |
