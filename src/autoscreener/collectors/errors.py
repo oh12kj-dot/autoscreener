@@ -10,6 +10,7 @@ string-matching an error message.
 from __future__ import annotations
 
 import requests
+import traceback
 from yfinance.exceptions import (
     YFDataException,
     YFException,
@@ -52,6 +53,26 @@ class ParseFailure(CollectionError):
     earliest signal that yfinance's upstream schema changed and the collector
     needs code changes, not just a retry.
     """
+
+
+class YFinanceSessionFailure(TransientFailure):
+    """The one observed yfinance cookie/session failure eligible for retry.
+
+    This intentionally is not a blanket ``TypeError`` policy.  The caller must
+    establish both the exact message and a yfinance stack frame before raising
+    it; all other type errors remain parse failures.
+    """
+
+
+def is_known_yfinance_session_typeerror(exc: Exception) -> bool:
+    """Return true only for the documented transient yfinance failure shape."""
+    if not isinstance(exc, TypeError) or str(exc) != "argument of type 'NoneType' is not iterable":
+        return False
+    for frame in traceback.extract_tb(exc.__traceback__):
+        normalized = "/" + frame.filename.replace("\\", "/").lstrip("/")
+        if "/yfinance/" in normalized:
+            return True
+    return False
 
 
 def classify_exception(exc: Exception) -> CollectionError:

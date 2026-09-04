@@ -44,7 +44,7 @@ def test_forward_validation_v5_wired_into_stage_sequence():
     置き換える。
     """
     assert PIPELINE_STAGE_SEQUENCE["forward_validation_v5"] == 26
-    assert PIPELINE_STAGE_COUNT == 26
+    assert PIPELINE_STAGE_COUNT == 27
     # 予約は空になった(移した先のforward_validation_v5がこの辞書に残る
     # 唯一のエントリだったため)。削除ではなく空のまま残す方針
     # (pipeline_stages.py参照)。
@@ -185,6 +185,9 @@ def _stub_phase2367_steps():
                 target_count=0,
             ),
         ))
+        statement_due = stack.enter_context(
+            patch("autoscreener.batch.daily_pipeline.refresh_is_due", return_value=False)
+        )
         filing_sections = stack.enter_context(
             patch("autoscreener.batch.daily_pipeline.collect_filing_sections", return_value={"sections": 0})
         )
@@ -221,6 +224,7 @@ def _stub_phase2367_steps():
             "forward_validation_v5": forward_validation_v5,
             "orphan_sweep": orphan_sweep,
             "market_session": market_session,
+            "statement_due": statement_due,
             "filing_sections": filing_sections,
             "guidance": guidance,
             "concentration": concentration,

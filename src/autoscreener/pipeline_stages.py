@@ -39,6 +39,9 @@ PIPELINE_STAGE_SEQUENCE = {
     # `sequence` therefore reflects *when this number was assigned*, not a
     # strict guarantee of chronological execution order for every stage.
     "forward_validation_v5": 26,
+    # P0-A: independent of the price-session stage.  Kept at the next free
+    # number; existing persisted sequence values are never renumbered.
+    "statement_refresh": 27,
 }
 
 PIPELINE_STAGE_COUNT = len(PIPELINE_STAGE_SEQUENCE)

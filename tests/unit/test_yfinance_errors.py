@@ -11,6 +11,7 @@ from autoscreener.collectors.errors import (
     PermanentFailure,
     TransientFailure,
     classify_exception,
+    is_known_yfinance_session_typeerror,
 )
 from autoscreener.collectors.yfinance_client import fetch_latest_price
 from autoscreener.config import RetryConfig
@@ -58,6 +59,18 @@ def test_timeout_is_transient():
 def test_unknown_exception_is_parse_failure_not_swallowed():
     # 18.1: 未知の例外は「一時的失敗」に丸めず、仕様変更の疑いとして表面化させる
     assert isinstance(classify_exception(ValueError("totally unexpected")), ParseFailure)
+
+
+def test_only_yfinance_stack_none_iterable_typeerror_is_retry_eligible():
+    namespace: dict[str, object] = {}
+    exec(compile("def raise_known():\n    raise TypeError(\"argument of type 'NoneType' is not iterable\")", "yfinance/data.py", "exec"), namespace)
+    with pytest.raises(TypeError) as known:
+        namespace["raise_known"]()
+    assert is_known_yfinance_session_typeerror(known.value) is True
+
+    with pytest.raises(TypeError) as unknown:
+        raise TypeError("argument of type 'NoneType' is not iterable")
+    assert is_known_yfinance_session_typeerror(unknown.value) is False
 
 
 def test_latest_price_forces_share_refresh_when_split_is_present(monkeypatch):

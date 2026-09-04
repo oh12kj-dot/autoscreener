@@ -497,6 +497,36 @@ def test_monday_always_fetches_statements(mock_fetch_financials, mock_fetch_pric
 @patch("autoscreener.collectors.snapshot_collector.fetch_isin", return_value=None)
 @patch("autoscreener.collectors.snapshot_collector.fetch_latest_price", return_value=None)
 @patch("autoscreener.collectors.snapshot_collector.fetch_raw_financials")
+def test_market_week_refresh_can_force_statements_on_tuesday(
+    mock_fetch_financials, mock_fetch_price, mock_fetch_isin
+):
+    """P0-A: local batch weekday must not decide the weekly statement work."""
+    symbol = "ZZSTATEMENTWEEK"
+    _cleanup(symbol)
+    try:
+        mock_fetch_financials.return_value = _financials_payload()
+        with session_scope() as session:
+            ticker = Ticker(symbol=symbol, market="US")
+            session.add(ticker)
+            session.flush()
+            session.add(RawSnapshot(
+                ticker_id=ticker.id, snapshot_date=_TUESDAY - datetime.timedelta(days=1),
+                source="yfinance", payload=_financials_payload(), content_hash="statement-week-prev",
+                last_seen_date=_TUESDAY - datetime.timedelta(days=1),
+                available_from=_TUESDAY - datetime.timedelta(days=1),
+            ))
+            assert collect_one(
+                session, uuid.uuid4(), symbol, _make_config(threshold=5), _TUESDAY,
+                market_session_date=_MONDAY, force_statement_refresh=True,
+            ) == "success"
+        assert mock_fetch_financials.call_args.kwargs["include_statements"] is True
+    finally:
+        _cleanup(symbol)
+
+
+@patch("autoscreener.collectors.snapshot_collector.fetch_isin", return_value=None)
+@patch("autoscreener.collectors.snapshot_collector.fetch_latest_price", return_value=None)
+@patch("autoscreener.collectors.snapshot_collector.fetch_raw_financials")
 def test_non_weekly_day_carries_forward_statements_and_gates_still_find_them(
     mock_fetch_financials, mock_fetch_price, mock_fetch_isin
 ):

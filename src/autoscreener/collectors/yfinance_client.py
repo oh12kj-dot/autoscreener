@@ -31,7 +31,9 @@ from autoscreener.collectors.errors import (
     CollectionError,
     EmptyResponseError,
     TransientFailure,
+    YFinanceSessionFailure,
     classify_exception,
+    is_known_yfinance_session_typeerror,
 )
 from autoscreener.collectors.rate_limit import get_shared_limiter
 from autoscreener.config import RetryConfig
@@ -49,6 +51,29 @@ def _retrying(retry_config: RetryConfig):
         wait=wait_exponential_jitter(initial=retry_config.backoff_base_seconds, max=retry_config.backoff_max_seconds),
         reraise=True,
     )
+
+
+def _reset_yfinance_session_state() -> None:
+    """Discard only yfinance's cached cookie/crumb after its known transient bug.
+
+    The next retry still passes through ``YfData._make_request`` and therefore
+    the process-wide HTTP limiter.  Attribute checks make this compatible with
+    yfinance versions that do not expose one of these private caches.
+    """
+    data = yf.data.YfData()
+    for attr in ("_cookie", "_crumb"):
+        if hasattr(data, attr):
+            setattr(data, attr, None)
+
+
+def _raise_classified_yfinance_exception(exc: Exception, *, operation: str) -> None:
+    """Classify an error without broadening retry eligibility for TypeError."""
+    if is_known_yfinance_session_typeerror(exc):
+        _reset_yfinance_session_state()
+        raise YFinanceSessionFailure(
+            f"known yfinance session TypeError in {operation}; session state reset"
+        ) from exc
+    raise classify_exception(exc) from exc
 
 
 
@@ -182,7 +207,7 @@ def fetch_raw_financials(
         except CollectionError:
             raise
         except Exception as exc:
-            raise classify_exception(exc) from exc
+            _raise_classified_yfinance_exception(exc, operation="fetch_raw_financials")
 
     return _call()
 
@@ -333,7 +358,7 @@ def fetch_latest_price(
         except CollectionError:
             raise
         except Exception as exc:
-            raise classify_exception(exc) from exc
+            _raise_classified_yfinance_exception(exc, operation="fetch_latest_price")
 
     return _call()
 
@@ -435,6 +460,6 @@ def fetch_price_and_shares_history(
         except CollectionError:
             raise
         except Exception as exc:
-            raise classify_exception(exc) from exc
+            _raise_classified_yfinance_exception(exc, operation="fetch_price_and_shares_history")
 
     return _call()

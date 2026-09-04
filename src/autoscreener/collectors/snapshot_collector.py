@@ -496,6 +496,7 @@ def collect_one(
     collection_config: CollectionConfig,
     snapshot_date: date,
     market_session_date: date | None = None,
+    force_statement_refresh: bool = False,
 ) -> str:
     """1銘柄を収集しDBに反映する。戻り値は collection_logs.status に相当する文字列。"""
     ticker = get_or_create_ticker(session, symbol)
@@ -559,7 +560,11 @@ def collect_one(
         session, ticker.id, snapshot_date, collection_config.statement_refresh_grace_days
     )
     include_statements = (
-        snapshot_date.weekday() == WEEKLY_REFRESH_WEEKDAY
+        # A weekly refresh is scheduled from the *completed US market week*,
+        # not from the local batch date.  In particular, a Tuesday JST run may
+        # be the first successful run after Monday's US close.
+        force_statement_refresh
+        or market_session_date.weekday() == WEEKLY_REFRESH_WEEKDAY
         or ticker.delisted_at is not None
         or not has_prior_snapshot
         or earnings_refresh

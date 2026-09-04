@@ -78,6 +78,7 @@ def run_daily_collection(
     collection_config: CollectionConfig | None = None,
     snapshot_date: date | None = None,
     market_session_date: date | None = None,
+    force_statement_refresh: bool = False,
 ) -> dict[str, int]:
     """候補銘柄リストを収集する。戻り値は状態ごとの件数。"""
     collection_config = collection_config or load_collection_config()
@@ -92,6 +93,7 @@ def run_daily_collection(
                 collection_config,
                 snapshot_date,
                 market_session_date=market_session_date,
+                force_statement_refresh=force_statement_refresh,
             )
 
     # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):広域障害でブレーカーが
