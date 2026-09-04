@@ -106,3 +106,36 @@ model_confidence distinct values = [0.5]
 4. **floor を UI に明示する。** 「破綻時の回収率を1%と仮置きした値」であることが画面から分かること。
 
 **現時点の扱い:** RACRはshadowであり `default_objective` は `ten_bagger` のままなので、実害は出ていない。ただし**この状態のRACRを「リスク調整済み」として昇格させてはならない。**
+
+---
+
+## 6. 追記(WP-D適用後、run `8b9475a9`)
+
+WP-Dでconfidenceは定数0.5から**175通り**に分散した。D-1〜D-4は意図どおり動いている。
+しかし**RACRとCE CAGRの結合はほとんど解けなかった。**
+
+| ModelUncertaintyの形 | Spearman(RACR, ce_cagr) |
+|---|---:|
+| WP-B2時点(confidence定数0.5) | 0.994965 |
+| 現行 `U=(1-conf)*\|ce_cagr\|` | 0.992183 |
+| 案 `U=(1-conf)*0.05`(ce非依存) | 0.992868 |
+| 案 `U=(1-conf)*0.10`(ce非依存) | 0.991793 |
+| 案 `U=(1-conf)*0.20`(ce非依存) | 0.988270 |
+| **不確実性項を完全に外す** | **0.993574** |
+
+### 判明したこと
+
+**1. ModelUncertaintyの関数形は原因ではない。** `|ce_cagr|` への比例をやめてce非依存にしても0.988〜0.993で、**項を丸ごと外した0.9936と大差ない**。以前「関数形が結合の主因かもしれない」と書いたが、これは測定により否定された。
+
+**2. 真の原因はconfidenceの分散幅である。** 相異なる値は175個あるが、**IQRは0.036しかない**(p25 0.542 / median 0.560 / p75 0.578)。値は散っているが、実質ほぼ定数である。
+
+**3. より根本的には、リスク項3つすべてがce_cagrと共線である。** リスク項を全て入れた `base` ですら Spearman 0.9936。cond_tail_loss と ce_cagr の相関 -0.855、failure_prob と -0.696。**すべてが同じ mu / sigma / survival から派生している以上、objective層でもreliability層でも分離できない。**
+
+### 結論
+
+**objective層(WP-B2)とreliability層(WP-D)での改善はこれ以上効果が無い。** RACRをCE CAGRと別物にするには、V4のlognormal seedから導けない**独立したリスク次元**が要る:
+
+- **WP-E(future state model):** margin/share/net-debt/dividend path を企業ごとに別々に推定する。現在これらはV4 seedの派生でしかない。
+- **WP-F(path simulation / competing risk):** 保有中drawdownと原因別回収率。終端分布からは原理的に計算できない量であり、定義上ce_cagrと独立。
+
+これらが入るまで、RACRは「CE CAGRに定数を足した順位」から動かない。**この事実をUIとDecision Recordに明記し、リスク調整済みであるかのように昇格させないこと。**
