@@ -46,6 +46,7 @@ from autoscreener.batch.collect_xbrl_facts import collect_xbrl_facts
 from autoscreener.batch.collect_consensus import collect_consensus
 from autoscreener.batch.collect_investment_intelligence import collect_investment_intelligence
 from autoscreener.batch.daily_pipeline import run_daily_pipeline
+from autoscreener.batch.pipeline_recorder import sweep_orphan_runs
 from autoscreener.batch.refresh_cik_map import refresh_cik_map
 from autoscreener.batch.run_daily_collection import run_daily_collection, select_collectable_symbols
 from autoscreener.batch.universe_refresh import refresh_universe
@@ -499,13 +500,55 @@ def estimate_elasticity_cmd(
 
 
 @app.command("run-daily-pipeline")
-def run_daily_pipeline_cmd() -> None:
+def run_daily_pipeline_cmd(
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help=(
+            "A-6(docs/racr_wp_a_operational_safety_2026-09-04.md):今日ぶんの未完走run"
+            "(succeeded以外)があればそれへ合流し、既にsucceededした工程"
+            "(特にcollection)を再実行しない。長時間のcollectionの後にgateで"
+            "落ちても、そこまでの成果を捨てずに再開できる。該当runが無ければ"
+            "通常どおり新規runになる(安全側のフォールバック)。"
+        ),
+    ),
+) -> None:
     """収集→ゲート適用→スコアリングを1回で実行する(スケジューラから呼び出す想定)。"""
-    results = run_daily_pipeline()
+    results = run_daily_pipeline(resume=resume)
     for stage, counts in results.items():
         typer.echo(f"[{stage}]")
         for key, count in counts.items():
             typer.echo(f"  {key}: {count}")
+
+
+@app.command("sweep-orphan-runs")
+def sweep_orphan_runs_cmd(
+    threshold_minutes: int = typer.Option(
+        None,
+        help=(
+            "A-2/A-6:heartbeatがこの分数以上更新されていない `running` runを"
+            "`aborted` へ落とす。省略時は既定(90分、"
+            "batch.pipeline_recorder.DEFAULT_ORPHAN_SWEEP_THRESHOLD)を使う。"
+        ),
+    ),
+) -> None:
+    """A-6:孤児run(heartbeatが止まった `running` run)を手動で回収する。
+
+    `run_daily_pipeline()` は起動のたびに自動でこれを呼ぶため、通常は
+    手動実行を必要としない。2026-09-03型の停止runを次回の日次実行を待たず
+    今すぐ確定させたい場合や、`/operational-readiness` が
+    `latest_run_stuck_running` を報告しているときの復旧操作として使う。
+    """
+    kwargs = {}
+    if threshold_minutes is not None:
+        kwargs["threshold"] = datetime.timedelta(minutes=threshold_minutes)
+    swept = sweep_orphan_runs(**kwargs)
+    if not swept:
+        typer.echo("孤児runはありませんでした。")
+        return
+    typer.echo(f"{len(swept)}件のrunを aborted へ確定しました:")
+    for run_id in swept:
+        typer.echo(f"  {run_id}")
 
 
 @app.command("refresh-cik-map")

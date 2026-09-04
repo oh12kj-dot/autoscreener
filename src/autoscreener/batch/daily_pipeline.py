@@ -16,11 +16,24 @@
 どの工程が握り潰すか)は一切変えていない**——記録は副作用として追加した
 だけで、失敗時の制御フローは08-29の実運用当時のままである(§9)。唯一の
 例外が insider/short_interest のtry分割(§3.5※、下記コメント参照)。
+
+**2026-09-04(A-2、docs/racr_wp_a_operational_safety_2026-09-04.md、
+監査§10.2/10.3):** `run_daily_pipeline()` 全体を outer try/except/finally
+で包んだ。`collection`/`gates`/`scoring`/`forward_validation` は上の§9の
+とおり意図的に個別のtry/exceptを持たない停止則の工程だが、その例外が
+この関数自身から抜けると `recorder.finish()` に到達せず、
+`pipeline_runs.status` が `running` のまま永久に残る——2026-09-03の
+gate stage FK違反が実際にこれで発生した。**個々の工程の停止則は一切
+変えていない**(collectionの中身で失敗を握り潰すようにはしていない)。
+変えたのは「run全体としての確定処理を必ず1回だけ、どの経路で終わっても
+実行する」という一段外側の保証だけである。
 """
 
 from __future__ import annotations
 
+import datetime
 import logging
+import uuid
 
 from autoscreener.backtest.runner import run_backtest
 from autoscreener.batch.apply_gates import apply_gates
@@ -37,7 +50,7 @@ from autoscreener.batch.collect_guidance import collect_guidance
 from autoscreener.batch.collect_concentration import collect_concentration
 from autoscreener.batch.collect_dilution import collect_dilution
 from autoscreener.batch.collect_litigation import collect_litigation
-from autoscreener.batch.pipeline_recorder import PipelineRecorder
+from autoscreener.batch.pipeline_recorder import PipelineRecorder, sweep_orphan_runs
 from autoscreener.batch.refresh_cik_map import refresh_cik_map
 from autoscreener.batch.run_daily_collection import (
     collection_population_counts,
@@ -48,30 +61,126 @@ from autoscreener.batch.run_monitoring import run_monitoring
 from autoscreener.batch.universe_refresh import refresh_universe
 from autoscreener.config import load_collection_config, load_edgar_config
 from autoscreener.dates import WEEKLY_REFRESH_WEEKDAY, utc_today
+from autoscreener.db.models import PipelineRun
 from autoscreener.db.session import session_scope
 from autoscreener.monitoring import HealthFinding, check_collection_health, check_pipeline_health, check_quarantine_health
 from autoscreener.pipeline_stages import PIPELINE_STAGE_SEQUENCE
 from autoscreener.scoring.engine import run_scoring
 from autoscreener.scoring.v5.engine import run_v5_shadow
-from autoscreener.scoring.forward_validation import run_forward_validation
+from autoscreener.scoring.forward_validation import run_forward_validation, run_forward_validation_v5
 
 logger = logging.getLogger(__name__)
 
 
-def run_daily_pipeline() -> dict[str, dict[str, int]]:
+def _run_stage_unless_resumed(
+    recorder: PipelineRecorder,
+    results: dict[str, dict[str, int]],
+    previous_results: dict[str, dict],
+    name: str,
+    sequence: int,
+    work,
+) -> None:
+    """A-6:`previous_results`(前回succeededした工程の結果)に `name` が
+    既にあれば、実際の処理(`work`)を呼ばずその結果を再利用する。
+
+    新規run(`previous_results == {}`)では常に `work()` を呼ぶので、
+    このヘルパを経由しても非再開時の挙動は完全に同じになる。**このヘルパ
+    自身は例外を握り潰さない**(`recorder.stage()` と同じ「記録するだけ」の
+    立場。§9のstop則——どの工程が全体を止め、どの工程が握り潰すかは
+    呼び出し側のtry/except配置がそのまま決める)。
+    """
+    if name in previous_results:
+        logger.info("resume: reusing already-succeeded stage %r from a previous attempt", name)
+        results[name] = previous_results[name]
+        return
+    with recorder.stage(name, sequence) as st:
+        st.result = results[name] = work()
+
+
+def _find_resumable_run_id(today: datetime.date) -> uuid.UUID | None:
+    """A-6(2026-09-04、docs/racr_wp_a_operational_safety_2026-09-04.md、
+    監査§10.3):今日ぶんの、`succeeded` で終わっていない直近のrunを探す。
+
+    `succeeded` を除外するのは「今日はもう完走している」場合に `--resume`
+    を誤って新しい部分再実行にしないため。見つからなければ通常どおり新規
+    runを作る(=`--resume` を付けても実害が無い。安全側のフォールバック)。
+    """
+    with session_scope() as session:
+        row = (
+            session.query(PipelineRun)
+            .filter(PipelineRun.run_date == today, PipelineRun.status != "succeeded")
+            .order_by(PipelineRun.started_at.desc())
+            .first()
+        )
+    return row.run_id if row is not None else None
+
+
+def run_daily_pipeline(*, resume: bool = False) -> dict[str, dict[str, int]]:
+    """日次パイプラインを実行する。
+
+    `resume=True`(A-6、CLIの `run-daily-pipeline --resume`)のときは、
+    今日ぶんの未完走runがあればそれへ合流し、既に `succeeded` した工程を
+    再実行しない——2時間かかるcollectionの後にgateで落ちても、その2時間を
+    毎回捨てないためのもの(監査§10.3)。未完走runが見つからなければ
+    通常どおり新規runになる。
+    """
+    # A-2:新しいrunを始める前に、前回以前の孤児run(heartbeatが90分以上
+    # 止まったままの `running` run)を回収する。2026-09-03の停止runが
+    # 手作業のUPDATEなしに次回実行で自然に `aborted` へ落ちるのはこの
+    # 呼び出しによる(監査§10.2「手作業のUPDATEを前提にしない」)。
+    swept = sweep_orphan_runs()
+    if swept:
+        logger.warning("swept %d orphaned pipeline run(s) before starting: %s", len(swept), swept)
+
     today = utc_today()
-    results: dict[str, dict[str, int]] = {}
     is_weekly = today.weekday() == WEEKLY_REFRESH_WEEKDAY
+
+    resume_run_id = _find_resumable_run_id(today) if resume else None
+    if resume and resume_run_id is None:
+        logger.info("--resume was requested but no incomplete run exists for %s; starting a fresh run", today)
+
     # 14.15:工程ごとの実行記録。トリガー種別(scheduled/manual)を区別する
     # 呼び出し経路が現状1つ(CLI)しか無いため、既定値のまま固定する。
-    recorder = PipelineRecorder(today, is_weekly)
+    recorder = PipelineRecorder(today, is_weekly, resume_run_id=resume_run_id)
+    # A-6:再開時は前回succeededした工程の結果を種にする。呼び出し側
+    # (`_run_daily_pipeline_body`)はこれに含まれる工程名を実際には
+    # 再実行しない。新規run(resume_run_id=None)では常に空。
+    previous_results = recorder.resumed_stage_results()
+    results: dict[str, dict[str, int]] = dict(previous_results)
     health: list[HealthFinding] = []
 
+    try:
+        _run_daily_pipeline_body(today, is_weekly, recorder, results, health, previous_results)
+    except Exception as exc:
+        # A-2:collection/gates/scoring/forward_validationは意図的に
+        # try/exceptで囲んでいない(§9の停止則)。その例外がここまで
+        # 抜けてきても、runを`running`のまま残さず`failed`で確定してから
+        # 再送出する——CLI/スケジューラは従来どおり非0終了で失敗を検知できる。
+        recorder.finish_with_exception(exc)
+        raise
+    return results
+
+
+def _run_daily_pipeline_body(
+    today: datetime.date,
+    is_weekly: bool,
+    recorder: PipelineRecorder,
+    results: dict[str, dict[str, int]],
+    health: list[HealthFinding],
+    previous_results: dict[str, dict],
+) -> None:
+    """`run_daily_pipeline()` の本体(A-2で outer try/except/finally から
+    分離)。**工程の並び・停止則・try/except構造は分離前と1バイトも
+    変えていない**——変えたのは呼び出し元がこの関数を包む外殻と、A-6で
+    各工程呼び出しを `_run_stage_unless_resumed()` 経由にしたことだけである。
+    """
     if is_weekly:
         logger.info("weekly universe refresh (weekday=%s)", today.weekday())
-        with recorder.stage("universe_refresh", PIPELINE_STAGE_SEQUENCE["universe_refresh"]) as st:
-            count = refresh_universe(today)
-            st.result = results["universe_refresh"] = {"candidates": count}
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "universe_refresh", PIPELINE_STAGE_SEQUENCE["universe_refresh"],
+            lambda: {"candidates": refresh_universe(today)},
+        )
 
         # 30.3.2:CIK突合もユニバース再取得と同じ週次サイクルで回す(新規上場銘柄の
         # CIKを取り込むため)。EDGAR_USER_AGENT未設定の環境(30.3.1)ではEDGAR連携
@@ -79,24 +188,30 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # パイプライン全体は止めない(backupと同じ扱い)。
         logger.info("weekly CIK map refresh")
         try:
-            with recorder.stage("cik_map_refresh", PIPELINE_STAGE_SEQUENCE["cik_map_refresh"]) as st:
-                st.result = results["cik_map_refresh"] = refresh_cik_map()
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "cik_map_refresh", PIPELINE_STAGE_SEQUENCE["cik_map_refresh"], refresh_cik_map,
+            )
         except Exception:
             logger.exception("weekly CIK map refresh failed (EDGAR_USER_AGENT not set?)")
 
         # 30.8.2:財務データと同じく、マクロ系列も日々変わるものではないので週次で足りる。
         logger.info("weekly macro collection")
         try:
-            with recorder.stage("macro", PIPELINE_STAGE_SEQUENCE["macro"]) as st:
-                st.result = results["macro"] = collect_macro()
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "macro", PIPELINE_STAGE_SEQUENCE["macro"], collect_macro,
+            )
         except Exception:
             logger.exception("weekly macro collection failed (FRED_API_KEY not set?)")
 
         # 30.5.5:XBRL実績値も財務データなので四半期に1回しか変わらない。週次で足りる。
         logger.info("weekly XBRL facts collection")
         try:
-            with recorder.stage("xbrl_facts", PIPELINE_STAGE_SEQUENCE["xbrl_facts"]) as st:
-                st.result = results["xbrl_facts"] = collect_xbrl_facts()
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "xbrl_facts", PIPELINE_STAGE_SEQUENCE["xbrl_facts"], collect_xbrl_facts,
+            )
         except Exception:
             logger.exception("weekly XBRL facts collection failed (EDGAR_USER_AGENT not set?)")
 
@@ -107,8 +222,10 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         try:
             from autoscreener.batch.collect_events import collect_events
 
-            with recorder.stage("events", PIPELINE_STAGE_SEQUENCE["events"]) as st:
-                st.result = results["events"] = collect_events()
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "events", PIPELINE_STAGE_SEQUENCE["events"], collect_events,
+            )
         except Exception:
             logger.exception("weekly event calendar collection failed")
 
@@ -125,8 +242,10 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         try:
             from autoscreener.batch.collect_supply import collect_insider
 
-            with recorder.stage("insider", PIPELINE_STAGE_SEQUENCE["insider"]) as st:
-                st.result = results["insider"] = collect_insider()
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "insider", PIPELINE_STAGE_SEQUENCE["insider"], collect_insider,
+            )
         except Exception:
             logger.exception("weekly insider transactions collection failed")
 
@@ -134,8 +253,10 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         try:
             from autoscreener.batch.collect_supply import collect_short_interest
 
-            with recorder.stage("short_interest", PIPELINE_STAGE_SEQUENCE["short_interest"]) as st:
-                st.result = results["short_interest"] = collect_short_interest()
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "short_interest", PIPELINE_STAGE_SEQUENCE["short_interest"], collect_short_interest,
+            )
         except Exception:
             logger.exception("weekly short interest collection failed")
     else:
@@ -158,31 +279,48 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         symbols = select_collectable_symbols(session, collection_config)
 
     logger.info("daily collection: %d symbols", len(symbols))
-    with recorder.stage("collection", PIPELINE_STAGE_SEQUENCE["collection"]) as st:
-        results["collection"] = run_daily_collection(
-            symbols, collection_config=collection_config, snapshot_date=today
-        )
-        # 18.1/18.7:隔離状態は収集工程(`collect_one`)でのみ更新され、以降の
-        # 工程では変わらない。ここで1度だけ読み、隔離健全性判定と画面の
-        # 「隔離率」タイル(§6.3)の両方に使う。`results["collection"]`(戻り値・
-        # CLI出力に使われる)自体は汚さず、記録用の `st.result` にだけ添える。
-        with session_scope() as session:
-            quarantined_count, universe_size = collection_population_counts(session)
-        st.result = {**results["collection"], "quarantined": quarantined_count, "universe_size": universe_size}
+    # A-6:collectionはこのpipelineで最も時間のかかる工程(数十分〜数時間、
+    # 監査§10.3「2時間超のcollection」)であり、resumeの主眼はまさにこれを
+    # 捨てないこと。`quarantined`/`universe_size` は `st.result` にのみ添える
+    # (`results["collection"]`自体は汚さない、という既存方針を維持)ため、
+    # 再開時は前回の値をそのまま引き継ぐ——`collection_population_counts`は
+    # collection以降どの工程でも変わらない値を数えるだけなので、取り直しても
+    # 再計算にすぎず、再実行不要というresumeの前提と矛盾しない。
+    if "collection" in previous_results:
+        logger.info("resume: reusing already-succeeded stage 'collection' from a previous attempt")
+        results["collection"] = previous_results["collection"]
+        quarantined_count = previous_results["collection"].get("quarantined", 0)
+        universe_size = previous_results["collection"].get("universe_size", 0)
+    else:
+        with recorder.stage("collection", PIPELINE_STAGE_SEQUENCE["collection"]) as st:
+            results["collection"] = run_daily_collection(
+                symbols, collection_config=collection_config, snapshot_date=today
+            )
+            # 18.1/18.7:隔離状態は収集工程(`collect_one`)でのみ更新され、以降の
+            # 工程では変わらない。ここで1度だけ読み、隔離健全性判定と画面の
+            # 「隔離率」タイル(§6.3)の両方に使う。`results["collection"]`(戻り値・
+            # CLI出力に使われる)自体は汚さず、記録用の `st.result` にだけ添える。
+            with session_scope() as session:
+                quarantined_count, universe_size = collection_population_counts(session)
+            st.result = {**results["collection"], "quarantined": quarantined_count, "universe_size": universe_size}
     health.extend(check_collection_health(results["collection"]))  # 18.7
 
     # TENX v2: append-only current consensus. This is a display/PIT-history
     # layer and failures must not prevent the deterministic core score.
     logger.info("collecting analyst consensus snapshots")
     try:
-        with recorder.stage("consensus", PIPELINE_STAGE_SEQUENCE["consensus"]) as st:
-            st.result = results["consensus"] = collect_consensus()
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "consensus", PIPELINE_STAGE_SEQUENCE["consensus"], collect_consensus,
+        )
     except Exception:
         logger.exception("consensus collection failed")
 
     logger.info("applying gates")
-    with recorder.stage("gates", PIPELINE_STAGE_SEQUENCE["gates"]) as st:
-        st.result = results["gates"] = apply_gates(today)
+    _run_stage_unless_resumed(
+        recorder, results, previous_results,
+        "gates", PIPELINE_STAGE_SEQUENCE["gates"], lambda: apply_gates(today),
+    )
 
     if is_weekly:
         # 28.8:較正写像を最新の観測で学習し直す。**スコアリングより前**に
@@ -191,21 +329,27 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         # スコアは未較正のまま保存され、UIがその状態を明示する)。
         logger.info("weekly backtest (recalibration)")
         try:
-            with recorder.stage("backtest", PIPELINE_STAGE_SEQUENCE["backtest"]) as st:
-                metrics = run_backtest()
-                st.result = results["backtest"] = {"observations": metrics.observation_count}
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                "backtest", PIPELINE_STAGE_SEQUENCE["backtest"],
+                lambda: {"observations": run_backtest().observation_count},
+            )
         except Exception:
             logger.exception("weekly backtest failed — scores will use the previous calibration map")
     else:
         recorder.skip("backtest", PIPELINE_STAGE_SEQUENCE["backtest"], "not_weekly")
 
     logger.info("running scoring")
-    with recorder.stage("scoring", PIPELINE_STAGE_SEQUENCE["scoring"]) as st:
-        st.result = results["scoring"] = run_scoring(today)
+    _run_stage_unless_resumed(
+        recorder, results, previous_results,
+        "scoring", PIPELINE_STAGE_SEQUENCE["scoring"], lambda: run_scoring(today),
+    )
 
     logger.info("running forward validation")
-    with recorder.stage("forward_validation", PIPELINE_STAGE_SEQUENCE["forward_validation"]) as st:
-        st.result = results["forward_validation"] = run_forward_validation(today)
+    _run_stage_unless_resumed(
+        recorder, results, previous_results,
+        "forward_validation", PIPELINE_STAGE_SEQUENCE["forward_validation"], lambda: run_forward_validation(today),
+    )
 
     # 30.3.6:追跡対象の選定に当日のランキングを使うため、スコアが確定してから
     # (run_scoringの後)実行する。EDGAR_USER_AGENT未設定なら EdgarClient が
@@ -220,15 +364,20 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         )]
     logger.info("collecting SEC filings for %d frozen tracked tickers", len(tracked_symbols))
     try:
-        with recorder.stage("filings", PIPELINE_STAGE_SEQUENCE["filings"]) as st:
-            st.result = results["filings"] = collect_filings(symbols=tracked_symbols)
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "filings", PIPELINE_STAGE_SEQUENCE["filings"], lambda: collect_filings(symbols=tracked_symbols),
+        )
     except Exception:
         logger.exception("collect_filings failed (EDGAR_USER_AGENT not set, or SEC unavailable?)")
 
     logger.info("extracting source sections from new SEC filings")
     try:
-        with recorder.stage("filing_sections", PIPELINE_STAGE_SEQUENCE["filing_sections"]) as st:
-            st.result = results["filing_sections"] = collect_filing_sections(symbols=tracked_symbols)
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "filing_sections", PIPELINE_STAGE_SEQUENCE["filing_sections"],
+            lambda: collect_filing_sections(symbols=tracked_symbols),
+        )
     except Exception:
         logger.exception("filing section extraction failed")
 
@@ -240,27 +389,38 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     )
     for stage_name, job in disclosure_jobs:
         try:
-            with recorder.stage(stage_name, PIPELINE_STAGE_SEQUENCE[stage_name]) as st:
-                st.result = results[stage_name] = job(symbols=tracked_symbols)
+            _run_stage_unless_resumed(
+                recorder, results, previous_results,
+                stage_name, PIPELINE_STAGE_SEQUENCE[stage_name], lambda job=job: job(symbols=tracked_symbols),
+            )
         except Exception:
             logger.exception("%s extraction failed", stage_name)
 
     logger.info("extracting investment intelligence from stored filing sections")
     try:
-        with recorder.stage("investment_intelligence", PIPELINE_STAGE_SEQUENCE["investment_intelligence"]) as st:
-            st.result = results["investment_intelligence"] = collect_investment_intelligence(symbols=tracked_symbols)
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "investment_intelligence", PIPELINE_STAGE_SEQUENCE["investment_intelligence"],
+            lambda: collect_investment_intelligence(symbols=tracked_symbols),
+        )
     except Exception:
         logger.exception("investment intelligence extraction failed")
 
     try:
-        with recorder.stage("market_opportunity", PIPELINE_STAGE_SEQUENCE["market_opportunity"]) as st:
-            st.result = results["market_opportunity"] = collect_market_opportunity(symbols=tracked_symbols)
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "market_opportunity", PIPELINE_STAGE_SEQUENCE["market_opportunity"],
+            lambda: collect_market_opportunity(symbols=tracked_symbols),
+        )
     except Exception:
         logger.exception("market opportunity collection failed")
 
     try:
-        with recorder.stage("macro_exposure", PIPELINE_STAGE_SEQUENCE["macro_exposure"]) as st:
-            st.result = results["macro_exposure"] = collect_macro_exposure(symbols=tracked_symbols)
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "macro_exposure", PIPELINE_STAGE_SEQUENCE["macro_exposure"],
+            lambda: collect_macro_exposure(symbols=tracked_symbols),
+        )
     except Exception:
         logger.exception("macro exposure calculation failed")
 
@@ -268,10 +428,31 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     # recorded as a non-core failed stage but never prevents v4 scoring or the
     # remaining operational stages from completing.
     try:
-        with recorder.stage("model_v5_shadow", PIPELINE_STAGE_SEQUENCE["model_v5_shadow"]) as st:
-            st.result = results["model_v5_shadow"] = run_v5_shadow(today)
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "model_v5_shadow", PIPELINE_STAGE_SEQUENCE["model_v5_shadow"], lambda: run_v5_shadow(today),
+        )
     except Exception:
         logger.exception("Model v5 shadow run failed")
+
+    # A-4(2026-09-04、docs/racr_wp_a_operational_safety_2026-09-04.md、
+    # 監査§10.1「`forward_validation_v5` は予約済みの26番だがdaily
+    # pipelineへ配線されていない」・§0.8「V5実現forward return 0件」):
+    # `run_forward_validation_v5()` とCLI(`run-forward-validation-v5`)は
+    # 実装済み・real-DB testedで、配線だけが未了だった
+    # (pipeline_stages.py の旧 `RESERVED_STAGE_NUMBERS`)。v4の
+    # `forward_validation` と役割は同じだが、v5はまだshadowモデルであり
+    # v4スコアリング・後続の運用工程を止める理由にはならないため、v4とは
+    # 異なりnon-core(try/exceptで囲む)扱いにする——model_v5_shadowの後、
+    # monitoringの前に実行する。
+    try:
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "forward_validation_v5", PIPELINE_STAGE_SEQUENCE["forward_validation_v5"],
+            lambda: run_forward_validation_v5(today),
+        )
+    except Exception:
+        logger.exception("Model v5 forward validation failed")
 
     for stage_name in ("investment_intelligence", "market_opportunity", "macro_exposure"):
         stage_result = results.get(stage_name) or {}
@@ -295,16 +476,19 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
     # 当日のスコア計算・収集の成果を無駄にする理由にはならない(18.4と同じ扱い)。
     logger.info("running quarterly monitoring")
     try:
-        with recorder.stage("monitoring", PIPELINE_STAGE_SEQUENCE["monitoring"]) as st:
-            st.result = results["monitoring"] = run_monitoring(today)
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "monitoring", PIPELINE_STAGE_SEQUENCE["monitoring"], lambda: run_monitoring(today),
+        )
     except Exception:
         logger.exception("run_monitoring failed")
 
     logger.info("running backup")
     try:
-        with recorder.stage("backup", PIPELINE_STAGE_SEQUENCE["backup"]) as st:
-            backup_path = run_backup()
-            st.result = {"path": str(backup_path)}
+        _run_stage_unless_resumed(
+            recorder, results, previous_results,
+            "backup", PIPELINE_STAGE_SEQUENCE["backup"], lambda: {"path": str(run_backup())},
+        )
     except Exception:
         # バックアップ失敗はパイプライン全体を失敗にはしない(18.4:検証資産の
         # 保護は重要だが、当日のスコア計算自体を無駄にする理由にはならない)。
@@ -328,5 +512,3 @@ def run_daily_pipeline() -> dict[str, dict[str, int]]:
         )
     )
     recorder.finish(health)
-
-    return results

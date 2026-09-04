@@ -615,7 +615,14 @@ class PipelineRun(Base):
     # NULL = 実行中、またはプロセスが強制終了した(§4.3の孤児判定。API層でのみ
     # 死亡と見なし、DBのこの列自体は書き換えない)
     finished_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # "running" / "succeeded" / "degraded" / "failed"(§3.3)
+    # A-2(2026-09-04、docs/racr_wp_a_operational_safety_2026-09-04.md):
+    # `PipelineRecorder.heartbeat()` が工程境界ごとに更新する実際の生存確認。
+    # `started_at` だけでは「動いているが遅い」と「プロセスが死んで
+    # `running` のまま残った」を区別できない——2026-09-03のgate stage FK違反は
+    # 後者だった。`sweep_orphan_runs()` がこの列を見て、一定時間(既定90分)
+    # 更新の無い `running` runを `aborted` へ確定する。
+    last_heartbeat_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # "running" / "succeeded" / "degraded" / "failed" / "aborted"(§3.3、A-2)
     status: Mapped[str] = mapped_column(String(20), index=True)
     # §3.4 の健全性所見。空リストなら所見なし
     health: Mapped[list | None] = mapped_column(JSONB, nullable=True)

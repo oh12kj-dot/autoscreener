@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from autoscreener.batch.pipeline_recorder import PipelineRecorder
+from autoscreener.batch.pipeline_recorder import PipelineRecorder, sweep_orphan_runs
 from autoscreener.db.models import PipelineRun, PipelineStageRun
 from autoscreener.db.session import session_scope
 from autoscreener.monitoring import HealthFinding
@@ -193,3 +193,177 @@ def test_prune_old_runs_uses_retention_cutoff_without_touching_shared_history(mo
 
     assert recorder.prune_old_runs() == 3
     delete.assert_called_once_with(synchronize_session=False)
+
+
+def test_constructor_seeds_last_heartbeat_at_from_started_at():
+    """A-2:起動直後をheartbeat初回とみなす(工程が始まる前にプロセスが
+    死んだ場合でも、sweeperが `started_at` 基準と同じ扱いで拾えるように
+    するため)。"""
+    recorder = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    with session_scope() as session:
+        row = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one()
+        assert row.last_heartbeat_at is not None
+        assert row.last_heartbeat_at == row.started_at
+
+
+def test_heartbeat_advances_last_heartbeat_at():
+    recorder = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    with session_scope() as session:
+        before = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one().last_heartbeat_at
+
+    recorder.heartbeat()
+
+    with session_scope() as session:
+        after = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one().last_heartbeat_at
+    assert after > before
+
+
+def test_stage_boundary_advances_heartbeat():
+    """A-2:`stage()` の開始・終了ごとにheartbeatが進むこと。"""
+    recorder = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    with session_scope() as session:
+        initial = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one().last_heartbeat_at
+
+    with recorder.stage("collection", 8) as st:
+        st.result = {"success": 1}
+
+    with session_scope() as session:
+        after_stage = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one().last_heartbeat_at
+    assert after_stage >= initial
+
+
+def test_finish_with_exception_marks_run_failed_and_records_health():
+    """A-2の中核(docs/racr_wp_a_operational_safety_2026-09-04.md、監査§10.3):
+    core stageの例外が `run_daily_pipeline()` 自身から抜けた場合でも、
+    `pipeline_runs` を `running` のまま残さない。"""
+    recorder = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    with pytest.raises(RuntimeError):
+        with recorder.stage("gates", 10) as st:
+            raise RuntimeError("FK violation (simulated)")
+
+    recorder.finish_with_exception(RuntimeError("FK violation (simulated)"))
+
+    with session_scope() as session:
+        row = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one()
+        assert row.status == "failed"
+        assert row.status != "running"
+        assert row.finished_at is not None
+        codes = [h["code"] for h in (row.health or [])]
+        assert "run_unhandled_exception" in codes
+
+
+def test_sweep_orphan_runs_aborts_stale_running_run():
+    """A-2の受け入れ条件:heartbeatが閾値以上進んでいない `running` runは
+    `aborted` に落ちる。2026-09-03の停止runが手作業のUPDATEなしに次回実行で
+    回収されることの直接検証。"""
+    recorder = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    stale_heartbeat = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=200)
+    with session_scope() as session:
+        row = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one()
+        row.last_heartbeat_at = stale_heartbeat
+        row.started_at = stale_heartbeat
+
+    swept = sweep_orphan_runs(threshold=datetime.timedelta(minutes=90))
+    assert recorder.run_id in swept
+
+    with session_scope() as session:
+        row = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one()
+        assert row.status == "aborted"
+        assert row.finished_at is not None
+        codes = [h["code"] for h in (row.health or [])]
+        assert "run_orphaned_swept" in codes
+
+
+def test_sweep_orphan_runs_leaves_fresh_running_run_alone():
+    """heartbeatが最近進んでいる `running` runは、単に長く動いているだけの
+    正常な実行かもしれないので回収しない。"""
+    recorder = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    recorder.heartbeat()  # 直近のheartbeat
+
+    swept = sweep_orphan_runs(threshold=datetime.timedelta(minutes=90))
+    assert recorder.run_id not in swept
+
+    with session_scope() as session:
+        row = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one()
+        assert row.status == "running"
+        assert row.finished_at is None
+
+
+def test_resume_reuses_run_id_and_preserves_succeeded_stage():
+    """A-6の核心(docs/racr_wp_a_operational_safety_2026-09-04.md、監査§10.3
+    「2時間超のcollection後にgateで落ちても、checkpoint/resumeが無い」):
+    前回succeededした工程を、再開後にもう一度実行しなくて済むこと。"""
+    original = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    with original.stage("collection", 8) as st:
+        st.result = {"success": 100}
+    with pytest.raises(RuntimeError):
+        with original.stage("gates", 10) as st:
+            raise RuntimeError("FK violation (simulated)")
+    original.finish_with_exception(RuntimeError("FK violation (simulated)"))
+
+    resumed = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False, resume_run_id=original.run_id)
+    assert resumed.run_id == original.run_id
+    previous_results = resumed.resumed_stage_results()
+    assert previous_results == {"collection": {"success": 100}}
+    assert "gates" not in previous_results  # failedした工程は再利用対象に含まない
+
+    with session_scope() as session:
+        run_row = session.query(PipelineRun).filter_by(run_id=original.run_id).one()
+        assert run_row.status == "running"  # 再開でrunningへ戻る
+        assert run_row.finished_at is None
+
+
+def test_resume_retries_a_previously_failed_stage_without_unique_violation():
+    """A-6:`(run_id, stage)` のUNIQUE制約があっても、再開後に前回failedした
+    工程を同じrun_idの下で再試行できること(重複insertエラーにならない)。"""
+    original = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    with pytest.raises(RuntimeError):
+        with original.stage("gates", 10) as st:
+            raise RuntimeError("boom")
+    original.finish_with_exception(RuntimeError("boom"))
+
+    resumed = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False, resume_run_id=original.run_id)
+    with resumed.stage("gates", 10) as st:  # 同じ(run_id, stage)を再試行
+        st.result = {"included": 5}
+
+    with session_scope() as session:
+        row = session.query(PipelineStageRun).filter_by(run_id=original.run_id, stage="gates").one()
+        assert row.status == "succeeded"
+        assert row.result == {"included": 5}
+        assert row.error_message is None  # 前回の失敗情報が残っていない
+
+
+def test_resume_skip_does_not_duplicate_a_previously_skipped_stage():
+    """A-6:再開時に同じ週次skip判定を再度記録しても重複insertエラーに
+    ならないこと。"""
+    original = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    original.skip("macro", 3, "not_weekly")
+    with pytest.raises(RuntimeError):
+        with original.stage("gates", 10) as st:
+            raise RuntimeError("boom")
+    original.finish_with_exception(RuntimeError("boom"))
+
+    resumed = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False, resume_run_id=original.run_id)
+    resumed.skip("macro", 3, "not_weekly")  # 再度呼んでも例外にならない
+
+    with session_scope() as session:
+        row = session.query(PipelineStageRun).filter_by(run_id=original.run_id, stage="macro").one()
+        assert row.status == "skipped"
+
+
+def test_sweep_orphan_runs_ignores_already_terminal_runs():
+    """既に `succeeded`/`failed` で確定したrunは、heartbeatが古くても対象外
+    (`status == "running"` フィルタで除外される)。"""
+    recorder = PipelineRecorder(_TEST_RUN_DATE, is_weekly=False)
+    recorder.finish([])  # succeeded で確定
+    stale_heartbeat = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=200)
+    with session_scope() as session:
+        row = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one()
+        row.last_heartbeat_at = stale_heartbeat
+
+    swept = sweep_orphan_runs(threshold=datetime.timedelta(minutes=90))
+    assert recorder.run_id not in swept
+
+    with session_scope() as session:
+        row = session.query(PipelineRun).filter_by(run_id=recorder.run_id).one()
+        assert row.status == "succeeded"

@@ -29,6 +29,16 @@ PIPELINE_STAGE_SEQUENCE = {
     "model_v5_shadow": 23,
     "monitoring": 24,
     "backup": 25,
+    # A-4 (2026-09-04, docs/racr_wp_a_operational_safety_2026-09-04.md,
+    # audit section 10.1/10.4): wired into daily_pipeline.py's execution
+    # list between "model_v5_shadow" and "monitoring". The number stays 26
+    # (its former reserved slot below) rather than being renumbered into
+    # execution order -- existing stage numbers are never renumbered, so a
+    # stage added after two already-numbered stages (24/25) that must run
+    # before it in real time necessarily gets a number higher than both.
+    # `sequence` therefore reflects *when this number was assigned*, not a
+    # strict guarantee of chronological execution order for every stage.
+    "forward_validation_v5": 26,
 }
 
 PIPELINE_STAGE_COUNT = len(PIPELINE_STAGE_SEQUENCE)
@@ -46,11 +56,9 @@ PIPELINE_STAGE_COUNT = len(PIPELINE_STAGE_SEQUENCE)
 # day it is deliberately wired into `PIPELINE_STAGE_SEQUENCE` for real (at
 # which point it moves out of this dict and into the sequence with the next
 # free number, still never renumbering existing stages).
-RESERVED_STAGE_NUMBERS = {
-    # Phase 7 (Issue #3 27章): run_forward_validation_v5() and the
-    # `run-forward-validation-v5` CLI command are implemented and
-    # real-DB-tested; only the daily_pipeline.py wiring is deferred (see
-    # docs/model_v5_phase7_backtest_infrastructure_2026-09-03.md
-    # "Deviations").
-    "forward_validation_v5": 26,
-}
+#
+# 2026-09-04 (A-4): empty. `forward_validation_v5` (the only entry this
+# dict ever held) was wired in above. Left as an empty dict, not deleted,
+# so the next stage that is implemented-but-not-yet-wired has an obvious
+# place to go without re-inventing this mechanism.
+RESERVED_STAGE_NUMBERS: dict[str, int] = {}

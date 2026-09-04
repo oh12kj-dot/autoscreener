@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from autoscreener.api.dependencies import get_session
+from autoscreener.api.operational_readiness import build_operational_readiness
 from autoscreener.api.routes import router
 from autoscreener.config import ConfigSchemaError, load_scoring_config
 from autoscreener.db.models import Score
@@ -179,5 +180,30 @@ def ready() -> JSONResponse:
                 "latest_score_date": latest.isoformat() if latest else None,
             }
         )
+    finally:
+        session.close()
+
+
+@app.get("/operational-readiness")
+def operational_readiness() -> JSONResponse:
+    """A-5(2026-09-04、docs/racr_wp_a_operational_safety_2026-09-04.md、
+    監査§10.3/10.4):日次パイプラインが実際に回っていて、ランキングの元
+    データが新しいかを見る。**`/ready` とは別の問いに答える**——`/ready` は
+    「このプロセスがDB・設定に噛み合っているか」だけを見る契約のまま変えて
+    いない(28.17)。
+
+    2026-09-03のように pipeline が `running` のまま停止していても、DBと
+    最新スコアさえ存在すれば `/ready` は200を返し続ける(それ自体は正しい
+    ——プロセス自体は健全なので)。運用者・UIが「pipelineは実際に健康か」を
+    知るには別の窓口が要る、というのがこのエンドポイントの存在理由。
+
+    判定ロジック本体は `api/operational_readiness.py` にある(main.py を
+    肥大させないため)。常に200を返し、`status` フィールド
+    (`"ready"`/`"degraded"`)で状態を表す——`/ready` のような可用性
+    プローブではなく、状態レポートだからである。
+    """
+    session = next(get_session())
+    try:
+        return JSONResponse(build_operational_readiness(session))
     finally:
         session.close()
