@@ -693,6 +693,29 @@ class ObjectiveDefinition(BaseModel):
     # 分離"), not for how unreliable a *collected* signal says the company is.
     reliability_sigma_lambda: float | None = Field(default=None, ge=0)
     reliability_left_tail_lambda: float | None = Field(default=None, ge=0)
+    # WP-B (docs/racr_wp_b_output_contract_2026-09-04.md; audit
+    # autoscreener_racr_integrated_redesign_audit_2026-09-04.md §5.2): the
+    # `risk_adjusted_compounding` (RACR) objective's four penalty
+    # coefficients. These are fixed *investment-policy* priors, not fitted
+    # model parameters -- the audit explicitly rules out choosing them by
+    # backtest optimization ("policy parameter(lambda)をfitしない"). Two of
+    # the four terms they multiply (drawdown, permanent loss) are always 0
+    # today because the underlying statistics are `unavailable`
+    # (competing-risk/path-simulation not implemented yet) -- see
+    # `evaluate_objectives`'s `risk_adjusted_compounding` branch, which
+    # records this explicitly via `explanation["omitted_terms"]` so the
+    # score is never misread as "risk-adjusted for permanent loss/drawdown".
+    tail_lambda: float | None = Field(default=None, ge=0)
+    drawdown_lambda: float | None = Field(default=None, ge=0)
+    permanent_loss_lambda: float | None = Field(default=None, ge=0)
+    uncertainty_lambda: float | None = Field(default=None, ge=0)
+    # Marks an objective as superseded-but-kept-working (audit §0/§2.2:
+    # `risk_adjusted` is replaced as the risk-aware objective of record by
+    # `risk_adjusted_compounding`, but stays enabled and computed -- the
+    # champion/challenger comparison in docs/model_v5_validation.md needs
+    # its historical values). Never used to disable or hide an objective by
+    # itself; `enabled` still controls that independently.
+    deprecated: bool = False
 
 
 class ObjectivesConfig(BaseModel):

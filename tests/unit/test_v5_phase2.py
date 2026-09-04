@@ -162,7 +162,11 @@ def test_phase2_api_exposes_typed_list_and_detail(phase2_api_run):
         f"/api/v1/models/v5/scores/{symbol}", params={"as_of": as_of.isoformat()}
     )
     assert detail.status_code == 200
-    assert detail.json()["distribution"]["contract_version"] == "v5.phase2"
+    # WP-B (docs/racr_wp_b_output_contract_2026-09-04.md): distribution
+    # contract bumped to v5.racr1. `states`' own contract_version (set
+    # above in the fixture) is a separate field owned by state_model.py,
+    # unaffected by this bump.
+    assert detail.json()["distribution"]["contract_version"] == "v5.racr1"
     assert detail.json()["objectives"][0]["objective"] == "ten_bagger"
 
 

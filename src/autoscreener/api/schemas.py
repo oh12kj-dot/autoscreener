@@ -1221,6 +1221,40 @@ class ModelV5DistributionView(BaseModel):
     reliability_sigma_multiplier: float | None = None
     reliability_left_tail_extra: float | None = None
     scenarios: list[ModelV5ScenarioView] = []
+    # WP-B (docs/racr_wp_b_output_contract_2026-09-04.md): additive-only,
+    # nullable fields for the RACR output contract (contract_version
+    # "v5.racr1"). Every existing field above is unchanged -- this is a
+    # backward-compatible extension, not a replacement (B-4).
+    ce_cagr: float | None = None
+    # Records which MOIC floor a `None`-avoiding certainty-equivalent CAGR
+    # calculation used for the failure atom (docs/racr_wp_b_output_contract
+    # _2026-09-04.md) -- never fabricate a value without also exposing how
+    # it was made finite.
+    ce_cagr_failure_floor: float | None = None
+    p_cagr_above_15: float | None = None
+    p_cagr_above_20: float | None = None
+    p_cagr_above_25: float | None = None
+    expected_shortfall_10pct_log: float | None = None
+    # Rename of p_moic_below_0_5 (audit §5.3/§6.2): "large-principal-
+    # impairment probability", not permanent loss. p_moic_below_0_5 above
+    # is retained unchanged for backward compatibility.
+    p_terminal_wealth_below_0_5: float | None = None
+    # Permanent loss / drawdown: always None + a machine-readable reason
+    # until the competing-risk/path-simulation models this audit calls out
+    # exist (plan WP-F). Never 0 -- a 0.0 here would read as "no risk
+    # measured", which is the exact failure mode this contract fixes.
+    p_permanent_loss: float | None = None
+    p_permanent_loss_unavailable_reason: str | None = None
+    expected_max_drawdown: float | None = None
+    expected_max_drawdown_unavailable_reason: str | None = None
+    p_mdd_above_30: float | None = None
+    p_mdd_above_30_unavailable_reason: str | None = None
+    p_mdd_above_50: float | None = None
+    p_mdd_above_50_unavailable_reason: str | None = None
+    p_mdd_above_70: float | None = None
+    p_mdd_above_70_unavailable_reason: str | None = None
+    recovery_time_median: float | None = None
+    recovery_time_median_unavailable_reason: str | None = None
 
 
 class ModelV5RunView(BaseModel):
