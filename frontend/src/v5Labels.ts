@@ -15,13 +15,98 @@
 export const V5_OBJECTIVE_LABELS: Record<string, string> = {
   ten_bagger: "10倍達成確率(P10x)",
   expected_return: "期待年率(CAGR)",
-  risk_adjusted: "リスク調整後期待年率",
+  risk_adjusted: "リスク調整後期待年率(旧式・非推奨)",
+  // WP-C/WP-B (docs/racr_wp_c_api_ui_2026-09-04.md): RACR。shadow objective
+  // であり default_objective ではない(config/objectives.yaml)。ラベルに
+  // 「Shadow」を付けて、選択できても本番採用済みという意味ではないことを
+  // 一覧のセレクタ上でも示す。
+  risk_adjusted_compounding: "RACR(リスク調整後複利収益率・Shadow)",
   asymmetric: "非対称性(右裾/左裾)",
   capital_preservation: "資本保全(生存確率×低損失)",
 };
 
 export function v5ObjectiveLabel(key: string): string {
   return V5_OBJECTIVE_LABELS[key] ?? key;
+}
+
+/** RACRのexplanationに常に載る4つのペナルティ項のラベル。うち2項
+ * (drawdown_lambda・permanent_loss_lambda)は`omitted_terms`により
+ * 恒常的に0固定 —— ラベル自体にもその旨を含めておく。 */
+export const V5_RACR_TERM_LABELS: Record<string, string> = {
+  ce_cagr: "CE CAGR(確実性等価・複利年率)",
+  tail_loss_10: "下位10%テール損失(年率換算)",
+  dd_excess: "ドローダウン超過(未実装のため常に0)",
+  p_permanent_loss: "永久損失確率(未実装のため常に0)",
+  model_uncertainty: "モデル不確実性(信頼度由来)",
+  tail_lambda: "λ(テール)",
+  drawdown_lambda: "λ(ドローダウン)",
+  permanent_loss_lambda: "λ(永久損失)",
+  uncertainty_lambda: "λ(不確実性)",
+};
+
+export function v5RacrTermLabel(key: string): string {
+  return V5_RACR_TERM_LABELS[key] ?? key;
+}
+
+// -- distribution.status の unavailable_reason(未実装メトリクス用) -------
+
+export const V5_UNAVAILABLE_REASON_LABELS: Record<string, string> = {
+  competing_risk_model_not_implemented:
+    "破綻・上場廃止の原因別competing-riskモデルと回収率分布が未実装のため推定できません。",
+  path_simulation_not_implemented:
+    "保有期間中の価格経路シミュレーションが未実装のため推定できません(現行モデルは7年後の終端時点のみを扱います)。",
+};
+
+export function v5UnavailableReasonLabel(reason: string | null | undefined): string {
+  if (!reason) return "未実装のため推定できません。";
+  return V5_UNAVAILABLE_REASON_LABELS[reason] ?? reason;
+}
+
+// -- 分布フィールドの列見出し・ラベル(Ranking/Detail共通) -----------------
+
+export const V5_METRIC_LABELS: Record<string, string> = {
+  ce_cagr: "CE CAGR",
+  expected_cagr: "期待CAGR",
+  median_cagr: "中央値CAGR",
+  p_cagr_above_15: "P(CAGR>15%)",
+  p_cagr_above_20: "P(CAGR>20%)",
+  p_cagr_above_25: "P(CAGR>25%)",
+  p_target: "上方余地 P(10x)",
+  p_terminal_wealth_below_0_5: "大幅元本毀損確率(<0.5x)",
+  p_permanent_loss: "永久損失確率",
+  expected_max_drawdown: "予想最大ドローダウン",
+  p_mdd_above_30: "P(MDD>30%)",
+  p_mdd_above_50: "P(MDD>50%)",
+  p_mdd_above_70: "P(MDD>70%)",
+  recovery_time_median: "回復期間中央値",
+  expected_shortfall_10pct_log: "下位10%期待損失(年率log)",
+};
+
+export function v5MetricLabel(key: string): string {
+  return V5_METRIC_LABELS[key] ?? key;
+}
+
+// -- 数値の表示形式(監査 autoscreener_racr_integrated_redesign_audit_2026
+// -09-04.md §6.3「小数点以下を過剰表示しない。CAGR/RACRは0.1pt、確率は
+// 原則1pt、低確率だけ0.1ptまでとする」)。内部の12桁float(JSON経由でその
+// まま来るPythonのfloat)を画面へ生で出さないための一元窓口。 -----------
+
+/** CAGR・CE CAGR・RACRスコアなど「年率」系の値。0.1pt固定。 */
+export function v5FormatRate(v: number | null | undefined): string {
+  if (v == null) return "—";
+  return `${(v * 100).toFixed(1)}%`;
+}
+
+/** 確率系の値。1%以上は0.1pt、1%未満は「低確率」として0.01pt(0.1ptでは
+ * P(10x)のような基準率1%未満の指標がすべて0.0%/0.1%に潰れてしまうため、
+ * 既存v5画面(V5RankingSectionのpct())が採用していた粒度をそのまま踏襲)。 */
+export function v5FormatProbability(v: number | null | undefined): string {
+  if (v == null) return "—";
+  const p = v * 100;
+  if (p >= 1) return `${p.toFixed(1)}%`;
+  if (p >= 0.01) return `${p.toFixed(2)}%`;
+  if (p > 0) return "<0.01%";
+  return "0.0%";
 }
 
 // -- distribution.status ---------------------------------------------------
@@ -199,6 +284,38 @@ export const V5_WARNING_INFO: Record<string, V5WarningInfo> = {
       "評価対象期間がまだ短く、target_horizon_years(目標年数)に到達した銘柄がありません。0件は「効果なし」ではなく「まだ測れない」と読んでください。",
   },
 };
+
+// -- WP-C(docs/racr_wp_c_api_ui_2026-09-04.md):warningを4カテゴリへ分類し、
+// バッジの色をカテゴリごとに変える(V5WarningBadges)。「鮮度の問題」「この
+// モデルが構造的に対応していない」「母集団のcoverage不足」「まだ検証され
+// ていない」は原因も対処法も違うため、同じ見た目の一律バッジに埋もれさせ
+// ない。 --------------------------------------------------------------
+
+export type V5WarningCategory = "stale" | "unsupported" | "low_coverage" | "unvalidated" | "other";
+
+const V5_STALE_CODES = new Set([
+  "raw_snapshot_not_available_as_of",
+  "financial_statement_pit_is_approximate",
+]);
+const V5_UNSUPPORTED_CODES = new Set([
+  "historical_backtest_supported_false",
+  "forward_shadow_only",
+  "phase6_state_updates_shadow_only",
+]);
+const V5_UNVALIDATED_CODES = new Set([
+  "not_for_production",
+  "no_realized_outcome_backtest_available_for_either_model",
+  "forward_validation_zero_matured_observations",
+]);
+
+export function v5WarningCategory(code: string): V5WarningCategory {
+  if (code.startsWith(COVERAGE_GATED_PREFIX)) return "low_coverage";
+  if (code.startsWith(HISTORICAL_FORCED_OFF_PREFIX)) return "unsupported";
+  if (V5_STALE_CODES.has(code)) return "stale";
+  if (V5_UNSUPPORTED_CODES.has(code)) return "unsupported";
+  if (V5_UNVALIDATED_CODES.has(code)) return "unvalidated";
+  return "other";
+}
 
 export function v5WarningLabel(code: string): string {
   if (code.startsWith(COVERAGE_GATED_PREFIX)) {

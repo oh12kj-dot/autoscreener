@@ -370,12 +370,22 @@ export interface FetchV5ScoresParams {
   asOf?: string;
   limit?: number;
   offset?: number;
+  // WP-C (docs/racr_wp_c_api_ui_2026-09-04.md): only filters the backend
+  // can actually support from stored data. No "max permanent loss" /
+  // "max P(MDD>50%)" params exist on purpose -- see routes.py's
+  // list_v5_scores docstring for why.
+  minConfidence?: number;
+  sector?: string;
+  minPCagrAbove20?: number;
 }
 
 export function fetchV5Scores(params: FetchV5ScoresParams = {}): Promise<ModelV5ScoreListResponse> {
   const q = new URLSearchParams();
   if (params.objective) q.set("objective", params.objective);
   if (params.asOf) q.set("as_of", params.asOf);
+  if (params.minConfidence != null) q.set("min_confidence", String(params.minConfidence));
+  if (params.sector) q.set("sector", params.sector);
+  if (params.minPCagrAbove20 != null) q.set("min_p_cagr_above_20", String(params.minPCagrAbove20));
   q.set("limit", String(params.limit ?? 50));
   q.set("offset", String(params.offset ?? 0));
   return apiFetch(`/api/v1/models/v5/scores?${q.toString()}`);

@@ -450,6 +450,25 @@ a {
   cursor: help;
 }
 
+/* WP-C(docs/racr_wp_c_api_ui_2026-09-04.md):v5 warningのカテゴリ別配色。
+   「鮮度」はamber(既定の.warning-tagと同じ)のまま、それ以外は明示的に
+   色を分ける——原因が違うものを同じ見た目にしないため。 */
+.warning-tag--unsupported,
+.warning-tag--other {
+  background: var(--score-low-bg);
+  color: var(--score-low-text);
+}
+
+.warning-tag--low_coverage {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.warning-tag--unvalidated {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  color: var(--danger);
+}
+
 /* 30.9.2:デューデリの各セクション(取扱可否・レッドフラグ・希薄化・突合)。
    既存の.warning-panelほど強調しない、通常セクションとしての区切り。 */
 .dd-section {
@@ -2110,4 +2129,46 @@ td.negative {
 
 .v5-confidence {
   font-size: 0.85rem;
+}
+
+/* WP-C (docs/racr_wp_c_api_ui_2026-09-04.md): p_permanent_loss /
+   expected_max_drawdown 等、未実装のため常にnullなフィールド専用の表示。
+   0%や空欄と紛れないことが唯一の目的なので、`.term-trigger` と同じ
+   「点線下線+cursor:help」だけを流用し、独自のホバーpopoverは持たない
+   (理由はnative titleツールチップで十分)。 */
+.v5-unavailable-metric {
+  color: var(--text-muted);
+  cursor: help;
+  border-bottom: 1px dotted currentColor;
+  padding-bottom: 1px;
+  white-space: nowrap;
+}
+
+.v5-objective-not-computed {
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  background: var(--surface-muted, transparent);
+}
+
+/* WP-C:「未実装のためフィルタ自体が存在しない」ことを分かるようにする
+   ための、無効化されたフィルタ入力の見た目。 */
+.v5-disabled-filter {
+  opacity: 0.55;
+  cursor: help;
+}
+
+.v5-disabled-filter input {
+  cursor: not-allowed;
+}
+
+/* P(15/20/25%)のような3値まとめ表示セル。1行に収めると読みにくいので
+   縦に積む。 */
+.v5-triplet-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
 }

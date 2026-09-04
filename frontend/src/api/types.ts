@@ -942,6 +942,38 @@ export interface ModelV5Distribution {
   reliability_sigma_multiplier: number | null;
   reliability_left_tail_extra: number | null;
   scenarios: ModelV5Scenario[];
+  // WP-C/WP-B (docs/racr_wp_c_api_ui_2026-09-04.md; docs/racr_wp_b_output
+  // _contract_2026-09-04.md): RACR output contract (contract_version
+  // "v5.racr1"). Every field above is unchanged.
+  ce_cagr: number | null;
+  /** MOIC floor applied to the failure atom before taking logs (currently
+   * always 0.01 when computed) -- see ce_cagr's tooltip copy. Recorded so
+   * the UI never lets `ce_cagr` read as an unbiased number. */
+  ce_cagr_failure_floor: number | null;
+  p_cagr_above_15: number | null;
+  p_cagr_above_20: number | null;
+  p_cagr_above_25: number | null;
+  expected_shortfall_10pct_log: number | null;
+  /** Rename of p_moic_below_0_5: "large principal impairment probability",
+   * explicitly *not* permanent loss (see p_permanent_loss below). */
+  p_terminal_wealth_below_0_5: number | null;
+  // -- Permanent loss / drawdown: unimplemented by design (competing-risk
+  // and path-simulation models do not exist yet -- plan WP-F). These are
+  // *never* 0 -- always null, always paired with a machine-readable
+  // reason. Rendering these as 0%/empty instead of "-- 未推定" is the
+  // exact defect this contract exists to prevent (task brief, audit §9.1).
+  p_permanent_loss: number | null;
+  p_permanent_loss_unavailable_reason: string | null;
+  expected_max_drawdown: number | null;
+  expected_max_drawdown_unavailable_reason: string | null;
+  p_mdd_above_30: number | null;
+  p_mdd_above_30_unavailable_reason: string | null;
+  p_mdd_above_50: number | null;
+  p_mdd_above_50_unavailable_reason: string | null;
+  p_mdd_above_70: number | null;
+  p_mdd_above_70_unavailable_reason: string | null;
+  recovery_time_median: number | null;
+  recovery_time_median_unavailable_reason: string | null;
 }
 
 export interface ModelV5Run {
@@ -981,6 +1013,13 @@ export interface ModelV5ScoreListResponse {
   selected_objective: string;
   total: number;
   items: ModelV5ScoreSummary[];
+  /** WP-C: false means this run predates the selected objective's
+   * contract (e.g. risk_adjusted_compounding on a run scored before
+   * 2026-09-04) -- render an explicit "this run doesn't have this
+   * objective" message, never an empty ranking table that reads like "no
+   * stocks qualified". true + total===0 means the objective *is*
+   * computed but filters/universe legitimately yield nothing. */
+  objective_computed_for_run: boolean;
 }
 
 /** One growth/quality/capital/tail signal, as persisted in

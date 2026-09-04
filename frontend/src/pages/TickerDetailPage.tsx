@@ -79,6 +79,11 @@ export function TickerDetailPage() {
   const [searchParams] = useSearchParams();
   const horizonYears = searchParams.get("h") ? Number(searchParams.get("h")) : undefined;
   const targetMoic = searchParams.get("m") ? Number(searchParams.get("m")) : undefined;
+  // WP-C(docs/racr_wp_c_api_ui_2026-09-04.md):v5ランキングで選んだobjective
+  // をURL経由でここへ引き継ぐ。無指定ならV5TickerDetailSection側がAPIの
+  // default_objectiveへ落ち着く(不変条件3:ここでも既定をハードコードしない)。
+  const v5Objective = searchParams.get("objective") || undefined;
+  const v5AsOf = searchParams.get("as_of") || undefined;
   const [detail, setDetail] = useState<CandidateDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -695,6 +700,8 @@ export function TickerDetailPage() {
         ticker={detail.ticker}
         v4Probability={detail.probability}
         v4ExpectedMoic={detail.expected_moic}
+        objective={v5Objective}
+        asOf={v5AsOf}
       />
     </div>
   );

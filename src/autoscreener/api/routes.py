@@ -3777,17 +3777,38 @@ def get_latest_v5_run(
 def list_v5_scores(
     objective: str | None = None,
     as_of: datetime.date | None = None,
+    min_confidence: float | None = Query(None, ge=0.0, le=1.0),
+    sector: str | None = None,
+    min_p_cagr_above_20: float | None = Query(None, ge=0.0, le=1.0),
     limit: int = Query(_DEFAULT_LIMIT, ge=1, le=_MAX_LIMIT),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
 ) -> ModelV5ScoreListResponse:
-    """Rank one immutable v5 distribution set by the selected objective."""
+    """Rank one immutable v5 distribution set by the selected objective.
+
+    WP-C (docs/racr_wp_c_api_ui_2026-09-04.md; plan
+    docs/racr_integrated_redesign_plan_2026-09-04.md 不変条件2): filters are
+    restricted to fields the distribution contract actually populates today
+    (``min_confidence``, ``sector``, ``min_p_cagr_above_20``). A "max
+    permanent loss" or "max P(MDD>50%)" filter is deliberately *not*
+    accepted here -- those fields are always ``None`` (see
+    ``distribution.py``'s WP-B additions), so a filter over them could
+    never distinguish "excluded because too risky" from "excluded because
+    unmeasured", and would silently drop every row. The frontend disables
+    those controls with the unavailable reason instead of sending them.
+    """
     objective_config = load_objectives_config()
     selected = objective or objective_config.default_objective
     definition = objective_config.objectives.get(selected)
     if definition is None or not definition.enabled:
         raise HTTPException(status_code=422, detail=f"objective is not enabled: {selected}")
     run = _latest_v5_run(session, as_of)
+    objective_computed_for_run = (
+        session.query(ObjectiveScore.id)
+        .filter(ObjectiveScore.run_id == run.id, ObjectiveScore.objective == selected)
+        .first()
+        is not None
+    )
     base = (
         session.query(ObjectiveScore, ModelScore, Ticker)
         .join(ModelScore, (ModelScore.run_id == ObjectiveScore.run_id) &
@@ -3795,11 +3816,26 @@ def list_v5_scores(
         .join(Ticker, Ticker.id == ObjectiveScore.ticker_id)
         .filter(ObjectiveScore.run_id == run.id, ObjectiveScore.objective == selected)
     )
-    total = base.count()
-    rows = (
-        base.order_by(ObjectiveScore.rank.asc().nullslast(), Ticker.symbol.asc())
-        .offset(offset).limit(limit).all()
-    )
+    # Filtering happens in Python, not SQL, because the two supported
+    # metric filters (confidence, p_cagr_above_20) live inside the
+    # `ModelScore.distribution` JSONB blob and the universe this scans is
+    # bounded (one run's worth of tickers, ~1-2k rows) -- simpler and less
+    # brittle than a JSONB-path SQL expression, at negligible cost here.
+    def _keep(model_score: ModelScore, ticker: Ticker) -> bool:
+        if min_confidence is not None and float(model_score.confidence) < min_confidence:
+            return False
+        if sector and ticker.sector != sector:
+            return False
+        if min_p_cagr_above_20 is not None:
+            value = model_score.distribution.get("p_cagr_above_20")
+            if value is None or value < min_p_cagr_above_20:
+                return False
+        return True
+
+    all_rows = base.order_by(ObjectiveScore.rank.asc().nullslast(), Ticker.symbol.asc()).all()
+    filtered_rows = [row for row in all_rows if _keep(row[1], row[2])]
+    total = len(filtered_rows)
+    rows = filtered_rows[offset : offset + limit]
     items = [
         ModelV5ScoreSummary(
             rank=objective_row.rank, ticker=ticker.symbol,
@@ -3813,7 +3849,16 @@ def list_v5_scores(
         for objective_row, model_score, ticker in rows
     ]
     return ModelV5ScoreListResponse(
-        run=_v5_run_view(run), selected_objective=selected, total=total, items=items
+        run=_v5_run_view(run), selected_objective=selected, total=total, items=items,
+        # WP-C: distinguishes "this run predates the objective" (False --
+        # e.g. risk_adjusted_compounding on a pre-2026-09-04 run) from
+        # "the objective is computed but filters/universe legitimately
+        # yield zero rows" (True + total==0). Never let an older run's
+        # empty ObjectiveScore set render as an indistinguishable "no
+        # candidates" table -- plan docs/racr_integrated_redesign_plan_
+        # 2026-09-04.md 不変条件2 and the WP-C task's three-empty-states
+        # requirement.
+        objective_computed_for_run=objective_computed_for_run,
     )
 
 

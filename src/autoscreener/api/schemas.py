@@ -1294,6 +1294,16 @@ class ModelV5ScoreListResponse(BaseModel):
     selected_objective: str
     total: int
     items: list[ModelV5ScoreSummary]
+    # WP-C (docs/racr_wp_c_api_ui_2026-09-04.md): True iff at least one
+    # ObjectiveScore row exists for (run, selected_objective), regardless of
+    # any filter. False means this run predates the selected objective's
+    # contract (e.g. risk_adjusted_compounding on a run scored before
+    # 2026-09-04) -- the UI must render that as an explicit "this run
+    # doesn't have this objective" message, never as an empty ranking table
+    # that reads like "no stocks qualified". Defaults to True so a response
+    # built without setting it explicitly (e.g. an old test fixture) keeps
+    # its prior meaning.
+    objective_computed_for_run: bool = True
 
 
 class ModelV5ScoreDetail(BaseModel):

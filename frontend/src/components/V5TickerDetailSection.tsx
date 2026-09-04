@@ -2,9 +2,15 @@ import { useEffect, useState } from "react";
 import { fetchCandidates, fetchV5Objectives, fetchV5ScoreDetail } from "../api/client";
 import type { ModelV5AblationEntry, ModelV5ObjectivesResponse, ModelV5ScoreDetail } from "../api/types";
 import { V5WarningBadges } from "./V5WarningBadges";
+import { V5UnavailableMetric } from "./V5UnavailableMetric";
 import {
   v5AblationReasonLabel,
+  v5DistributionStatusLabel,
+  v5FormatProbability,
+  v5FormatRate,
+  v5MetricLabel,
   v5ObjectiveLabel,
+  v5RacrTermLabel,
   v5SignalLabel,
   v5StateShiftLabel,
 } from "../v5Labels";
@@ -71,9 +77,15 @@ interface Props {
   ticker: string;
   v4Probability: number | null;
   v4ExpectedMoic: number | null;
+  /** WP-C(docs/racr_wp_c_api_ui_2026-09-04.md):ランキング一覧で選んで
+   * いたobjectiveをURL経由で引き継ぐ。未指定ならAPIのdefault_objective
+   * (不変条件3:ここでハードコードしない)。 */
+  objective?: string;
+  /** WP-C:ランキング一覧のas_ofを引き継ぐ(未指定なら最新run)。 */
+  asOf?: string;
 }
 
-export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }: Props) {
+export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic, objective, asOf }: Props) {
   const [detail, setDetail] = useState<ModelV5ScoreDetail | null>(null);
   const [objectives, setObjectives] = useState<ModelV5ObjectivesResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -83,13 +95,13 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
   useEffect(() => {
     setDetail(null);
     setError(null);
-    Promise.all([fetchV5ScoreDetail(ticker), fetchV5Objectives()])
+    Promise.all([fetchV5ScoreDetail(ticker, asOf), fetchV5Objectives()])
       .then(([d, o]) => {
         setDetail(d);
         setObjectives(o);
       })
       .catch((e: Error) => setError(e.message));
-  }, [ticker]);
+  }, [ticker, asOf]);
 
   // /candidates の limit は最大200(_MAX_LIMIT、routes.py)。411銘柄などの
   // 母集団を1回で取得しようとすると 422 Unprocessable Entity になる
@@ -134,9 +146,17 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
     );
   }
 
-  const defaultObjective = objectives.default_objective;
-  const v5ObjectiveScore = detail.objectives.find((o) => o.objective === defaultObjective) ?? null;
+  // WP-C: このセクションが読む objective は、URLから引き継いだ選択
+  // (ランキング画面で選んでいたもの)を優先し、無ければAPIのdefault_objective
+  // (不変条件3)。`detail.objectives` に見当たらない場合は「このrunでは
+  // 未計算」であって「候補が無い」わけではない——別々に扱う。
+  const selectedObjective = objective || objectives.default_objective;
+  const v5ObjectiveScore = detail.objectives.find((o) => o.objective === selectedObjective) ?? null;
+  const objectiveComputedForRun = v5ObjectiveScore != null;
   const ablationEntries = Object.entries(detail.features.ablation ?? {}) as [string, ModelV5AblationEntry][];
+  const dist = detail.distribution;
+  const isRacr = selectedObjective === "risk_adjusted_compounding";
+  const racrExplanation = isRacr && v5ObjectiveScore?.status === "available" ? v5ObjectiveScore.explanation : null;
 
   return (
     <div className="v5-ticker-section">
@@ -173,7 +193,7 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
             <td>{detail.distribution.expected_moic != null ? `${detail.distribution.expected_moic.toFixed(2)}x` : "—"}</td>
           </tr>
           <tr>
-            <td>{v5ObjectiveLabel(defaultObjective)}での順位</td>
+            <td>{v5ObjectiveLabel(selectedObjective)}での順位</td>
             <td>
               {v4Rank == null ? (
                 <button type="button" disabled={v4RankLoading} onClick={loadV4Rank}>
@@ -185,10 +205,157 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
                 `${v4Rank}位`
               )}
             </td>
-            <td>{v5ObjectiveScore?.rank != null ? `${v5ObjectiveScore.rank}位` : "未計算"}</td>
+            <td>
+              {objectiveComputedForRun
+                ? (v5ObjectiveScore?.rank != null ? `${v5ObjectiveScore.rank}位` : "未計算(スコアなし)")
+                : "このrunでは未計算"}
+            </td>
           </tr>
         </tbody>
       </table>
+
+      {/* WP-C(docs/racr_wp_c_api_ui_2026-09-04.md)の3つの空状態のうち
+          「このrunはこのobjectiveをまだ計算していない」を、一覧と同じ文面で
+          明示する——空欄や「未計算」の1語だけでは、候補が無いのと区別が
+          付かない。 */}
+      {!objectiveComputedForRun && (
+        <div className="v5-objective-not-computed">
+          この run(as_of {detail.run.as_of})は「{v5ObjectiveLabel(selectedObjective)}」をまだ計算していません。
+          このrunがこのobjectiveのcontract追加前に実行されたためで、この銘柄にスコアが無いという意味ではありません。
+        </div>
+      )}
+
+      <h4>分布の主要な数値</h4>
+      <p className="v5-caveat">
+        同じ分布(終端7年後のwealth分布)から一貫して導いた値です。永久損失・予想MDDは
+        <strong>現行モデルでは未実装</strong>のため、値ではなく理由付きで「— 未推定」と表示します
+        ——0%(リスク無し)という意味では絶対にありません。
+      </p>
+      <table className="v5-compare-table v5-distribution-table">
+        <tbody>
+          <tr>
+            <td>{v5MetricLabel("ce_cagr")}</td>
+            <td>{v5FormatRate(dist.ce_cagr)}</td>
+          </tr>
+          <tr>
+            <td>期待CAGR / 中央値CAGR</td>
+            <td>{v5FormatRate(dist.expected_cagr)} / {v5FormatRate(dist.median_cagr)}</td>
+          </tr>
+          <tr>
+            <td>P(CAGR&gt;15% / 20% / 25%)</td>
+            <td>
+              {v5FormatProbability(dist.p_cagr_above_15)} / {v5FormatProbability(dist.p_cagr_above_20)} /{" "}
+              {v5FormatProbability(dist.p_cagr_above_25)}
+            </td>
+          </tr>
+          <tr>
+            <td>{v5MetricLabel("p_terminal_wealth_below_0_5")}</td>
+            <td>{v5FormatProbability(dist.p_terminal_wealth_below_0_5)}</td>
+          </tr>
+          <tr>
+            <td>{v5MetricLabel("expected_shortfall_10pct_log")}</td>
+            <td>{dist.expected_shortfall_10pct_log != null ? v5FormatRate(dist.expected_shortfall_10pct_log) : "—"}</td>
+          </tr>
+          <tr>
+            <td>{v5MetricLabel("p_permanent_loss")}</td>
+            <td>
+              {dist.p_permanent_loss == null
+                ? <V5UnavailableMetric reason={dist.p_permanent_loss_unavailable_reason} />
+                : v5FormatProbability(dist.p_permanent_loss)}
+            </td>
+          </tr>
+          <tr>
+            <td>{v5MetricLabel("expected_max_drawdown")}</td>
+            <td>
+              {dist.expected_max_drawdown == null
+                ? <V5UnavailableMetric reason={dist.expected_max_drawdown_unavailable_reason} />
+                : v5FormatProbability(dist.expected_max_drawdown)}
+            </td>
+          </tr>
+          <tr>
+            <td>P(MDD&gt;30% / 50% / 70%)</td>
+            <td>
+              {dist.p_mdd_above_30 == null ? <V5UnavailableMetric reason={dist.p_mdd_above_30_unavailable_reason} /> : v5FormatProbability(dist.p_mdd_above_30)}
+              {" / "}
+              {dist.p_mdd_above_50 == null ? <V5UnavailableMetric reason={dist.p_mdd_above_50_unavailable_reason} /> : v5FormatProbability(dist.p_mdd_above_50)}
+              {" / "}
+              {dist.p_mdd_above_70 == null ? <V5UnavailableMetric reason={dist.p_mdd_above_70_unavailable_reason} /> : v5FormatProbability(dist.p_mdd_above_70)}
+            </td>
+          </tr>
+          <tr>
+            <td>{v5MetricLabel("recovery_time_median")}</td>
+            <td>
+              {dist.recovery_time_median == null
+                ? <V5UnavailableMetric reason={dist.recovery_time_median_unavailable_reason} />
+                : `${dist.recovery_time_median.toFixed(1)}年`}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      {isRacr && racrExplanation && (
+        <>
+          <h4>RACRの内訳(各ペナルティ項とλ)</h4>
+          <p className="v5-caveat">
+            <strong>
+              このスコアはドローダウン・永久損失を含んでいません(explanation.omitted_terms)。
+            </strong>{" "}
+            両項は未実装のため恒常的に0として計算されており、「リスク調整済み」と読み違えないための表示です。
+            λは全てbacktestで最適化した値ではなく、固定の投資方針パラメータです。
+          </p>
+          <table className="v5-compare-table v5-racr-table">
+            <thead>
+              <tr>
+                <th>項目</th>
+                <th>値</th>
+                <th>λ</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>{v5RacrTermLabel("ce_cagr")}</td>
+                <td>{v5FormatRate(racrExplanation.ce_cagr as number | null)}</td>
+                <td>—</td>
+              </tr>
+              <tr>
+                <td>{v5RacrTermLabel("tail_loss_10")}</td>
+                <td>{v5FormatRate(racrExplanation.tail_loss_10 as number | null)}</td>
+                <td>{(racrExplanation.tail_lambda as number)?.toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td>{v5RacrTermLabel("dd_excess")}</td>
+                <td>{v5FormatRate(racrExplanation.dd_excess as number | null)}</td>
+                <td>{(racrExplanation.drawdown_lambda as number)?.toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td>{v5RacrTermLabel("p_permanent_loss")}</td>
+                <td>{v5FormatProbability(racrExplanation.p_permanent_loss as number | null)}</td>
+                <td>{(racrExplanation.permanent_loss_lambda as number)?.toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td>{v5RacrTermLabel("model_uncertainty")}</td>
+                <td>{v5FormatRate(racrExplanation.model_uncertainty as number | null)}</td>
+                <td>{(racrExplanation.uncertainty_lambda as number)?.toFixed(2)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p className="v5-caveat">
+            省略された項目(omitted_terms):{" "}
+            <strong>
+              {((racrExplanation.omitted_terms as string[]) ?? [])
+                .map((t) => (t === "drawdown" ? "ドローダウン" : t === "permanent_loss" ? "永久損失" : t))
+                .join("、")}
+            </strong>
+            {racrExplanation.ce_cagr_failure_floor != null && (
+              <>
+                {" "}
+                ・破綻atomのMOICフロア: {(racrExplanation.ce_cagr_failure_floor as number).toFixed(2)}x
+                (推定値ではなく保守的なプレースホルダ)
+              </>
+            )}
+          </p>
+        </>
+      )}
 
       <h4>なぜこの分布になったか(特徴量ごとの寄与)</h4>
       <p className="v5-caveat">
@@ -236,7 +403,10 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic }:
           <V5WarningBadges codes={detail.warnings} compact />
         </div>
       )}
-      <p className="v5-confidence">モデル信頼度: {(detail.confidence * 100).toFixed(0)}%</p>
+      <p className="v5-confidence">
+        モデル信頼度: {(detail.confidence * 100).toFixed(0)}% ・ run as_of: {detail.run.as_of} ・
+        distribution: {v5DistributionStatusLabel(dist.status)}({dist.contract_version}) ・ target: {detail.target_horizon_years}年で{detail.target_moic}倍
+      </p>
     </div>
   );
 }
