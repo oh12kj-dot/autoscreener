@@ -17,8 +17,38 @@ objectives:
     description: Expected compound annual return.
   risk_adjusted:
     enabled: true
-    description: Expected return less configurable downside risk.
+    deprecated: true
+    description: >-
+      Deprecated (docs/racr_wp_b_output_contract_2026-09-04.md; audit
+      autoscreener_racr_integrated_redesign_audit_2026-09-04.md §4.3):
+      superseded by risk_adjusted_compounding, which multiplies by loss
+      probability instead of only loss depth. Kept enabled and computed
+      for champion/challenger comparison against historical runs -- do not
+      remove.
     downside_lambda: 0.50
+  # WP-B (docs/racr_wp_b_output_contract_2026-09-04.md; audit
+  # autoscreener_racr_integrated_redesign_audit_2026-09-04.md §5.2): the new
+  # risk-aware objective, added as a *shadow* alongside (not replacing)
+  # `ten_bagger` -- `default_objective` above stays `ten_bagger` until a
+  # separately-gated promotion decision (plan WP-H) reviews live RACR vs.
+  # ten_bagger/expected_return ranking behavior. Lambda values are fixed
+  # investment-policy priors (audit §5.2 table), not backtest-fitted
+  # parameters -- see `ObjectiveDefinition` in config.py for why, and for
+  # why drawdown_lambda/permanent_loss_lambda currently multiply an
+  # explicit 0 (their statistics are `unavailable`, not computed as zero
+  # risk).
+  risk_adjusted_compounding:
+    enabled: true
+    description: >-
+      Certainty-equivalent CAGR less tail-loss, drawdown, permanent-loss,
+      and model-uncertainty penalties (shadow; default_objective stays
+      ten_bagger until promotion). Drawdown and permanent-loss terms are
+      currently omitted (unavailable) -- see explanation.omitted_terms on
+      every scored ticker.
+    tail_lambda: 0.35
+    drawdown_lambda: 0.10
+    permanent_loss_lambda: 0.20
+    uncertainty_lambda: 0.50
   quality_compounder:
     enabled: false
     description: Distribution-led long-duration per-share compounding objective.

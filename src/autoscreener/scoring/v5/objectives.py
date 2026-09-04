@@ -116,6 +116,83 @@ def evaluate_objectives(distribution: dict, config: ObjectivesConfig, *, horizon
         elif name == "capital_preservation":
             value = 1.0 - distribution["p_moic_below_1_0"]
             explanation = {"formula": "1 - P(MOIC < 1.0)"}
+        elif name == "risk_adjusted_compounding":
+            # WP-B (docs/racr_wp_b_output_contract_2026-09-04.md; audit
+            # autoscreener_racr_integrated_redesign_audit_2026-09-04.md
+            # §4.3/§5.2): RACR replaces `risk_adjusted`'s "expected CAGR
+            # minus loss *depth*, ignoring loss *probability*" formula
+            # (§4.3's diagnosed defect) with a certainty-equivalent CAGR
+            # that already prices in failure-atom probability via
+            # `E[ln W]` (see `distribution.py`'s `_expected_log_moic`),
+            # plus explicit tail/drawdown/permanent-loss/uncertainty
+            # penalty terms.
+            #
+            # `ce_cagr` and `expected_shortfall_10pct_log` are read
+            # directly from the distribution (single source of truth --
+            # this objective never recomputes the CDF itself, matching how
+            # `risk_adjusted` already reads `expected_moic_given_loss`
+            # rather than re-deriving it).
+            ce_cagr = distribution["ce_cagr"]
+            # TailLoss10 (audit §5.2): "the average annualized log-loss in
+            # the worst decile of outcomes", floored at 0 so a ticker whose
+            # worst decile is still a gain contributes no penalty.
+            tail_loss_10 = max(0.0, -distribution["expected_shortfall_10pct_log"])
+            tail_lambda = definition.tail_lambda or 0.0
+            drawdown_lambda = definition.drawdown_lambda or 0.0
+            permanent_loss_lambda = definition.permanent_loss_lambda or 0.0
+            uncertainty_lambda = definition.uncertainty_lambda or 0.0
+            # DDExcess and P(PermanentLoss) are `unavailable` in the
+            # distribution contract (no path simulation / competing-risk
+            # model yet -- see distribution.py's WP-B additions). They
+            # are computed as exactly 0 here, which is *not* the same
+            # claim as "distribution.py reports 0 risk": the distribution
+            # fields themselves stay None+reason. `omitted_terms` below
+            # exists specifically so this score is never misread as
+            # "already risk-adjusted for drawdown/permanent loss" -- per
+            # the plan's explicit requirement that this must not be papered
+            # over.
+            dd_excess = 0.0
+            p_permanent_loss = 0.0
+            model_confidence = distribution.get("model_confidence") or 0.0
+            # ModelUncertainty (audit §5.2: "CE CAGR推定標準誤差を半分控除",
+            # lambda_U initial value 0.50): a proxy for the standard error
+            # of the CE CAGR point estimate, derived from `model_confidence`
+            # per the plan's explicit instruction -- not from the
+            # distribution's own sigma, which already feeds `ce_cagr` and
+            # `tail_loss_10` and would double-count if reused here.
+            # Interpolates linearly between "fully confident: no penalty"
+            # (model_confidence=1.0) and "zero confidence: treat the whole
+            # magnitude of the CE CAGR estimate as one standard error of
+            # uncertainty" (model_confidence=0.0).
+            model_uncertainty = (1.0 - model_confidence) * abs(ce_cagr)
+            value = (
+                ce_cagr
+                - tail_lambda * tail_loss_10
+                - drawdown_lambda * dd_excess
+                - permanent_loss_lambda * p_permanent_loss
+                - uncertainty_lambda * model_uncertainty
+            )
+            explanation = {
+                "formula": (
+                    "ce_cagr - tail_lambda*TailLoss10 - drawdown_lambda*DDExcess "
+                    "- permanent_loss_lambda*P(PermanentLoss) - uncertainty_lambda*ModelUncertainty"
+                ),
+                "ce_cagr": ce_cagr,
+                "ce_cagr_failure_floor": distribution.get("ce_cagr_failure_floor"),
+                "tail_loss_10": tail_loss_10,
+                "dd_excess": dd_excess,
+                "p_permanent_loss": p_permanent_loss,
+                "model_uncertainty": model_uncertainty,
+                "model_confidence": model_confidence,
+                "tail_lambda": tail_lambda,
+                "drawdown_lambda": drawdown_lambda,
+                "permanent_loss_lambda": permanent_loss_lambda,
+                "uncertainty_lambda": uncertainty_lambda,
+                # Required by the plan (B-3): must always be present while
+                # drawdown/permanent-loss remain unavailable, so nothing
+                # downstream can read this score as risk-complete.
+                "omitted_terms": ["drawdown", "permanent_loss"],
+            }
         else:
             results[name] = ObjectiveResult(name, "unsupported", None, {"reason": "objective_requires_later_phase_inputs"})
             continue
