@@ -34,11 +34,22 @@ export function v5ObjectiveLabel(key: string): string {
  * 恒常的に0固定 —— ラベル自体にもその旨を含めておく。 */
 export const V5_RACR_TERM_LABELS: Record<string, string> = {
   ce_cagr: "CE CAGR(確実性等価・複利年率)",
-  tail_loss_10: "下位10%テール損失(年率換算)",
+  // WP-B2(docs/racr_wp_b2_risk_terms_2026-09-04.md): v5.racr1の
+  // tail_loss_10(下位10%を無条件に測る)は、生存確率が低い銘柄で全銘柄
+  // 同一の定数(破綻atomのfloor)に潰れる欠陥があった。v5.racr2は生存条件
+  // 付き(破綻atomを除いた継続部分だけ)で測る cond_tail_loss_10 に置換。
+  // 旧キーはラベルごと残す(古いrunのexplanationにまだ残っているため)。
+  tail_loss_10: "下位10%テール損失(年率換算・旧式)",
+  cond_tail_loss_10: "下位10%テール損失(生存条件付き・年率換算)",
+  // 「永久損失」ではない——現行モデル自身の破綻atom(倒産・非回収的上場
+  // 廃止)の発生確率×保守的な回収率仮定。原因別competing-riskモデルに
+  // よる推定である p_permanent_loss とは別物であることをラベルにも残す。
+  failure_loss: "失敗頻度損失(P(失敗)×(1-回収率仮定)、永久損失ではない)",
   dd_excess: "ドローダウン超過(未実装のため常に0)",
   p_permanent_loss: "永久損失確率(未実装のため常に0)",
   model_uncertainty: "モデル不確実性(信頼度由来)",
   tail_lambda: "λ(テール)",
+  failure_lambda: "λ(失敗頻度)",
   drawdown_lambda: "λ(ドローダウン)",
   permanent_loss_lambda: "λ(永久損失)",
   uncertainty_lambda: "λ(不確実性)",

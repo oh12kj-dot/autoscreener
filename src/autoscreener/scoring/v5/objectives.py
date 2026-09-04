@@ -124,20 +124,69 @@ def evaluate_objectives(distribution: dict, config: ObjectivesConfig, *, horizon
             # (§4.3's diagnosed defect) with a certainty-equivalent CAGR
             # that already prices in failure-atom probability via
             # `E[ln W]` (see `distribution.py`'s `_expected_log_moic`),
-            # plus explicit tail/drawdown/permanent-loss/uncertainty
+            # plus explicit tail/failure/drawdown/permanent-loss/uncertainty
             # penalty terms.
             #
-            # `ce_cagr` and `expected_shortfall_10pct_log` are read
-            # directly from the distribution (single source of truth --
-            # this objective never recomputes the CDF itself, matching how
-            # `risk_adjusted` already reads `expected_moic_given_loss`
+            # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md; diagnostic
+            # docs/racr_shadow_run_diagnostic_2026-09-04.md): the first real
+            # run measured Spearman(RACR, ce_cagr) == 1.0000000000 for
+            # 1,155/1,155 tickers -- every risk term was either a universe-
+            # wide constant (`expected_shortfall_10pct_log`, dominated by
+            # the failure atom at the fixed 10% quantile) or a constant
+            # multiple of `ce_cagr` itself (`model_confidence` pinned at
+            # 0.5 for the whole universe). This branch now reads two
+            # different fields from the distribution: a tail measure taken
+            # *conditional on survival* (varies with each ticker's own
+            # continuous-mixture dispersion, not with how much of the
+            # failure atom happens to sit under the old fixed quantile),
+            # and failure frequency priced as its own explicit term instead
+            # of being smuggled inside the tail measure.
+            #
+            # `ce_cagr`, `expected_shortfall_10pct_log_given_survival`,
+            # `survival_probability`, and `ce_cagr_failure_floor` are all
+            # read directly from the distribution (single source of truth
+            # -- this objective never recomputes the CDF itself, matching
+            # how `risk_adjusted` already reads `expected_moic_given_loss`
             # rather than re-deriving it).
             ce_cagr = distribution["ce_cagr"]
-            # TailLoss10 (audit §5.2): "the average annualized log-loss in
-            # the worst decile of outcomes", floored at 0 so a ticker whose
-            # worst decile is still a gain contributes no penalty.
-            tail_loss_10 = max(0.0, -distribution["expected_shortfall_10pct_log"])
+            # TailLoss10_conditional_on_survival: "the average annualized
+            # log-loss in the worst decile of outcomes *given the company
+            # survives*", floored at 0 so a ticker whose worst surviving
+            # decile is still a gain contributes no penalty. Unlike the old
+            # `expected_shortfall_10pct_log`-based measure, this cannot
+            # collapse into the failure-atom floor -- the failure atom has
+            # been excluded from the conditioning set entirely, not floored
+            # (see distribution.py's
+            # `_expected_log_moic_below_quantile_given_survival`).
+            cond_tail_loss_10 = max(
+                0.0, -distribution["expected_shortfall_10pct_log_given_survival"]
+            )
+            # Failure frequency, priced as its own term instead of being
+            # entangled with tail depth (audit §5.2's original RACR design
+            # already separated "frequency" (lambda_P * P(PermanentLoss))
+            # from "depth" (lambda_T * TailLoss10); WP-B's first cut
+            # conflated them by measuring depth at a quantile the failure
+            # atom itself controlled). `assumed_recovery` intentionally
+            # reuses `ce_cagr_failure_floor` -- the *same* provisional
+            # recovery assumption already used for `ce_cagr` -- rather than
+            # inventing a second, independent recovery constant.
+            #
+            # Naming: this is deliberately *not* `p_permanent_loss`.
+            # `p_permanent_loss` stays `None` + `unavailable_reason` (it
+            # requires the cause-classified competing-risk/recovery model,
+            # WP-F). `p_failure` is this model's own failure atom
+            # (bankruptcy or non-recovering delisting, MOIC floored at
+            # `assumed_recovery`) -- a narrower, already-available
+            # quantity. Conflating the two names would let a reader
+            # mistake "the model now prices failure frequency" for
+            # "permanent loss is now measured", which is exactly the
+            # misreading this whole line of work exists to prevent.
+            survival = distribution.get("survival_probability")
+            p_failure = 1.0 - survival if survival is not None else 0.0
+            assumed_recovery = distribution.get("ce_cagr_failure_floor") or 0.0
+            failure_loss = p_failure * (1.0 - assumed_recovery)
             tail_lambda = definition.tail_lambda or 0.0
+            failure_lambda = definition.failure_lambda or 0.0
             drawdown_lambda = definition.drawdown_lambda or 0.0
             permanent_loss_lambda = definition.permanent_loss_lambda or 0.0
             uncertainty_lambda = definition.uncertainty_lambda or 0.0
@@ -159,32 +208,43 @@ def evaluate_objectives(distribution: dict, config: ObjectivesConfig, *, horizon
             # of the CE CAGR point estimate, derived from `model_confidence`
             # per the plan's explicit instruction -- not from the
             # distribution's own sigma, which already feeds `ce_cagr` and
-            # `tail_loss_10` and would double-count if reused here.
+            # `cond_tail_loss_10` and would double-count if reused here.
             # Interpolates linearly between "fully confident: no penalty"
             # (model_confidence=1.0) and "zero confidence: treat the whole
             # magnitude of the CE CAGR estimate as one standard error of
-            # uncertainty" (model_confidence=0.0).
+            # uncertainty" (model_confidence=0.0). WP-B2 note: this term
+            # still carries little independent information while
+            # `model_confidence` sits at ~0.5 for the whole universe (see
+            # docs/racr_wp_b2_risk_terms_2026-09-04.md) -- the real fix is
+            # the reliability layer, WP-D.
             model_uncertainty = (1.0 - model_confidence) * abs(ce_cagr)
             value = (
                 ce_cagr
-                - tail_lambda * tail_loss_10
+                - tail_lambda * cond_tail_loss_10
+                - failure_lambda * failure_loss
                 - drawdown_lambda * dd_excess
                 - permanent_loss_lambda * p_permanent_loss
                 - uncertainty_lambda * model_uncertainty
             )
             explanation = {
                 "formula": (
-                    "ce_cagr - tail_lambda*TailLoss10 - drawdown_lambda*DDExcess "
-                    "- permanent_loss_lambda*P(PermanentLoss) - uncertainty_lambda*ModelUncertainty"
+                    "ce_cagr - tail_lambda*TailLoss10_conditional_on_survival "
+                    "- failure_lambda*p_failure*(1-assumed_recovery) "
+                    "- drawdown_lambda*DDExcess - permanent_loss_lambda*P(PermanentLoss) "
+                    "- uncertainty_lambda*ModelUncertainty"
                 ),
                 "ce_cagr": ce_cagr,
                 "ce_cagr_failure_floor": distribution.get("ce_cagr_failure_floor"),
-                "tail_loss_10": tail_loss_10,
+                "cond_tail_loss_10": cond_tail_loss_10,
+                "p_failure": p_failure,
+                "assumed_recovery": assumed_recovery,
+                "failure_loss": failure_loss,
                 "dd_excess": dd_excess,
                 "p_permanent_loss": p_permanent_loss,
                 "model_uncertainty": model_uncertainty,
                 "model_confidence": model_confidence,
                 "tail_lambda": tail_lambda,
+                "failure_lambda": failure_lambda,
                 "drawdown_lambda": drawdown_lambda,
                 "permanent_loss_lambda": permanent_loss_lambda,
                 "uncertainty_lambda": uncertainty_lambda,

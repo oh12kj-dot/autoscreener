@@ -4,6 +4,7 @@ import { fetchV5Objectives, fetchV5Scores, fetchV5ValidationStatus } from "../ap
 import type { ModelV5ObjectivesResponse, ModelV5ScoreListResponse, ModelV5ScoreSummary, ModelV5ValidationStatus } from "../api/types";
 import { V5WarningBadges } from "./V5WarningBadges";
 import { V5UnavailableMetric } from "./V5UnavailableMetric";
+import { V5FailureFloorNote } from "./V5FailureFloorNote";
 import {
   v5DecisionLabel,
   v5DistributionStatusLabel,
@@ -118,6 +119,13 @@ export function V5RankingSection() {
   }, [objective, asOf, offset, minConfidencePct, sector, minPCagr20Pct]);
 
   const filtersActive = Boolean(minConfidencePct || sector || minPCagr20Pct);
+  // WP-B2(docs/racr_wp_b2_risk_terms_2026-09-04.md B2-3):この定数は
+  // run単位でconfigから来る一定値のはずだが、万一runごとに違っても
+  // (将来config変更時など)先頭の1件から読むだけで足りる——一覧表全体で
+  // 1回だけ、見出しに注記を出す用途であり、行ごとの表示ではないため。
+  const ceCagrFailureFloor = data?.items.find(
+    (item) => item.distribution.ce_cagr_failure_floor != null
+  )?.distribution.ce_cagr_failure_floor ?? null;
 
   return (
     <div className="v5-ranking-section">
@@ -252,9 +260,13 @@ export function V5RankingSection() {
                   <th>銘柄</th>
                   <th title="explanation.omitted_terms: ドローダウン・永久損失は未実装のためこのスコアに反映されていません(詳細ページ参照)">
                     {v5ObjectiveLabel(objective)}
+                    {objective === "risk_adjusted_compounding" && (
+                      <V5FailureFloorNote floor={ceCagrFailureFloor} />
+                    )}
                   </th>
                   <th title="確実性等価CAGR。分散・破綻確率を織り込んだ複利年率(RACRの起点になる値)">
                     {v5MetricLabel("ce_cagr")}
+                    <V5FailureFloorNote floor={ceCagrFailureFloor} />
                   </th>
                   <th>期待CAGR</th>
                   <th>{v5MetricLabel("median_cagr")}</th>

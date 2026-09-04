@@ -711,6 +711,24 @@ class ObjectiveDefinition(BaseModel):
     drawdown_lambda: float | None = Field(default=None, ge=0)
     permanent_loss_lambda: float | None = Field(default=None, ge=0)
     uncertainty_lambda: float | None = Field(default=None, ge=0)
+    # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md; diagnostic
+    # docs/racr_shadow_run_diagnostic_2026-09-04.md §3.1/§5): a *fifth*
+    # coefficient, multiplying ``P(failure) * (1 - assumed_recovery)`` --
+    # the failure-atom frequency term separated out of what used to be a
+    # single degenerate tail measure (see ``evaluate_objectives``'s
+    # ``risk_adjusted_compounding`` branch for the full formula). This is
+    # deliberately a distinct field from ``permanent_loss_lambda`` above,
+    # even though the audit's policy table happens to assign both an
+    # identical 0.20 prior: ``failure_lambda`` multiplies this model's own
+    # failure atom (bankruptcy/non-recovering delisting, priced via
+    # ``ce_cagr_failure_floor`` -- an *assumed* recovery rate, not a
+    # cause-classified estimate), while ``permanent_loss_lambda`` remains
+    # reserved for the future competing-risk/recovery-distribution model
+    # (WP-F) that ``p_permanent_loss`` still reports as `None` for. Collapsing
+    # the two into one field would let a reader mistake "the model already
+    # prices failure frequency" for "permanent loss is now measured" --
+    # exactly the conflation this WP exists to prevent.
+    failure_lambda: float | None = Field(default=None, ge=0)
     # Marks an objective as superseded-but-kept-working (audit §0/§2.2:
     # `risk_adjusted` is replaced as the risk-aware objective of record by
     # `risk_adjusted_compounding`, but stays enabled and computed -- the

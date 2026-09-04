@@ -64,8 +64,9 @@ def _objectives_config() -> ObjectivesConfig:
                 description="test", downside_lambda=0.50, deprecated=True,
             ),
             "risk_adjusted_compounding": ObjectiveDefinition(
-                description="test", tail_lambda=0.35, drawdown_lambda=0.10,
-                permanent_loss_lambda=0.20, uncertainty_lambda=0.50,
+                description="test", tail_lambda=0.35, failure_lambda=0.20,
+                drawdown_lambda=0.10, permanent_loss_lambda=0.20,
+                uncertainty_lambda=0.50,
             ),
         },
     )
@@ -73,14 +74,17 @@ def _objectives_config() -> ObjectivesConfig:
 
 # -- B-1: contract version separation ------------------------------------
 
-def test_distribution_contract_version_is_racr1():
+def test_distribution_contract_version_is_racr2():
+    # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md) bumped this from
+    # v5.racr1 to v5.racr2: new conditional-tail-loss/failure-frequency
+    # fields, RACR values are not comparable across contract versions.
     dist = _distribution()
-    assert dist["contract_version"] == "v5.racr1"
+    assert dist["contract_version"] == "v5.racr2"
 
 
-def test_unavailable_distribution_contract_version_is_racr1_too():
+def test_unavailable_distribution_contract_version_is_racr2_too():
     dist = unavailable_distribution(target_moic=10.0, confidence=0.0)
-    assert dist["contract_version"] == "v5.racr1"
+    assert dist["contract_version"] == "v5.racr2"
 
 
 # -- B-2: identity tests ---------------------------------------------------

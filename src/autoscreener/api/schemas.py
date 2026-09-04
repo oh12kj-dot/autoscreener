@@ -1235,6 +1235,14 @@ class ModelV5DistributionView(BaseModel):
     p_cagr_above_20: float | None = None
     p_cagr_above_25: float | None = None
     expected_shortfall_10pct_log: float | None = None
+    # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md, contract_version
+    # "v5.racr2"): additive-only, nullable. Worst-decile log-CAGR
+    # conditional on survival (the failure atom excluded, not floored) --
+    # unlike `expected_shortfall_10pct_log` above, this cannot collapse to
+    # a universe-wide constant once a ticker's failure mass exceeds 10%
+    # (see docs/racr_shadow_run_diagnostic_2026-09-04.md for why the old
+    # field did, on the very first real run).
+    expected_shortfall_10pct_log_given_survival: float | None = None
     # Rename of p_moic_below_0_5 (audit §5.3/§6.2): "large-principal-
     # impairment probability", not permanent loss. p_moic_below_0_5 above
     # is retained unchanged for backward compatibility.

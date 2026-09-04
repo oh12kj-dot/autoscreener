@@ -9,6 +9,7 @@ import subprocess
 import uuid
 from dataclasses import replace
 
+from autoscreener.backtest.metrics import spearman
 from autoscreener.config import (
     ModelV5Config,
     ObjectivesConfig,
@@ -360,6 +361,183 @@ def _reconcile_capital_features(
     )
 
 
+# WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md B2-1; deferred from WP-B's
+# own B-3 acceptance condition, docs/racr_wp_b_output_contract_2026-09-04.md
+# §5 "実施できなかった診断出力"): per-run objective diagnostics that would
+# have caught the exact defect this WP fixes automatically -- the first real
+# run measured Spearman(RACR, ce_cagr) == 1.0000000000 for 1,155/1,155
+# tickers because every risk term turned out to be a universe-wide constant
+# (docs/racr_shadow_run_diagnostic_2026-09-04.md). These are pure functions
+# over plain dict/list/set inputs (never ORM rows or a session), so they are
+# unit-testable without a DB, matching this module's existing style (e.g.
+# ``_ablate``/``_distribution_for`` also take plain values).
+
+_DIAGNOSTIC_DISTRIBUTION_FIELDS = (
+    "ce_cagr",
+    "expected_cagr",
+    "median_cagr",
+    "survival_probability",
+    "model_confidence",
+    "expected_shortfall_10pct_log",
+    "expected_shortfall_10pct_log_given_survival",
+    "p_target",
+)
+
+
+def _numeric(value: object) -> float | None:
+    """``float`` for a non-bool int/float, else ``None``.
+
+    ``bool`` is a subclass of ``int`` in Python; a boolean flag reaching a
+    numeric comparison here would otherwise be silently treated as 0/1 and
+    could report a spurious "distinct value count" of 1 -- excluded
+    explicitly rather than relying on every caller to remember.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _pairwise_objective_spearman(
+    objective_values: dict[str, dict[int, float]],
+    ce_cagr_by_ticker: dict[int, float],
+) -> tuple[dict[str, float], dict[str, float], list[str]]:
+    """Pairwise Spearman between every enabled objective, and each
+    objective vs ``ce_cagr``. Returns ``(pairwise, vs_ce_cagr, warnings)``.
+
+    A pair is only reported when at least 3 tickers have a non-null score
+    on both sides -- ``spearman`` itself already returns 0.0 below that,
+    but a *reported* 0.0 here would misleadingly read as "measured, no
+    correlation" instead of "not enough overlap to measure".
+    """
+    pairwise: dict[str, float] = {}
+    warnings: list[str] = []
+    names = sorted(objective_values)
+    for i, name_a in enumerate(names):
+        for name_b in names[i + 1:]:
+            common = sorted(set(objective_values[name_a]) & set(objective_values[name_b]))
+            if len(common) < 3:
+                continue
+            xs = [objective_values[name_a][t] for t in common]
+            ys = [objective_values[name_b][t] for t in common]
+            rho = spearman(xs, ys)
+            pairwise[f"{name_a}__vs__{name_b}"] = rho
+            # The old `risk_adjusted` sat at Spearman 0.992 against
+            # `expected_return` and was effectively a duplicate objective
+            # (docs/racr_shadow_run_diagnostic_2026-09-04.md §2) -- ~0.99 is
+            # the threshold past which two objectives stop carrying
+            # independent ranking information.
+            if abs(rho) > 0.99:
+                warnings.append(
+                    f"objective_duplicate_risk:{name_a}_vs_{name_b}_spearman_{rho:.4f}"
+                )
+    vs_ce_cagr: dict[str, float] = {}
+    for name, values in objective_values.items():
+        common = sorted(set(values) & set(ce_cagr_by_ticker))
+        if len(common) < 3:
+            continue
+        xs = [values[t] for t in common]
+        ys = [ce_cagr_by_ticker[t] for t in common]
+        vs_ce_cagr[name] = spearman(xs, ys)
+    return pairwise, vs_ce_cagr, warnings
+
+
+def _top20_overlap_vs_expected_return(
+    objective_ranks: dict[str, dict[int, int]],
+) -> dict[str, int]:
+    """Count of tickers in both an objective's top 20 by rank and
+    ``expected_return``'s top 20, for every other enabled objective."""
+    expected_return_ranks = objective_ranks.get("expected_return", {})
+    expected_top20 = {ticker for ticker, rank in expected_return_ranks.items() if rank <= 20}
+    if not expected_top20:
+        return {}
+    overlap: dict[str, int] = {}
+    for name, ranks in objective_ranks.items():
+        if name == "expected_return":
+            continue
+        top20 = {ticker for ticker, rank in ranks.items() if rank <= 20}
+        overlap[name] = len(top20 & expected_top20)
+    return overlap
+
+
+def _constant_explanation_terms(
+    objective_explanations: dict[str, list[dict]],
+) -> tuple[dict[str, list[str]], list[str]]:
+    """For each enabled objective's ``explanation``, the numeric-valued keys
+    that took exactly one distinct value across every scored ticker.
+
+    This is the exact diagnostic that would have caught
+    ``risk_adjusted_compounding``'s first real run automatically: every one
+    of its risk terms (the old ``tail_loss_10``, and ``model_confidence``
+    feeding ``model_uncertainty``) was a universe-wide constant
+    (docs/racr_shadow_run_diagnostic_2026-09-04.md). Values are rounded to
+    9 decimal places before comparing so float-representation noise between
+    independently-but-equally computed values does not manufacture false
+    "distinct" values; the rounding is intentionally tight enough that it
+    cannot launder a real (if small) cross-sectional difference into a
+    false "constant".
+
+    Flags every qualifying key, including fixed policy constants that are
+    constant *by design* (lambda coefficients, ``ce_cagr_failure_floor``,
+    the zeroed placeholder terms for unavailable statistics) --
+    distinguishing "expected constant" from "defect" is left to the run's
+    own docs/review, per this WP's instruction that a constant term "must
+    never again be found by hand": false positives on known constants are
+    an acceptable cost of never again missing a real one.
+    """
+    constant_terms: dict[str, list[str]] = {}
+    warnings: list[str] = []
+    for name, explanations in objective_explanations.items():
+        if len(explanations) < 2:
+            continue
+        numeric_keys: set[str] = set()
+        for explanation in explanations:
+            for key, value in explanation.items():
+                if _numeric(value) is not None:
+                    numeric_keys.add(key)
+        for key in sorted(numeric_keys):
+            distinct = {
+                round(_numeric(explanation[key]), 9)
+                for explanation in explanations
+                if key in explanation and _numeric(explanation[key]) is not None
+            }
+            if len(distinct) == 1:
+                constant_terms.setdefault(name, []).append(key)
+                warnings.append(
+                    f"objective_constant_term:{name}.{key}={next(iter(distinct))}"
+                )
+    return constant_terms, warnings
+
+
+def _distribution_field_diagnostics(
+    distribution_field_values: dict[str, set[float]],
+    distribution_field_counts: dict[str, int],
+) -> tuple[dict[str, int], list[str], list[str]]:
+    """Distinct-value counts for the key distribution fields, across every
+    ticker with an *available* distribution this run.
+
+    Mirrors ``_constant_explanation_terms`` but for the shared distribution
+    contract rather than any one objective's explanation -- this is what
+    would have caught ``model_confidence`` sitting at the single value 0.5
+    for the entire 2026-09-04 universe
+    (docs/racr_shadow_run_diagnostic_2026-09-04.md §3.2).
+    """
+    distinct_counts = {
+        field: len(values) for field, values in distribution_field_values.items()
+    }
+    constant_fields = [
+        field
+        for field, values in distribution_field_values.items()
+        if distribution_field_counts.get(field, 0) >= 2 and len(values) == 1
+    ]
+    warnings = [
+        f"distribution_constant_field:{field}={next(iter(distribution_field_values[field]))}"
+        for field in constant_fields
+    ]
+    return distinct_counts, constant_fields, warnings
+
+
 def run_v5_shadow(
     as_of: datetime.date | None = None,
     *,
@@ -430,6 +608,16 @@ def run_v5_shadow(
             applied_counts: dict[str, int] = {}
             ablation_count = 0
             total_signal_slots = 0
+            # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md B2-1):
+            # accumulated across the per-ticker loop below, consumed after
+            # ranking is assigned to build ``objective_diagnostics``.
+            ce_cagr_by_ticker: dict[int, float] = {}
+            distribution_field_values: dict[str, set[float]] = {
+                field: set() for field in _DIAGNOSTIC_DISTRIBUTION_FIELDS
+            }
+            distribution_field_counts: dict[str, int] = {
+                field: 0 for field in _DIAGNOSTIC_DISTRIBUTION_FIELDS
+            }
             for item in items:
                 result = None
                 if item.moic_inputs is not None:
@@ -519,6 +707,20 @@ def run_v5_shadow(
                             full_distribution=distribution,
                         )
                         ablation_count += 1
+                # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md B2-1):
+                # accumulate the cross-sectional inputs `evaluate_objectives`
+                # cannot see on its own (it only ever gets one ticker's
+                # distribution at a time) -- ``ce_cagr`` per ticker for the
+                # "vs ce_cagr" Spearman, and the key distribution fields'
+                # distinct-value sets for constant-term detection.
+                if distribution.get("status") == "available":
+                    if distribution.get("ce_cagr") is not None:
+                        ce_cagr_by_ticker[item.ticker_id] = distribution["ce_cagr"]
+                    for field in _DIAGNOSTIC_DISTRIBUTION_FIELDS:
+                        numeric_value = _numeric(distribution.get(field))
+                        if numeric_value is not None:
+                            distribution_field_values[field].add(round(numeric_value, 9))
+                            distribution_field_counts[field] += 1
                 future_state = build_future_state(
                     result,
                     item.moic_inputs,
@@ -577,6 +779,55 @@ def run_v5_shadow(
                 )
                 for rank, row in enumerate(rankable, start=1):
                     row.rank = rank
+
+            # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md B2-1): computed
+            # once, after ranking, from the plain accumulators built during
+            # the loop above -- never touches the DB itself (pure functions).
+            objective_values: dict[str, dict[int, float]] = {
+                name: {
+                    row.ticker_id: float(row.score_value)
+                    for row in rows if row.score_value is not None
+                }
+                for name, rows in objective_rows.items()
+            }
+            objective_ranks: dict[str, dict[int, int]] = {
+                name: {
+                    row.ticker_id: row.rank
+                    for row in rows if row.rank is not None
+                }
+                for name, rows in objective_rows.items()
+            }
+            objective_explanations: dict[str, list[dict]] = {
+                name: [
+                    row.explanation for row in rows
+                    if row.explanation.get("status") == "available"
+                ]
+                for name, rows in objective_rows.items()
+            }
+            pairwise_spearman, spearman_vs_ce_cagr, spearman_warnings = (
+                _pairwise_objective_spearman(objective_values, ce_cagr_by_ticker)
+            )
+            top20_overlap = _top20_overlap_vs_expected_return(objective_ranks)
+            constant_explanation_terms, constant_term_warnings = (
+                _constant_explanation_terms(objective_explanations)
+            )
+            distribution_distinct_counts, constant_distribution_fields, distribution_warnings = (
+                _distribution_field_diagnostics(distribution_field_values, distribution_field_counts)
+            )
+            objective_diagnostics = {
+                "pairwise_spearman": pairwise_spearman,
+                "spearman_vs_ce_cagr": spearman_vs_ce_cagr,
+                "top20_overlap_vs_expected_return": top20_overlap,
+                "constant_explanation_terms": constant_explanation_terms,
+                "distribution_distinct_value_counts": distribution_distinct_counts,
+                "distribution_constant_fields": constant_distribution_fields,
+            }
+            diagnostic_warnings = [
+                *spearman_warnings, *constant_term_warnings, *distribution_warnings,
+            ]
+            if diagnostic_warnings:
+                run.warnings = [*(run.warnings or []), *diagnostic_warnings]
+
             run.population_count = len(items)
             run.status = "succeeded"
             run.finished_at = datetime.datetime.now(datetime.timezone.utc)
@@ -610,6 +861,7 @@ def run_v5_shadow(
                 "ablation_results": ablation_count,
                 "ablation_not_computed": total_signal_slots - ablation_count,
                 "default_objective": objectives_config.default_objective,
+                "objective_diagnostics": objective_diagnostics,
             }
         return {
             "run_id": str(run_id),

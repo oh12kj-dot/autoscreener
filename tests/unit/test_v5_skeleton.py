@@ -194,9 +194,11 @@ def test_v5_shadow_persists_separately_without_touching_v4(monkeypatch):
             assert run.population_count == 1
             score = session.query(ModelScore).filter_by(run_id=run_id).one()
             assert score.distribution["status"] == "available"
-            # WP-B (docs/racr_wp_b_output_contract_2026-09-04.md): distribution
-            # contract bumped to v5.racr1.
-            assert score.distribution["contract_version"] == "v5.racr1"
+            # WP-B (docs/racr_wp_b_output_contract_2026-09-04.md) bumped the
+            # distribution contract to v5.racr1; WP-B2
+            # (docs/racr_wp_b2_risk_terms_2026-09-04.md) bumped it again to
+            # v5.racr2.
+            assert score.distribution["contract_version"] == "v5.racr2"
             assert score.states["state_updates_applied"] == []
             assert float(score.confidence) == pytest.approx(0.5)
             assert session.query(Score).count() == v4_before

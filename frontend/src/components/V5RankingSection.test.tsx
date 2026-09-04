@@ -52,7 +52,7 @@ vi.mock("../api/client", () => {
         confidence: 0.7,
         warnings: [],
         distribution: {
-          contract_version: "v5.racr1",
+          contract_version: "v5.racr2",
           status: "available",
           distribution_family: "failure_atom_plus_scenario_lognormal_mixture",
           source_model_version: "v4_structural_seed",
@@ -87,6 +87,7 @@ vi.mock("../api/client", () => {
           p_cagr_above_20: 0.1,
           p_cagr_above_25: 0.05,
           expected_shortfall_10pct_log: -0.2,
+          expected_shortfall_10pct_log_given_survival: -0.15,
           p_terminal_wealth_below_0_5: 0.3,
           // The field under test: always null today. Must never render as 0%.
           p_permanent_loss: null,

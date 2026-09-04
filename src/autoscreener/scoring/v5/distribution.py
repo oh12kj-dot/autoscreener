@@ -151,6 +151,39 @@ def _expected_log_moic(
     return (1.0 - survival) * math.log(floor_moic) + survival * continuous
 
 
+def _expected_log_moic_below_quantile_given_survival(
+    q: float, scenarios: tuple[ReturnScenario, ...]
+) -> float:
+    """``E[ln W | survive, W <= Quantile_q(W | survive)]`` -- WP-B2 fix
+    (docs/racr_wp_b2_risk_terms_2026-09-04.md; diagnostic
+    docs/racr_shadow_run_diagnostic_2026-09-04.md §3.1).
+
+    The WP-B ``expected_shortfall_10pct_log`` measures the worst *decile of
+    the unconditional distribution*, which includes the failure atom. Every
+    real ticker's failure mass (``1 - survival``) turned out to exceed 10%
+    (measured: 1,157/1,157 on the 2026-09-04 shadow run), so that 10%
+    quantile always landed *inside* the failure atom and the conditional
+    expectation collapsed to the identical constant ``ln(floor_moic)/H`` for
+    every ticker -- a constant carries no ranking information, reproducing
+    exactly the defect Phase 10 already fixed once for the MOIC-space
+    measure (see ``_conditional_expected_moic_below``'s docstring).
+
+    This measures the tail conditional on *surviving* instead: exclude the
+    failure atom entirely, and take the worst decile of the continuous
+    lognormal-mixture part on its own. Conditioning on survival is
+    mathematically simple here because the mixture already sums to
+    probability 1 -- ``P(W in dw | survive) = sum_i weight_i *
+    lognormal_i(w) dw``, i.e. exactly the same mixture with no atom and no
+    survival-scaling factor. That is exactly what calling
+    ``_expected_log_moic_below_quantile`` with ``survival=1.0`` computes:
+    the ``failure_mass >= q`` branch never triggers (failure_mass is 0),
+    so the floor is never invoked either -- there is no failure atom left
+    to floor once we have already conditioned it away. ``floor_moic`` is
+    therefore irrelevant here and a dummy value is passed.
+    """
+    return _expected_log_moic_below_quantile(q, scenarios, 1.0, floor_moic=1.0)
+
+
 def _expected_log_moic_below_quantile(
     q: float,
     scenarios: tuple[ReturnScenario, ...],
@@ -207,6 +240,9 @@ def unavailable_distribution(*, target_moic: float, confidence: float) -> dict:
         "ce_cagr": None, "ce_cagr_failure_floor": None,
         "p_cagr_above_15": None, "p_cagr_above_20": None, "p_cagr_above_25": None,
         "expected_shortfall_10pct_log": None,
+        # WP-B2 addition (docs/racr_wp_b2_risk_terms_2026-09-04.md):
+        # additive-only, same as every field above.
+        "expected_shortfall_10pct_log_given_survival": None,
         "p_terminal_wealth_below_0_5": None,
         # Permanent loss / drawdown: unimplemented regardless of whether
         # this ticker's base distribution is available, so the reason
@@ -222,7 +258,7 @@ def unavailable_distribution(*, target_moic: float, confidence: float) -> dict:
         "recovery_time_median": None, "recovery_time_median_unavailable_reason": None,
     }
     return {
-        "contract_version": "v5.racr1", "status": "unavailable",
+        "contract_version": "v5.racr2", "status": "unavailable",
         "distribution_family": None,
         "source_model_version": "v4_structural_seed",
         "target_moic": target_moic, "model_confidence": confidence,
@@ -291,6 +327,24 @@ def scenario_distribution(
     )
     expected_shortfall_10pct_log = expected_log_moic_below_p10 / horizon_years
 
+    # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md; diagnostic
+    # docs/racr_shadow_run_diagnostic_2026-09-04.md §3.1): the measure above
+    # (``expected_shortfall_10pct_log``) is kept byte-for-byte unchanged for
+    # backward compatibility, but it is the exact defect this WP fixes --
+    # every real ticker's failure mass exceeds 10%, so that field is the
+    # identical constant ``ln(floor)/H`` for the whole universe and carries
+    # no ranking information. This new field measures the worst decile
+    # *conditional on survival* -- the failure atom excluded entirely, not
+    # floored -- so it varies with each ticker's own continuous-mixture
+    # dispersion (sigma) instead of being dominated by the atom. See
+    # ``_expected_log_moic_below_quantile_given_survival``'s docstring.
+    expected_log_moic_below_p10_given_survival = (
+        _expected_log_moic_below_quantile_given_survival(0.10, scenarios)
+    )
+    expected_shortfall_10pct_log_given_survival = (
+        expected_log_moic_below_p10_given_survival / horizon_years
+    )
+
     # P(CAGR > r) == P(W_H > (1+r)^H) -- threshold computed from the actual
     # horizon every time (audit §5.2/§6.1: "thresholdはhorizonから計算し、
     # 定数を埋め込まない"), never a hardcoded MOIC constant.
@@ -310,7 +364,7 @@ def scenario_distribution(
     _path_sim_reason = "path_simulation_not_implemented"
 
     return {
-        "contract_version": "v5.racr1", "status": "available",
+        "contract_version": "v5.racr2", "status": "available",
         "distribution_family": "failure_atom_plus_scenario_lognormal_mixture",
         "source_model_version": "v4_structural_seed",
         "target_moic": target_moic,
@@ -342,6 +396,9 @@ def scenario_distribution(
         "p_cagr_above_20": p_cagr_above[0.20],
         "p_cagr_above_25": p_cagr_above[0.25],
         "expected_shortfall_10pct_log": expected_shortfall_10pct_log,
+        "expected_shortfall_10pct_log_given_survival": (
+            expected_shortfall_10pct_log_given_survival
+        ),
         # Rename of p_moic_below_0_5 (audit §5.3/§6.2): "large-principal-
         # impairment probability", explicitly *not* permanent loss. The old
         # key is kept unchanged above for backward compatibility.

@@ -943,8 +943,10 @@ export interface ModelV5Distribution {
   reliability_left_tail_extra: number | null;
   scenarios: ModelV5Scenario[];
   // WP-C/WP-B (docs/racr_wp_c_api_ui_2026-09-04.md; docs/racr_wp_b_output
-  // _contract_2026-09-04.md): RACR output contract (contract_version
-  // "v5.racr1"). Every field above is unchanged.
+  // _contract_2026-09-04.md): RACR output contract, bumped again by WP-B2
+  // (docs/racr_wp_b2_risk_terms_2026-09-04.md) to contract_version
+  // "v5.racr2". Every field above is unchanged; RACR values are not
+  // comparable across contract versions.
   ce_cagr: number | null;
   /** MOIC floor applied to the failure atom before taking logs (currently
    * always 0.01 when computed) -- see ce_cagr's tooltip copy. Recorded so
@@ -954,6 +956,13 @@ export interface ModelV5Distribution {
   p_cagr_above_20: number | null;
   p_cagr_above_25: number | null;
   expected_shortfall_10pct_log: number | null;
+  /** WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md, contract_version
+   * "v5.racr2"): worst-decile log-CAGR conditional on survival -- the
+   * failure atom excluded entirely rather than floored, so this does not
+   * collapse to a universe-wide constant the way
+   * `expected_shortfall_10pct_log` does once a ticker's failure mass
+   * exceeds 10% (kept above, unchanged, for backward compatibility). */
+  expected_shortfall_10pct_log_given_survival: number | null;
   /** Rename of p_moic_below_0_5: "large principal impairment probability",
    * explicitly *not* permanent loss (see p_permanent_loss below). */
   p_terminal_wealth_below_0_5: number | null;

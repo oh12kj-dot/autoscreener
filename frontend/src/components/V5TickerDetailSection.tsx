@@ -3,6 +3,7 @@ import { fetchCandidates, fetchV5Objectives, fetchV5ScoreDetail } from "../api/c
 import type { ModelV5AblationEntry, ModelV5ObjectivesResponse, ModelV5ScoreDetail } from "../api/types";
 import { V5WarningBadges } from "./V5WarningBadges";
 import { V5UnavailableMetric } from "./V5UnavailableMetric";
+import { V5FailureFloorNote } from "./V5FailureFloorNote";
 import {
   v5AblationReasonLabel,
   v5DistributionStatusLabel,
@@ -234,7 +235,10 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic, o
       <table className="v5-compare-table v5-distribution-table">
         <tbody>
           <tr>
-            <td>{v5MetricLabel("ce_cagr")}</td>
+            <td>
+              {v5MetricLabel("ce_cagr")}
+              <V5FailureFloorNote floor={dist.ce_cagr_failure_floor} />
+            </td>
             <td>{v5FormatRate(dist.ce_cagr)}</td>
           </tr>
           <tr>
@@ -313,15 +317,42 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic, o
             </thead>
             <tbody>
               <tr>
-                <td>{v5RacrTermLabel("ce_cagr")}</td>
+                <td>
+                  {v5RacrTermLabel("ce_cagr")}
+                  <V5FailureFloorNote floor={racrExplanation.ce_cagr_failure_floor as number | null} />
+                </td>
                 <td>{v5FormatRate(racrExplanation.ce_cagr as number | null)}</td>
                 <td>—</td>
               </tr>
               <tr>
-                <td>{v5RacrTermLabel("tail_loss_10")}</td>
-                <td>{v5FormatRate(racrExplanation.tail_loss_10 as number | null)}</td>
+                {/* WP-B2(docs/racr_wp_b2_risk_terms_2026-09-04.md): tail_loss_10
+                    は生存条件付きの新しい項 cond_tail_loss_10 に置き換わった
+                    (旧項は生存確率の低い銘柄で全銘柄同一の定数に潰れる欠陥が
+                    あった)。v5.racr2より前に計算されたrunのexplanationは
+                    まだ旧キーしか持たないため、フォールバックしておく。 */}
+                <td>{v5RacrTermLabel("cond_tail_loss_10")}</td>
+                <td>
+                  {v5FormatRate(
+                    (racrExplanation.cond_tail_loss_10 ?? racrExplanation.tail_loss_10) as
+                      number | null
+                  )}
+                </td>
                 <td>{(racrExplanation.tail_lambda as number)?.toFixed(2)}</td>
               </tr>
+              {racrExplanation.p_failure != null && (
+                <tr>
+                  <td>{v5RacrTermLabel("failure_loss")}</td>
+                  <td>
+                    {v5FormatRate(racrExplanation.failure_loss as number | null)}
+                    <span className="v5-caveat">
+                      {" "}
+                      (P(失敗)={v5FormatProbability(racrExplanation.p_failure as number | null)}
+                      ・回収率仮定={((racrExplanation.assumed_recovery as number) * 100).toFixed(0)}%)
+                    </span>
+                  </td>
+                  <td>{(racrExplanation.failure_lambda as number)?.toFixed(2)}</td>
+                </tr>
+              )}
               <tr>
                 <td>{v5RacrTermLabel("dd_excess")}</td>
                 <td>{v5FormatRate(racrExplanation.dd_excess as number | null)}</td>
@@ -354,6 +385,14 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic, o
               </>
             )}
           </p>
+          {racrExplanation.p_failure != null && (
+            <p className="v5-caveat">
+              <strong>「{v5RacrTermLabel("failure_loss")}」は永久損失(上の行)とは別物です。</strong>{" "}
+              こちらは現行モデル自身の破綻atom(倒産・非回収的上場廃止)の発生確率に、上の
+              保守的な回収率仮定を掛けただけの値で、原因別competing-riskモデルによる推定
+              (永久損失)ではありません。
+            </p>
+          )}
         </>
       )}
 

@@ -2144,6 +2144,17 @@ td.negative {
   white-space: nowrap;
 }
 
+/* WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md B2-3): the
+   ce_cagr_failure_floor disclosure note. Reuses .v5-unavailable-metric's
+   affordance (dotted underline + help cursor) for a consistent tone, but
+   this is a *disclosed assumption*, not a missing value -- kept slightly
+   smaller and inline so it reads as an annotation on the number next to
+   it, not a replacement for it. */
+.v5-failure-floor-note {
+  margin-left: 0.35rem;
+  font-size: 0.78rem;
+}
+
 .v5-objective-not-computed {
   padding: 1rem;
   border: 1px dashed var(--border);
