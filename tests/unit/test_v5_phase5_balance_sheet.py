@@ -113,8 +113,15 @@ def test_missing_liquidity_facility_leaves_debt_and_liquidity_not_collected():
         # Real, existing ticker id required: DebtInstrument.ticker_id is a
         # foreign key into tickers, so an arbitrary literal id would either
         # violate the FK or (worse) coincidentally collide with unrelated
-        # real data. Rolled back below -- no permanent write.
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        # real data. WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):
+        # the isolated test DB starts with zero tickers, so create one inside
+        # this same transaction (visible to the FK check via flush ordering)
+        # instead of assuming one already exists. Rolled back below -- no
+        # permanent write.
+        ticker = Ticker(symbol="ZZB1", market="US")
+        session.add(ticker)
+        session.flush()
+        ticker_id = ticker.id
         item = V5PitInput(
             ticker_id=ticker_id, symbol="ZZB1", as_of=as_of, moic_inputs=None,
             raw_snapshot_id=None, raw_available_from=None, price_as_of=None,
@@ -139,7 +146,14 @@ def test_low_coverage_runtime_gate_disables_feature_even_with_a_row():
     config = load_model_v5_config()
     as_of = datetime.date(2024, 6, 30)
     with session_scope() as session:
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        # WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md): same
+        # reasoning as test_missing_liquidity_facility_leaves_debt_and_liquidity_not_collected
+        # above -- create the ticker in this transaction rather than assume
+        # one already exists; rolled back below, no permanent write.
+        ticker = Ticker(symbol="ZZB7", market="US")
+        session.add(ticker)
+        session.flush()
+        ticker_id = ticker.id
         has_data = V5PitInput(
             ticker_id=ticker_id, symbol="ZZB7", as_of=as_of, moic_inputs=None,
             raw_snapshot_id=None, raw_available_from=None, price_as_of=None,
@@ -263,10 +277,21 @@ def test_default_capital_config_reproduces_phase2_phase4_distribution_exactly():
 # ---------------------------------------------------------------------------
 
 def test_shadow_run_persists_capital_ablation_without_touching_v4(monkeypatch):
+    # WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):以前は
+    # 「DBに既にTickerが1件ある」前提で `.first()` を読んでいたが、隔離済み
+    # テストDBは0件から始まるため `None` を返し `.id` で落ちていた。V5 shadow
+    # runの永続化を確認するだけなので、対象Tickerは自前で1件作れば十分。
     as_of = datetime.date(2024, 6, 30)
+    symbol = "ZZV5CAPSHADOW"
     with session_scope() as session:
-        ticker = session.query(Ticker).order_by(Ticker.id).first()
-        ticker_id, symbol = ticker.id, ticker.symbol
+        old = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+        if old is not None:
+            session.delete(old)
+            session.flush()
+        ticker = Ticker(symbol=symbol, market="US")
+        session.add(ticker)
+        session.flush()
+        ticker_id = ticker.id
         v4_before = session.query(Score).count()
     item = V5PitInput(
         ticker_id=ticker_id, symbol=symbol, as_of=as_of,
@@ -326,3 +351,4 @@ def test_shadow_run_persists_capital_ablation_without_touching_v4(monkeypatch):
     finally:
         with session_scope() as session:
             session.query(ModelRun).filter_by(id=run_id).delete()
+            session.query(Ticker).filter_by(id=ticker_id).delete()

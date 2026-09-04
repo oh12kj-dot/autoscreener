@@ -82,22 +82,38 @@ def _cleanup_freshness() -> None:
             session.delete(ticker)
 
 
-@pytest.fixture
-def _latest_price_date() -> datetime.date:
-    with session_scope() as session:
-        from sqlalchemy import func
+# WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):以前は「DBに
+# 既存の価格行がある」前提で `func.max(PriceSnapshot.trade_date)` を読んでいた
+# が、隔離済みテストDB(`autoscreener_test`)は空で始まるため `None` を返し
+# `None + timedelta(...)` で `TypeError` になっていた。自前で1件だけ
+# PriceSnapshot を作り、その日付を基準にする——`_check_price_freshness` が
+# symbolで絞り込まない全体最大値を見る点は `_FRESH_SCORE_DATE` のコメントと
+# 同じなので、他テストの日付(2099-01-01 / 2099-04-01)より後の日付を使い
+# 「自分の行が確実に全体最大になる」ことを保証する。
+_STALE_SYMBOL = "ZZFRESHSTALE"
+_STALE_PRICE_DATE = datetime.date(2100, 1, 1)
 
-        return session.query(func.max(PriceSnapshot.trade_date)).scalar()
 
-
-def test_freshness_guard_flags_stale_price_data(_latest_price_date):
+def test_freshness_guard_flags_stale_price_data():
     """`score_date` が最新価格から `max_price_staleness_days` を超えて離れていれば中止する。"""
     scoring_config = load_scoring_config()
-    far_future = _latest_price_date + datetime.timedelta(days=60)
     with session_scope() as session:
-        reason = _check_price_freshness(session, far_future, scoring_config)
-    assert reason is not None
-    assert reason.startswith("stale_price_data")
+        ticker = Ticker(symbol=_STALE_SYMBOL, market="US")
+        session.add(ticker)
+        session.flush()
+        session.add(PriceSnapshot(ticker_id=ticker.id, trade_date=_STALE_PRICE_DATE, close=10.0))
+    try:
+        far_future = _STALE_PRICE_DATE + datetime.timedelta(days=60)
+        with session_scope() as session:
+            reason = _check_price_freshness(session, far_future, scoring_config)
+        assert reason is not None
+        assert reason.startswith("stale_price_data")
+    finally:
+        with session_scope() as session:
+            ticker = session.query(Ticker).filter_by(symbol=_STALE_SYMBOL).one_or_none()
+            if ticker is not None:
+                session.query(PriceSnapshot).filter_by(ticker_id=ticker.id).delete()
+                session.delete(ticker)
 
 
 def test_freshness_guard_flags_low_same_day_coverage():

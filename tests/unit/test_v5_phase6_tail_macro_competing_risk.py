@@ -69,6 +69,18 @@ def _seed_result(survival: float = 0.94):
     )
 
 
+def _seed_ticker(session, symbol: str) -> int:
+    """WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):これらの
+    テストは自分では作らない「DBに既に1件Tickerがある」前提だったが、隔離
+    済みテストDBは0件から始まる。FK対象のTickerを同一トランザクション内で
+    作り(呼び出し側が最後に `session.rollback()` するため恒久書き込みには
+    ならない)、そのidを返す。"""
+    ticker = Ticker(symbol=symbol, market="US")
+    session.add(ticker)
+    session.flush()
+    return ticker.id
+
+
 # ---------------------------------------------------------------------------
 # M&A competing risk: deliberately not implemented.
 # ---------------------------------------------------------------------------
@@ -93,7 +105,7 @@ def test_customer_concentration_caps_total_disclosure_at_one():
     config = load_model_v5_config()
     as_of = datetime.date(2024, 6, 30)
     with session_scope() as session:
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        ticker_id = _seed_ticker(session, "ZZT1")
         for i, pct in enumerate((0.60, 0.55)):  # sums to 1.15 -- must clip
             session.add(CustomerConcentration(
                 ticker_id=ticker_id, period_end=datetime.date(2023, 12, 31),
@@ -128,7 +140,7 @@ def test_litigation_no_recent_events_is_no_change_not_missing():
     config = load_model_v5_config()
     as_of = datetime.date(2024, 6, 30)
     with session_scope() as session:
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        ticker_id = _seed_ticker(session, "ZZT2")
         session.add(LitigationEvent(
             ticker_id=ticker_id, event_date=datetime.date(2020, 1, 1), kind="securities_class_action",
             title="Old case", collected_on=as_of,
@@ -150,7 +162,7 @@ def test_litigation_recent_event_count_is_bounded_severity():
     config = load_model_v5_config()
     as_of = datetime.date(2024, 6, 30)
     with session_scope() as session:
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        ticker_id = _seed_ticker(session, "ZZT3")
         for i in range(5):  # well above severity_count_cap=3 -- must clip to 1.0
             session.add(LitigationEvent(
                 ticker_id=ticker_id, event_date=datetime.date(2024, i + 1, 1),
@@ -172,7 +184,7 @@ def test_litigation_ignores_events_filed_after_as_of():
     config = load_model_v5_config()
     as_of = datetime.date(2024, 6, 30)
     with session_scope() as session:
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        ticker_id = _seed_ticker(session, "ZZT4")
         session.add(LitigationEvent(
             ticker_id=ticker_id, event_date=datetime.date(2024, 3, 1), kind="short_report",
             title="Visible case", collected_on=as_of,
@@ -202,7 +214,7 @@ def test_macro_regime_rejects_fred_vintage_unsupported_as_not_applicable():
     config = load_model_v5_config()
     as_of = datetime.date(2024, 6, 30)
     with session_scope() as session:
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        ticker_id = _seed_ticker(session, "ZZT5")
         session.add(MacroExposureSnapshot(
             ticker_id=ticker_id, observed_at=datetime.datetime(2024, 6, 1, tzinfo=datetime.timezone.utc),
             observation_end=datetime.date(2024, 5, 31), factor="DGS10", beta=1.2, downside_beta=1.8,
@@ -226,7 +238,7 @@ def test_macro_regime_negative_downside_beta_gets_no_bonus():
     config = load_model_v5_config()
     as_of = datetime.date(2024, 6, 30)
     with session_scope() as session:
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        ticker_id = _seed_ticker(session, "ZZT6")
         session.add(MacroExposureSnapshot(
             ticker_id=ticker_id, observed_at=datetime.datetime(2024, 6, 1, tzinfo=datetime.timezone.utc),
             observation_end=datetime.date(2024, 5, 31), factor="DGS10", beta=-0.5, downside_beta=-0.8,
@@ -281,7 +293,7 @@ def test_future_dilution_capacity_signal_uses_market_cap_and_options_ratio():
     config = load_model_v5_config()
     as_of = datetime.date(2024, 6, 30)
     with session_scope() as session:
-        ticker_id = session.query(Ticker.id).order_by(Ticker.id).first()[0]
+        ticker_id = _seed_ticker(session, "ZZT7")
         session.add(DilutionCapacity(
             ticker_id=ticker_id, as_of_date=as_of, collected_on=as_of,
             atm_remaining_usd=50_000_000.0, shelf_remaining_usd=None,
@@ -386,10 +398,21 @@ def test_default_tail_and_dilution_config_reproduces_prior_phase_distribution_ex
 # ---------------------------------------------------------------------------
 
 def test_shadow_run_persists_tail_ablation_without_touching_v4(monkeypatch):
+    # WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):以前は
+    # 「DBに既にTickerが1件ある」前提で `.first()` を読んでいたが、隔離済み
+    # テストDBは0件から始まるため `None` を返し `.id` で落ちていた。V5 shadow
+    # runの永続化を確認するだけなので、対象Tickerは自前で1件作れば十分。
     as_of = datetime.date(2024, 6, 30)
+    symbol = "ZZV5TAILSHADOW"
     with session_scope() as session:
-        ticker = session.query(Ticker).order_by(Ticker.id).first()
-        ticker_id, symbol = ticker.id, ticker.symbol
+        old = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+        if old is not None:
+            session.delete(old)
+            session.flush()
+        ticker = Ticker(symbol=symbol, market="US")
+        session.add(ticker)
+        session.flush()
+        ticker_id = ticker.id
         v4_before = session.query(Score).count()
     item = V5PitInput(
         ticker_id=ticker_id, symbol=symbol, as_of=as_of,
@@ -442,3 +465,4 @@ def test_shadow_run_persists_tail_ablation_without_touching_v4(monkeypatch):
     finally:
         with session_scope() as session:
             session.query(ModelRun).filter_by(id=run_id).delete()
+            session.query(Ticker).filter_by(id=ticker_id).delete()

@@ -18,6 +18,7 @@ from autoscreener.db.models import (
     ModelRun,
     ModelScore,
     ModelV5ForwardReturn,
+    PriceSnapshot,
     Score,
     Ticker,
 )
@@ -122,9 +123,20 @@ def test_compare_v4_v5_same_day_never_reads_or_implies_realized_return():
 
 
 def test_compare_v4_v5_same_day_with_real_run_and_v4_scores():
+    # WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):以前は
+    # 「DBに既にTickerが1件ある」前提で `.first()` を読んでいたが、隔離済み
+    # テストDBは0件から始まるため `None` を返し `.id` で落ちていた。
+    # ModelScore/Scoreの対象は何であれ構わないので自前で1件作る。
     as_of = datetime.date(2024, 5, 15)
+    symbol = "ZZV5CMP1"
     with session_scope() as session:
-        ticker = session.query(Ticker).order_by(Ticker.id).first()
+        old = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+        if old is not None:
+            session.delete(old)
+            session.flush()
+        ticker = Ticker(symbol=symbol, market="US")
+        session.add(ticker)
+        session.flush()
         ticker_id = ticker.id
         run_id = uuid.uuid4()
         session.add(ModelRun(
@@ -169,6 +181,7 @@ def test_compare_v4_v5_same_day_with_real_run_and_v4_scores():
             session.query(Score).filter_by(
                 ticker_id=ticker_id, score_date=as_of, scoring_version="test-v7"
             ).delete()
+            session.query(Ticker).filter_by(id=ticker_id).delete()
 
 
 # ---------------------------------------------------------------------------
@@ -215,10 +228,33 @@ def test_forward_validation_v5_never_touches_v4_tables():
 
 
 def test_forward_validation_v5_settles_a_matured_synthetic_run():
+    # WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):以前は
+    # 「DBに既にTickerが1件ある」前提で `.first()` を読んでいたが、隔離済み
+    # テストDBは0件から始まるため `None` を返し `.id` で落ちていた。加えて
+    # 実DBに何らかのTickerが「たまたま」あっても、それに紐づく実PriceSnapshot
+    # の有無まではテストが制御していなかったため、`computed` が実際に1以上に
+    # なる(1Mホライズンが本当に決済される)ことまでは保証されていなかった
+    # ——`counts["missing_price"]` 側に流れても件数の総和アサーションだけは
+    # 通ってしまう。ここでは entry/exit 両方の PriceSnapshot を自前で用意し、
+    # 1Mホライズンが実際に `computed` として決済されることまで検証する。
+    ticker_symbol = "ZZV5FWD1"
     as_of = datetime.date(2020, 1, 2)  # old enough to have matured for 1M
+    entry_date = datetime.date(2020, 1, 3)  # score_date の翌営業日(_MAX_ENTRY_LOOKAHEAD_DAYS以内)
+    exit_target_date = as_of + datetime.timedelta(days=30)  # 1M horizon
     with session_scope() as session:
-        ticker = session.query(Ticker).order_by(Ticker.id).first()
+        old = session.query(Ticker).filter_by(symbol=ticker_symbol).one_or_none()
+        if old is not None:
+            session.query(PriceSnapshot).filter_by(ticker_id=old.id).delete()
+            session.delete(old)
+            session.flush()
+        ticker = Ticker(symbol=ticker_symbol, market="US")
+        session.add(ticker)
+        session.flush()
         ticker_id = ticker.id
+        session.add_all([
+            PriceSnapshot(ticker_id=ticker_id, trade_date=entry_date, open=10.0, close=10.0),
+            PriceSnapshot(ticker_id=ticker_id, trade_date=exit_target_date, open=12.0, close=12.0),
+        ])
         run_id = uuid.uuid4()
         session.add(ModelRun(
             id=run_id, model_version="v5", config_hash="testhash2", as_of=as_of,
@@ -235,14 +271,19 @@ def test_forward_validation_v5_settles_a_matured_synthetic_run():
         ))
     try:
         counts = run_forward_validation_v5(datetime.date(2020, 3, 1))  # ~2 months later -> 1M matured
-        assert counts["computed"] + counts["missing_price"] + counts["not_matured"] >= 1
+        assert counts["computed"] >= 1
         with session_scope() as session:
             rows = session.query(ModelV5ForwardReturn).filter_by(run_id=run_id).all()
+            assert rows
             for row in rows:
                 assert row.horizon in {"1M", "3M", "6M", "1Y", "3Y", "5Y", "7Y"}
                 assert row.base_date == as_of
+            settled = next(row for row in rows if row.horizon == "1M")
+            assert float(settled.realized_return) == pytest.approx(0.2)  # 12.0 / 10.0 - 1
     finally:
         with session_scope() as session:
             session.query(ModelV5ForwardReturn).filter_by(run_id=run_id).delete()
             session.query(ModelScore).filter_by(run_id=run_id).delete()
             session.query(ModelRun).filter_by(id=run_id).delete()
+            session.query(PriceSnapshot).filter_by(ticker_id=ticker_id).delete()
+            session.query(Ticker).filter_by(id=ticker_id).delete()

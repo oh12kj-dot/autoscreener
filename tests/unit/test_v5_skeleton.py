@@ -151,11 +151,22 @@ def test_v5_pit_builder_never_reads_future_snapshot_or_price():
 
 
 def test_v5_shadow_persists_separately_without_touching_v4(monkeypatch):
+    # WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):以前は
+    # 「DBに既にTickerが1件ある」前提で `.first()` を読んでいたが、隔離済み
+    # テストDBは0件から始まるため `None` を返し `.id` で落ちていた。
+    # このテストの実体はV5 shadow runの永続化であり、対象Tickerがどれかは
+    # 無関係なので自前で1件作る(`test_v5_pit_builder_never_reads_future_snapshot_or_price`
+    # と同じ後始末パターン)。
+    symbol = "ZZV5SHADOW"
     with session_scope() as session:
-        ticker = session.query(Ticker).order_by(Ticker.id).first()
-        assert ticker is not None
+        old = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+        if old is not None:
+            session.delete(old)
+            session.flush()
+        ticker = Ticker(symbol=symbol, market="US")
+        session.add(ticker)
+        session.flush()
         ticker_id = ticker.id
-        symbol = ticker.symbol
         v4_before = session.query(Score).count()
 
     item = V5PitInput(
@@ -192,3 +203,4 @@ def test_v5_shadow_persists_separately_without_touching_v4(monkeypatch):
     finally:
         with session_scope() as session:
             session.query(ModelRun).filter_by(id=run_id).delete()
+            session.query(Ticker).filter_by(id=ticker_id).delete()

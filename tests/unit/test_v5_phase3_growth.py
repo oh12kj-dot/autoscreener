@@ -230,10 +230,21 @@ def test_consensus_builder_is_point_in_time_and_uses_same_period_revision():
 
 
 def test_shadow_run_persists_feature_ablation_without_touching_v4(monkeypatch):
+    # WP-A2(docs/racr_wp_a2_test_fixture_repair_2026-09-04.md):以前は
+    # 「DBに既にTickerが1件ある」前提で `.first()` を読んでいたが、隔離済み
+    # テストDBは0件から始まるため `None` を返し `.id` で落ちていた。V5 shadow
+    # runの永続化を確認するだけなので、対象Tickerは自前で1件作れば十分。
     as_of = datetime.date(2024, 6, 30)
+    symbol = "ZZV5GROWSHADOW"
     with session_scope() as session:
-        ticker = session.query(Ticker).order_by(Ticker.id).first()
-        ticker_id, symbol = ticker.id, ticker.symbol
+        old = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+        if old is not None:
+            session.delete(old)
+            session.flush()
+        ticker = Ticker(symbol=symbol, market="US")
+        session.add(ticker)
+        session.flush()
+        ticker_id = ticker.id
         v4_before = session.query(Score).count()
     item = V5PitInput(
         ticker_id=ticker_id, symbol=symbol, as_of=as_of,
@@ -282,3 +293,4 @@ def test_shadow_run_persists_feature_ablation_without_touching_v4(monkeypatch):
     finally:
         with session_scope() as session:
             session.query(ModelRun).filter_by(id=run_id).delete()
+            session.query(Ticker).filter_by(id=ticker_id).delete()
