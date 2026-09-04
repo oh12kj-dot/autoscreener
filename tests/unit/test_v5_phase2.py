@@ -77,9 +77,16 @@ def test_failure_atom_controls_quantile_and_expected_shortfall():
 
 def test_distribution_objectives_are_separate_and_later_phase_ones_disabled():
     results = evaluate_objectives(_distribution(), load_objectives_config(), horizon_years=7)
+    # WP-B(docs/racr_wp_b_output_contract_2026-09-04.md)で
+    # `risk_adjusted_compounding` がenabledなshadow objectiveとして加わった。
+    # この集合は「分布だけで計算できるobjectiveが評価され、後続phaseの入力を
+    # 要るものはdisabledのまま」を固定するためのものであり、RACRは前者
+    # ——分布のCE CAGRとtail lossだけで計算できる——なのでここに入るのが正しい。
+    # deprecated扱いの `risk_adjusted` も、champion比較のためenabledのまま
+    # 残す方針(config/objectives.yaml参照)なので引き続き含まれる。
     assert set(results) == {
         "ten_bagger", "expected_return", "risk_adjusted", "asymmetric",
-        "capital_preservation",
+        "capital_preservation", "risk_adjusted_compounding",
     }
     assert all(item.status == "available" for item in results.values())
     assert results["ten_bagger"].score_value == pytest.approx(_distribution()["p_target"])
