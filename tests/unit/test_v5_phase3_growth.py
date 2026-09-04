@@ -181,7 +181,12 @@ def test_consensus_builder_is_point_in_time_and_uses_same_period_revision():
     symbol = "ZZV5GROW"
     as_of = datetime.date(2024, 6, 30)
     past1 = datetime.datetime(2024, 5, 1, tzinfo=datetime.timezone.utc)
-    past2 = datetime.datetime(2024, 6, 1, tzinfo=datetime.timezone.utc)
+    # WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md): consensus_revision's
+    # freshness_half_life_days=90 is now actually applied to reliability
+    # (D-3) -- kept within a few days of `as_of` (2024-06-30) so this test's
+    # "applied" assertion exercises the same-period-revision detection logic
+    # it was written for, not the (separately tested) freshness decay.
+    past2 = datetime.datetime(2024, 6, 25, tzinfo=datetime.timezone.utc)
     future = datetime.datetime(2024, 7, 1, tzinfo=datetime.timezone.utc)
     period_end = datetime.date(2025, 12, 31)
     with session_scope() as session:

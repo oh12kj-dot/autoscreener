@@ -200,7 +200,16 @@ def test_v5_shadow_persists_separately_without_touching_v4(monkeypatch):
             # v5.racr2.
             assert score.distribution["contract_version"] == "v5.racr2"
             assert score.states["state_updates_applied"] == []
-            assert float(score.confidence) == pytest.approx(0.5)
+            # WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md): the flat
+            # `ready_input_confidence=0.5` constant this test used to assert
+            # is exactly the defect WP-D fixes (model_confidence pinned at
+            # 0.5 for every ticker, docs/racr_shadow_run_diagnostic_2026-09-04.md
+            # §3.2). This fixture's `item` has no `financial_annual`/
+            # `price_row_count` set (defaults to no evidence at all), so the
+            # real per-ticker reliability floors at `min_base_confidence`.
+            assert float(score.confidence) == pytest.approx(
+                load_model_v5_config().reliability.min_base_confidence
+            )
             assert session.query(Score).count() == v4_before
     finally:
         with session_scope() as session:

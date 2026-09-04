@@ -363,6 +363,51 @@ class ObjectiveScore(Base):
     )
 
 
+class ModelFeatureValue(Base):
+    """D-4 (docs/racr_wp_d_reliability_layer_2026-09-04.md; audit P2, its
+    ``db/models.py`` file-level entry): the per-ticker/per-feature layer
+    that makes a v5 run reproducible and auditable -- one row per
+    (run, ticker, feature) carrying the value, source, availability
+    (``coverage_status``), reliability, and missing reason.
+
+    ``model_scores.features`` (the existing nested JSONB blob) is kept
+    unchanged for backward compatibility; this table is a queryable,
+    indexable projection of the same evidence written alongside it, not a
+    replacement -- a SQL ``WHERE feature_key = ... AND missing_reason IS
+    NOT NULL`` is not possible against a JSONB blob without unnesting it
+    every time.
+    """
+
+    __tablename__ = "model_feature_values"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "ticker_id", "feature_key",
+            name="uq_model_feature_values_run_ticker_feature",
+        ),
+        Index("ix_model_feature_values_run_feature", "run_id", "feature_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("model_runs.id", ondelete="CASCADE"), index=True
+    )
+    ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), index=True)
+    feature_key: Mapped[str] = mapped_column(String(64))
+    value: Mapped[float | None] = mapped_column(Numeric(24, 12), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    coverage_status: Mapped[str] = mapped_column(String(30))
+    # Some signal status strings are long, descriptive reason codes (e.g.
+    # "fred_vintage_unsupported_historical_backtest_prohibited", 57 chars) --
+    # sized generously rather than truncating an explanatory reason.
+    status: Mapped[str] = mapped_column(String(100))
+    applied: Mapped[bool] = mapped_column(Boolean, default=False)
+    reliability: Mapped[float | None] = mapped_column(Numeric(6, 5), nullable=True)
+    missing_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    observed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class ForwardReturn(Base):
     """前方検証(14.3)。スコア確定日から各ホライズン後の実現リターンを記録する。
 

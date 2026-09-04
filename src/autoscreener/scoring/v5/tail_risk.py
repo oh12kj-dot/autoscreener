@@ -51,6 +51,7 @@ from autoscreener.db.models import CustomerConcentration, LitigationEvent, Macro
 from autoscreener.scoring.v5.feature_registry import FEATURES_BY_KEY
 from autoscreener.scoring.v5.growth import _coverage_status, _cutoff, _reliability
 from autoscreener.scoring.v5.inputs import V5PitInput
+from autoscreener.scoring.v5.reliability import decayed_reliability, feature_confidence_delta
 
 _FEATURE_KEYS = ("customer_concentration", "litigation", "macro_regime")
 
@@ -85,15 +86,9 @@ class TailFeatureSet:
 
     @property
     def confidence_delta(self) -> float:
-        delta = 0.0
-        for signal in self.signals:
-            if not signal.runtime_enabled:
-                continue
-            if signal.coverage_status == CoverageStatus.NOT_COLLECTED:
-                delta -= 0.03
-            elif signal.coverage_status == CoverageStatus.COLLECTION_FAILED:
-                delta -= 0.08
-        return max(-0.20, min(0.20, delta))
+        # WP-D D-2 (docs/racr_wp_d_reliability_layer_2026-09-04.md): shared
+        # contract from reliability.py -- see growth.py's identical property.
+        return feature_confidence_delta(self.signals)
 
     def to_dict(self) -> dict:
         return {
@@ -302,13 +297,19 @@ def build_tail_feature_sets(
             spec = FEATURES_BY_KEY[key]
             configured = config.feature_flags.get(key, spec.default_enabled)
             runtime_enabled = configured and coverage[key] >= spec.required_coverage
+            # WP-D D-3 (docs/racr_wp_d_reliability_layer_2026-09-04.md):
+            # wires FeatureSpec.freshness_half_life_days (a no-op today --
+            # no Phase 6 signal sets it -- but no longer dead metadata).
+            effective_reliability = decayed_reliability(
+                signal, half_life_days=spec.freshness_half_life_days, as_of=as_of,
+            )
             if not configured:
                 status = "disabled_by_config"
             elif not runtime_enabled:
                 status = "runtime_disabled_low_coverage"
             elif signal.status != "candidate":
                 status = signal.status
-            elif signal.reliability < spec.min_reliability:
+            elif effective_reliability < spec.min_reliability:
                 status = "below_min_reliability"
             elif signal.value is None or abs(signal.value) < 1e-12:
                 status = "no_change"
@@ -316,9 +317,10 @@ def build_tail_feature_sets(
                 status = "applied"
             signals.append(replace(
                 signal, status=status, runtime_enabled=runtime_enabled,
-                applied=status == "applied",
+                applied=status == "applied", reliability=effective_reliability,
                 evidence={**signal.evidence, "universe_coverage": coverage[key],
-                          "required_coverage": spec.required_coverage},
+                          "required_coverage": spec.required_coverage,
+                          "freshness_half_life_days": spec.freshness_half_life_days},
             ))
         output[ticker_id] = TailFeatureSet(tuple(signals), dict(coverage))
     return output

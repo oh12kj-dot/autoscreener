@@ -32,6 +32,7 @@ from autoscreener.scoring.moic import MoicResult
 from autoscreener.scoring.v5.feature_registry import FEATURES_BY_KEY
 from autoscreener.scoring.v5.growth import GrowthUpdate, _duration_from_fade, _path
 from autoscreener.scoring.v5.inputs import V5PitInput
+from autoscreener.scoring.v5.reliability import decayed_reliability, feature_confidence_delta
 from autoscreener.screening.accounting_quality import AccountingQuality, calculate_accounting_quality
 from autoscreener.screening.financial_history import FinancialPeriod
 from autoscreener.validation.reconciliation import (
@@ -85,17 +86,13 @@ class QualityFeatureSet:
 
     @property
     def confidence_delta(self) -> float:
-        delta = 0.0
+        # WP-D D-2 (docs/racr_wp_d_reliability_layer_2026-09-04.md): shared
+        # penalty/bonus contract from reliability.py (see growth.py's
+        # identical property for the full rationale), plus a reconciliation-
+        # specific extra penalty below -- yfinance-vs-XBRL mismatch severity
+        # is a distinct signal the generic helper has no notion of.
+        delta = feature_confidence_delta(self.signals)
         for signal in self.signals:
-            if not signal.runtime_enabled:
-                continue
-            # Same missingness contract as growth.py: an optional observation
-            # never grants a confidence bonus, only its absence (when the
-            # source is otherwise expected) lowers confidence.
-            if signal.coverage_status == CoverageStatus.NOT_COLLECTED:
-                delta -= 0.03
-            elif signal.coverage_status == CoverageStatus.COLLECTION_FAILED:
-                delta -= 0.08
             if signal.key == "reconciliation_confidence" and signal.applied:
                 delta -= float(signal.evidence.get("confidence_penalty") or 0.0)
         return max(-0.20, min(0.20, delta))
@@ -531,20 +528,29 @@ def build_quality_feature_sets(
             spec = FEATURES_BY_KEY[key]
             configured = config.feature_flags.get(key, spec.default_enabled)
             runtime_enabled = configured and coverage[key] >= spec.required_coverage
+            # WP-D D-3 (docs/racr_wp_d_reliability_layer_2026-09-04.md):
+            # wires FeatureSpec.freshness_half_life_days into the
+            # reliability actually used below (see growth.py's identical
+            # wiring). A no-op today for every Phase 4 signal (none sets
+            # freshness_half_life_days), but no longer dead metadata.
+            effective_reliability = decayed_reliability(
+                signal, half_life_days=spec.freshness_half_life_days, as_of=as_of,
+            )
             if not configured:
                 status = "disabled_by_config"
             elif not runtime_enabled:
                 status = "runtime_disabled_low_coverage"
             elif signal.status != "candidate":
                 status = signal.status
-            elif signal.reliability < spec.min_reliability:
+            elif effective_reliability < spec.min_reliability:
                 status = "below_min_reliability"
             elif signal.value is None or abs(signal.value) < 1e-12:
                 status = "no_change"
             else:
                 status = "applied"
             evidence = {**signal.evidence, "universe_coverage": coverage[key],
-                        "required_coverage": spec.required_coverage}
+                        "required_coverage": spec.required_coverage,
+                        "freshness_half_life_days": spec.freshness_half_life_days}
             if key == "reconciliation_confidence" and status == "applied":
                 # Bounded penalty computed here (config-driven) so
                 # confidence_delta above can read it back without
@@ -556,7 +562,8 @@ def build_quality_feature_sets(
                 )
             signals.append(replace(
                 signal, status=status, runtime_enabled=runtime_enabled,
-                applied=status == "applied", evidence=evidence,
+                applied=status == "applied", reliability=effective_reliability,
+                evidence=evidence,
             ))
         output[ticker_id] = QualityFeatureSet(tuple(signals), dict(coverage))
     return output

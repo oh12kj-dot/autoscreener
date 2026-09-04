@@ -452,10 +452,41 @@ class ScoringConfig(BaseModel):
 
 
 class ModelV5ReliabilityConfig(BaseModel):
-    """Phase 1 reliability contract; confidence never shifts the mean."""
+    """Phase 1 reliability contract; confidence never shifts the mean.
+
+    WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md): ``ready_input_confidence``
+    was, until this WP, used directly as a universe-wide flat constant --
+    the root cause of ``model_confidence`` being exactly ``0.5`` for every
+    scored ticker (docs/racr_shadow_run_diagnostic_2026-09-04.md §3.2). It
+    is kept only as the fallback ``reliability.base_confidence_for`` returns
+    when a real per-ticker evidence reliability cannot be computed at all.
+    The real per-ticker value is
+    ``min_base_confidence + (max_base_confidence - min_base_confidence) *
+    core_evidence_reliability`` (``scoring/v5/reliability.py``).
+    """
 
     ready_input_confidence: float = Field(ge=0, le=1, default=0.5)
     unavailable_input_confidence: float = Field(ge=0, le=1, default=0.0)
+    min_base_confidence: float = Field(ge=0, le=1, default=0.10)
+    max_base_confidence: float = Field(ge=0, le=1, default=0.90)
+    # Half-life for the reporting-lag freshness decay applied to the core
+    # (always-present) financial-statement evidence -- audit §7.3's
+    # ``freshness(age) = exp(-ln2 * age / halfLife)``, ``age`` measured from
+    # the latest annual statement's period-end date (WP-D trap 1:
+    # deliberately NOT ``available_from``, which is a near-universal
+    # constant -- see reliability.py's module docstring).
+    statement_freshness_half_life_days: float = Field(gt=0, default=270.0)
+    # q_sample targets: a "fully adequate" annual-statement history and
+    # price-history length. ~756 trading days is ~3 calendar years,
+    # matching this repository's typical daily-collection backfill depth.
+    target_annual_periods: float = Field(gt=0, default=4.0)
+    target_price_history_rows: float = Field(gt=0, default=756.0)
+
+    @model_validator(mode="after")
+    def base_confidence_bounds_ordered(self) -> ModelV5ReliabilityConfig:
+        if self.min_base_confidence >= self.max_base_confidence:
+            raise ValueError("min_base_confidence must be < max_base_confidence")
+        return self
 
 
 class ModelV5UncertaintyConfig(BaseModel):

@@ -11,6 +11,14 @@ target_moic: 10.0
 reliability:
   ready_input_confidence: 0.50
   unavailable_input_confidence: 0.00
+  # WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md): real per-ticker
+  # confidence range. ready_input_confidence above is now only the fallback
+  # used when no per-ticker evidence can be measured at all.
+  min_base_confidence: 0.10
+  max_base_confidence: 0.90
+  statement_freshness_half_life_days: 270.0
+  target_annual_periods: 4.0
+  target_price_history_rows: 756.0
 
 uncertainty:
   confidence_sigma_multiplier: 0.50

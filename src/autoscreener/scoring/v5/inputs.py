@@ -31,6 +31,19 @@ class V5PitInput:
     # never re-queries raw_snapshots.
     financial_annual: tuple[FinancialPeriod, ...] = ()
     currency_conversion_unavailable: bool = False
+    # WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md): universal,
+    # per-ticker evidence-quantity/quality signals for
+    # ``reliability.core_evidence_reliability`` -- available for every
+    # ticker regardless of optional Live Intelligence coverage, unlike the
+    # growth/quality/capital/tail signals which are gated at 0.24%-25%
+    # universe coverage. Deliberately NOT ``available_from`` (WP-D trap 1:
+    # that is the ingestion date, near-constant across the universe, not a
+    # freshness signal).
+    sector: str | None = None
+    price_row_count: int = 0
+    price_first_date: datetime.date | None = None
+    raw_is_valid: bool = True
+    raw_validation_error_count: int = 0
 
     def evidence(self) -> dict:
         return {
@@ -74,9 +87,14 @@ def build_v5_pit_inputs(session: Session, *, as_of: datetime.date) -> list[V5Pit
             .all()
         )
         price_as_of = prices[-1].trade_date if prices else None
+        price_first_date = prices[0].trade_date if prices else None
         if raw is None:
-            built.append(V5PitInput(ticker.id, ticker.symbol, as_of, None, None, None,
-                                    price_as_of, "not_collected"))
+            built.append(V5PitInput(
+                ticker.id, ticker.symbol, as_of, None, None, None,
+                price_as_of, "not_collected",
+                sector=ticker.sector, price_row_count=len(prices),
+                price_first_date=price_first_date,
+            ))
             continue
         info = sanitize_info(raw.payload.get("info") or {})
         sector = info.get("sector") or ticker.sector
@@ -96,5 +114,10 @@ def build_v5_pit_inputs(session: Session, *, as_of: datetime.date) -> list[V5Pit
             "collected_with_data" if inputs is not None else "collected_no_finding",
             financial_annual,
             history.currency_conversion_unavailable,
+            sector=sector,
+            price_row_count=len(prices),
+            price_first_date=price_first_date,
+            raw_is_valid=bool(raw.is_valid),
+            raw_validation_error_count=len(raw.validation_errors or []),
         ))
     return built

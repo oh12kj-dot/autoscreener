@@ -17,8 +17,9 @@ from autoscreener.config import (
     load_objectives_config,
     load_scoring_config,
 )
+from autoscreener.coverage import CoverageStatus
 from autoscreener.dates import utc_today
-from autoscreener.db.models import ModelRun, ModelScore, ObjectiveScore
+from autoscreener.db.models import ModelFeatureValue, ModelRun, ModelScore, ObjectiveScore
 from autoscreener.db.session import session_scope
 from autoscreener.scoring.engine import cross_section_for
 from autoscreener.scoring.moic import MoicResult, compute_moic
@@ -29,7 +30,7 @@ from autoscreener.scoring.v5.balance_sheet import (
     build_capital_feature_sets,
 )
 from autoscreener.scoring.v5.distribution import scenario_distribution, unavailable_distribution
-from autoscreener.scoring.v5.feature_registry import feature_registry_payload
+from autoscreener.scoring.v5.feature_registry import FEATURES_BY_KEY, feature_registry_payload
 from autoscreener.scoring.v5.growth import (
     GrowthFeatureSet,
     GrowthUpdate,
@@ -44,6 +45,7 @@ from autoscreener.scoring.v5.quality import (
     apply_quality_features,
     build_quality_feature_sets,
 )
+from autoscreener.scoring.v5.reliability import base_confidence_for
 from autoscreener.scoring.v5.scenario import build_scenarios
 from autoscreener.scoring.v5.state_model import build_future_state
 from autoscreener.scoring.v5.tail_risk import (
@@ -120,6 +122,7 @@ def _feature_payload(
     capital_update: CapitalUpdate | None,
     tail_update: TailUpdate | None,
     ablation: dict,
+    core_evidence=None,
 ) -> dict:
     payload = {
         "registry_version": "phase6",
@@ -138,6 +141,11 @@ def _feature_payload(
         "capital_features": capital_features.to_dict(),
         "tail_features": tail_features.to_dict(),
         "ablation": ablation,
+        # WP-D D-1 (docs/racr_wp_d_reliability_layer_2026-09-04.md): the
+        # per-ticker audit §7.3 factors behind `model_confidence`, so a
+        # score's confidence is not just a number but reconstructible from
+        # the evidence that produced it.
+        "core_evidence_reliability": core_evidence.to_dict() if core_evidence is not None else None,
     }
     if growth_update is not None:
         payload["growth_update"] = growth_update.to_dict()
@@ -148,6 +156,59 @@ def _feature_payload(
     if tail_update is not None:
         payload["tail_update"] = tail_update.to_dict()
     return payload
+
+
+def _feature_value_rows(
+    run_id: uuid.UUID,
+    ticker_id: int,
+    core_evidence,
+    signals,
+) -> list[ModelFeatureValue]:
+    """D-4 (docs/racr_wp_d_reliability_layer_2026-09-04.md; audit P2): one
+    row per (run, ticker, feature) -- value, source, availability,
+    reliability, and missing reason -- for every optional growth/quality/
+    capital/tail signal evaluated this run, plus the two always-present
+    base features (financial statements, price history) derived from
+    ``core_evidence``. Kept alongside ``model_scores.features`` (unchanged,
+    still the full nested JSONB blob) rather than replacing it: this is a
+    queryable, indexable projection of the same evidence, not a second
+    source of truth.
+    """
+    rows: list[ModelFeatureValue] = []
+    if core_evidence is not None:
+        rows.append(ModelFeatureValue(
+            run_id=run_id, ticker_id=ticker_id, feature_key="base_financial_statements",
+            value=float(core_evidence.annual_periods), source="raw_snapshots",
+            coverage_status=(
+                CoverageStatus.COLLECTED_WITH_DATA if core_evidence.annual_periods > 0
+                else CoverageStatus.NOT_COLLECTED
+            ),
+            status="seed", applied=True, reliability=core_evidence.value,
+            missing_reason=None if core_evidence.annual_periods > 0 else "no_annual_periods",
+            observed_at=None, evidence=core_evidence.to_dict(),
+        ))
+        rows.append(ModelFeatureValue(
+            run_id=run_id, ticker_id=ticker_id, feature_key="price_history",
+            value=float(core_evidence.price_row_count), source="price_snapshots",
+            coverage_status=(
+                CoverageStatus.COLLECTED_WITH_DATA if core_evidence.price_row_count > 0
+                else CoverageStatus.NOT_COLLECTED
+            ),
+            status="seed", applied=True, reliability=core_evidence.q_sample,
+            missing_reason=None if core_evidence.price_row_count > 0 else "no_price_history",
+            observed_at=None, evidence={"price_row_count": core_evidence.price_row_count},
+        ))
+    for signal in signals:
+        rows.append(ModelFeatureValue(
+            run_id=run_id, ticker_id=ticker_id, feature_key=signal.key,
+            value=float(signal.value) if signal.value is not None else None,
+            source=FEATURES_BY_KEY[signal.key].source,
+            coverage_status=str(signal.coverage_status),
+            status=signal.status, applied=signal.applied, reliability=signal.reliability,
+            missing_reason=None if signal.applied else signal.status,
+            observed_at=signal.observed_at, evidence=signal.evidence,
+        ))
+    return rows
 
 
 def _score_warnings(
@@ -538,6 +599,37 @@ def _distribution_field_diagnostics(
     return distinct_counts, constant_fields, warnings
 
 
+def _value_summary(values: list[float]) -> dict:
+    """WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md): distinct-value
+    count and min/p25/median/p75/max for a plain list of floats -- the
+    acceptance-criteria shape this WP's doc has to report for
+    ``model_confidence`` and per-signal reliability. A pure function over a
+    plain list, matching this module's existing diagnostic-function style.
+    """
+    if not values:
+        return {"n": 0, "distinct": 0, "min": None, "p25": None, "median": None, "p75": None, "max": None}
+    ordered = sorted(values)
+
+    def _percentile(p: float) -> float:
+        if len(ordered) == 1:
+            return ordered[0]
+        k = (len(ordered) - 1) * p
+        lo, hi = int(k), min(int(k) + 1, len(ordered) - 1)
+        if lo == hi:
+            return ordered[lo]
+        return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
+
+    return {
+        "n": len(ordered),
+        "distinct": len({round(v, 9) for v in ordered}),
+        "min": ordered[0],
+        "p25": _percentile(0.25),
+        "median": _percentile(0.5),
+        "p75": _percentile(0.75),
+        "max": ordered[-1],
+    }
+
+
 def run_v5_shadow(
     as_of: datetime.date | None = None,
     *,
@@ -618,6 +710,12 @@ def run_v5_shadow(
             distribution_field_counts: dict[str, int] = {
                 field: 0 for field in _DIAGNOSTIC_DISTRIBUTION_FIELDS
             }
+            # WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md):
+            # per-ticker core-evidence reliability values, for the same
+            # distinct-value/quantile reporting `_DIAGNOSTIC_DISTRIBUTION_FIELDS`
+            # gets -- this is what would have caught `model_confidence`'s
+            # 0.5-for-everyone defect at the source, not just downstream.
+            core_evidence_values: list[float] = []
             for item in items:
                 result = None
                 if item.moic_inputs is not None:
@@ -637,9 +735,14 @@ def run_v5_shadow(
                     *capital_features.signals, *tail_features.signals,
                 )
                 total_signal_slots += len(all_signals)
-                base_confidence = (
-                    model_config.reliability.ready_input_confidence
-                    if has_distribution else model_config.reliability.unavailable_input_confidence
+                # WP-D D-1 (docs/racr_wp_d_reliability_layer_2026-09-04.md):
+                # replaces the flat `ready_input_confidence` constant (0.5
+                # for every ticker -- root cause diagnosed in
+                # docs/racr_shadow_run_diagnostic_2026-09-04.md §3.2) with a
+                # real per-ticker evidence reliability. `core_evidence` is
+                # `None` exactly when `has_distribution` is False.
+                base_confidence, core_evidence = base_confidence_for(
+                    item, as_of=as_of, config=model_config, has_distribution=has_distribution,
                 )
                 ablation: dict[str, dict] = {
                     signal.key: {
@@ -742,7 +845,7 @@ def run_v5_shadow(
                     features=_feature_payload(
                         item, registry, growth_features, quality_features, capital_features,
                         tail_features, growth_update, quality_update, capital_update, tail_update,
-                        ablation,
+                        ablation, core_evidence=core_evidence,
                     ),
                     confidence=confidence,
                     warnings=_score_warnings(
@@ -750,6 +853,19 @@ def run_v5_shadow(
                         capital_features, tail_features,
                     ),
                 ))
+                # D-4 (docs/racr_wp_d_reliability_layer_2026-09-04.md; audit
+                # P2): the queryable per-feature layer, built from the same
+                # (possibly reconciled) feature sets just persisted above.
+                final_signals = (
+                    *growth_features.signals, *quality_features.signals,
+                    *capital_features.signals, *tail_features.signals,
+                )
+                for feature_row in _feature_value_rows(
+                    run_id, item.ticker_id, core_evidence, final_signals,
+                ):
+                    session.add(feature_row)
+                if core_evidence is not None:
+                    core_evidence_values.append(core_evidence.value)
                 objective_results = evaluate_objectives(
                     distribution,
                     objectives_config,
@@ -822,6 +938,17 @@ def run_v5_shadow(
                 "distribution_distinct_value_counts": distribution_distinct_counts,
                 "distribution_constant_fields": constant_distribution_fields,
             }
+            # WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md):
+            # distinct-value/quantile summary for model_confidence itself
+            # (also already covered by distribution_distinct_value_counts
+            # above, repeated here with quantiles) and the core-evidence
+            # reliability feeding it -- the measured numbers the WP-D doc's
+            # acceptance criteria require, persisted per run instead of only
+            # ever computed by hand.
+            reliability_diagnostics = {
+                "model_confidence": _value_summary(sorted(distribution_field_values["model_confidence"])),
+                "core_evidence_reliability": _value_summary(core_evidence_values),
+            }
             diagnostic_warnings = [
                 *spearman_warnings, *constant_term_warnings, *distribution_warnings,
             ]
@@ -862,6 +989,7 @@ def run_v5_shadow(
                 "ablation_not_computed": total_signal_slots - ablation_count,
                 "default_objective": objectives_config.default_objective,
                 "objective_diagnostics": objective_diagnostics,
+                "reliability_diagnostics": reliability_diagnostics,
             }
         return {
             "run_id": str(run_id),
