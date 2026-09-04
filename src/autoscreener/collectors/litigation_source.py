@@ -15,8 +15,11 @@
 `collectors/edgar_client.py` は他担当が同時編集中のため触れられない。
 全文検索は `data.sec.gov` / `www.sec.gov` とは別ドメイン(`efts.sec.gov`)の
 別APIなので、独立した薄いクライアント `EdgarFullTextSearchClient` をここに置く
-(レート制御方式は `EdgarClient.RateLimiter` を import して再利用する——SEC
-インフラに対して別々のレート制御を持つと合算レートが規約の想定を超えるため)。
+(レート制御は`collectors/rate_limit.py`の共有`sec`リミッター
+——`EdgarClient`と同じインスタンス——をそのまま使う。2026-09-04是正:
+以前は専用の`RateLimiter`インスタンスを持っていたが、SECインフラに対して
+別々のレート制御を持つと合算レートが規約の想定を超えるため、共有インスタンス
+へ揃えた。詳細は`EdgarFullTextSearchClient`のdocstring参照)。
 
 - エンドポイント: ``GET https://efts.sec.gov/LATEST/search-index``
 - 確認したクエリパラメータ:
@@ -68,13 +71,13 @@ from dataclasses import dataclass
 
 import requests
 
-from autoscreener.collectors.edgar_client import RateLimiter
 from autoscreener.collectors.errors import (
     CollectionError,
     ParseFailure,
     PermanentFailure,
     TransientFailure,
 )
+from autoscreener.collectors.rate_limit import get_shared_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -123,24 +126,36 @@ class EdgarFullTextSearchClient:
     """EDGAR全文検索(`efts.sec.gov`)専用の薄いクライアント。
 
     `EdgarClient`(`collectors/edgar_client.py`)は他担当が同時編集中で触れない
-    ため、同じ設計(トークンではなく最小間隔方式のレート制御・403は
-    `PermanentFailure`)を踏襲した独立クラスとしてここに置く。
+    ため、同じ設計(最小間隔方式のレート制御・403は`PermanentFailure`)を
+    踏襲した独立クラスとしてここに置く。
+
+    **2026-09-04是正(S-5監査、docs/daily_pipeline_throughput_plan_2026-09-04.md)**:
+    以前はここで専用の`RateLimiter`インスタンスを作っていた
+    (`edgar_client.RateLimiter`をimportして`RateLimiter(requests_per_second)`)。
+    `collectors/rate_limit.py`のモジュールdocstringが名指しで警告している
+    「プロセス内に複数のリミッターがあっても、SEC側から見れば1つの送信元」
+    という anti-pattern そのものであり、SECは`efts.sec.gov`も含めsec.gov
+    インフラ全体をIP単位で数える。litigationが逐次ループ(実測0.26 req/秒)
+    だった間はこのリミッターが実質何も制限していなかったため表面化しな
+    かったが、S-5で銘柄ループを並列化した結果、**このステージのレートを
+    実際に決めているのはこのインスタンス1つだけ**になり、共有`sec`
+    アカウンティングからは見えない状態になった。`get_shared_limiter("sec")`
+    (`EdgarClient`と同じリミッター)へ揃える。
     """
 
-    def __init__(
-        self,
-        user_agent: str,
-        *,
-        requests_per_second: float = 5.0,
-        timeout_seconds: float = 10.0,
-    ) -> None:
+    def __init__(self, user_agent: str, *, timeout_seconds: float = 10.0) -> None:
         if not user_agent or user_agent.strip() in _PLACEHOLDER_USER_AGENTS:
             raise ValueError(
                 "EDGAR_USER_AGENT が未設定です。.env に EDGAR_USER_AGENT を設定してください"
                 "(30.3.1と同じ制約:連絡先メールアドレスを含むUser-Agentが必須)。"
             )
         self._timeout = timeout_seconds
-        self._rate_limiter = RateLimiter(requests_per_second)
+        # **プロセスで1つの共有リミッター**(`EdgarClient`と同じキー)。
+        # `configure_shared_limiter`はここでは呼ばない——設定(`edgar.
+        # requests_per_second`)を読む場所は`EdgarClient.__init__`だけに
+        # 限定する(`rate_limit.py`のdocstring:「呼ぶのは設定を読んだ場所
+        # だけにすること」)。未設定なら安全側の既定(5.0 req/秒)が使われる。
+        self._rate_limiter = get_shared_limiter("sec")
         self._session = requests.Session()
         self._session.headers.update(
             {"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}

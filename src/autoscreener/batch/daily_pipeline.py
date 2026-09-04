@@ -47,7 +47,7 @@ from autoscreener.batch.run_daily_collection import (
 from autoscreener.batch.run_monitoring import run_monitoring
 from autoscreener.batch.universe_refresh import refresh_universe
 from autoscreener.config import load_collection_config, load_edgar_config
-from autoscreener.dates import utc_today
+from autoscreener.dates import WEEKLY_REFRESH_WEEKDAY, utc_today
 from autoscreener.db.session import session_scope
 from autoscreener.monitoring import HealthFinding, check_collection_health, check_pipeline_health, check_quarantine_health
 from autoscreener.pipeline_stages import PIPELINE_STAGE_SEQUENCE
@@ -56,8 +56,6 @@ from autoscreener.scoring.v5.engine import run_v5_shadow
 from autoscreener.scoring.forward_validation import run_forward_validation
 
 logger = logging.getLogger(__name__)
-
-WEEKLY_REFRESH_WEEKDAY = 0  # Monday(date.weekday()の0始まり)
 
 
 def run_daily_pipeline() -> dict[str, dict[str, int]]:

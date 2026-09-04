@@ -20,6 +20,12 @@ from __future__ import annotations
 
 import datetime
 
+# 週次工程が揃って同じ曜日を指すよう、ここを唯一の定義箇所にする
+# (`batch/daily_pipeline.py`のユニバース再取得・XBRL実績値等と、
+# `collectors/snapshot_collector.py`のyfinance財務諸表週次化(S-2、
+# docs/daily_pipeline_throughput_plan_2026-09-04.md)の両方がここを参照する)。
+WEEKLY_REFRESH_WEEKDAY = 0  # Monday(date.weekday()の0始まり)
+
 
 def utc_today() -> datetime.date:
     return datetime.datetime.now(datetime.UTC).date()

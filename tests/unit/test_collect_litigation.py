@@ -135,3 +135,46 @@ def test_collect_litigation_no_hits_when_fetcher_empty(ticker_id):
     counts = collect_litigation(symbols=[_SYMBOL], fetcher=_empty_fetcher)
     assert counts["tickers"] == 1
     assert counts["new_events"] == 0
+
+
+def test_collect_litigation_aggregates_counts_across_multiple_symbols():
+    """S-5:複数銘柄を並列処理しても、`run_parallel_tickers`が銘柄をまたいで
+    正しく合算すること(逐次ループから並列化への回帰確認)。"""
+    symbols = ["ZZLIT10", "ZZLIT11", "ZZLIT12"]
+    with session_scope() as session:
+        for symbol in symbols:
+            existing = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+            if existing is not None:
+                session.query(LitigationEvent).filter_by(ticker_id=existing.id).delete()
+                session.delete(existing)
+        session.flush()
+        for symbol in symbols:
+            session.add(Ticker(symbol=symbol, market="US", cik="0000320193"))
+
+    try:
+        def _fetcher(_ticker, _kinds):
+            return [
+                LitigationHit(
+                    kind="short_report", title="8-K EXAMPLE",
+                    event_date=datetime.date(2026, 7, 8), source_url=None,
+                    source_accession=f"0001234567-26-{_ticker.symbol}", detail=None,
+                )
+            ]
+
+        counts = collect_litigation(symbols=symbols, fetcher=_fetcher)
+        assert counts["tickers"] == len(symbols)
+        assert counts["new_events"] == len(symbols)
+        assert counts["failures"] == 0
+
+        with session_scope() as session:
+            for symbol in symbols:
+                ticker = session.query(Ticker).filter_by(symbol=symbol).one()
+                rows = session.query(LitigationEvent).filter_by(ticker_id=ticker.id).all()
+                assert len(rows) == 1
+    finally:
+        with session_scope() as session:
+            for symbol in symbols:
+                ticker = session.query(Ticker).filter_by(symbol=symbol).one_or_none()
+                if ticker is not None:
+                    session.query(LitigationEvent).filter_by(ticker_id=ticker.id).delete()
+                    session.delete(ticker)

@@ -15,7 +15,6 @@ import threading
 import time
 
 import pytest
-import requests
 import responses
 
 from autoscreener.collectors.edgar_client import COMPANY_TICKERS_URL, EdgarClient
@@ -269,44 +268,85 @@ def test_unparseable_retry_after_falls_back_to_the_configured_cooldown():
 # ---------------------------------------------------------------------------
 
 
-def test_yfinance_calls_go_through_a_shared_ceiling():
-    """yfinanceの各呼び出しが秒あたり上限を通ること。
+def test_http_boundary_throttles_every_real_request_not_just_the_call_site(monkeypatch):
+    """S-1の本丸:リミッターが**呼び出し単位**ではなく**実HTTPリクエスト単位**で
+    効くこと。
 
-    ジッタ(`parallel_runner`)は1銘柄あたり1回で、しかも送信間隔を揺らすだけ
-    ——**Yahooが速く返すほど実効レートが上がる**という性質があった。天井は
-    リミッター側で持つ。
+    旧実装の`_throttle()`は`fetch_raw_financials`等の呼び出し単位でしか
+    acquireしていなかったが、1回の呼び出しは内部で最大6本のHTTPを出す
+    (quoteSummary×1 + fundamentals-timeseries×5)。実測(2026-09-02)では
+    設定値2.0 req/秒に対し実効HTTPレートが6.34 req/秒——上限は何も表して
+    いなかった。ここでは`YfData._make_request`(全HTTPの唯一の経路、
+    `yfinance/data.py`で確認済み)を直接複数回叩き、1回の論理呼び出しが
+    出す複数本のHTTPを模擬する。旧実装ならここは一瞬で終わっていた。
+    """
+    import yfinance.data as yf_data
+
+    from autoscreener.collectors import yfinance_client
+
+    configure_shared_limiter("yfinance", 20.0)  # 50ms間隔
+
+    calls: list[float] = []
+
+    def _fake_original(self, *args, **kwargs):
+        calls.append(time.monotonic())
+        return None
+
+    # 現在パッチ済みの`_make_request`を素の(未ラップの)関数に差し替えたうえで
+    # `_install_http_throttle()`を再度呼ぶ——「1回の論理呼び出しが内部で複数回
+    # HTTPを出す」場面(fetch_raw_financialsの6本)を、`_make_request`を直接
+    # 複数回叩くことで模擬している。monkeypatchがテスト終了時に本来の
+    # (本番の)パッチ済みメソッドへ自動的に戻す。
+    monkeypatch.setattr(yf_data.YfData, "_make_request", _fake_original, raising=True)
+    yfinance_client._install_http_throttle()
+
+    data = yf_data.YfData()
+    start = time.monotonic()
+    for _ in range(4):
+        data._make_request("http://example.invalid")
+    elapsed = time.monotonic() - start
+
+    assert len(calls) == 4
+    # 1本目は即時、残り3本は間隔ぶん待つ(呼び出し単位でしかacquireしない
+    # 旧実装なら、ここは即座に終わっていた)。
+    assert elapsed >= 0.15
+
+
+def test_install_http_throttle_does_not_double_wrap():
+    """同じ関数を2回ラップしない(二重ラップは待ち時間が倍になる回帰)。"""
+    import yfinance.data as yf_data
+
+    from autoscreener.collectors import yfinance_client
+
+    before = yf_data.YfData._make_request
+    yfinance_client._install_http_throttle()
+    after = yf_data.YfData._make_request
+    assert before is after
+
+
+def test_fx_rate_fetch_no_longer_throttles_at_the_call_site(monkeypatch):
+    """S-1後:呼び出し単位の`_throttle()`は撤去済み。
+
+    実HTTP境界(`YfData._make_request`)側で既に間隔制御されるため、ここで
+    `get_shared_limiter`を直接呼んで二重にacquireすると、実HTTP本数あたりの
+    待ち時間が不必要に増えるだけになる(S-2/S-4で得た削減分を無駄食いする)。
     """
     from autoscreener.collectors import yfinance_client
 
-    configure_shared_limiter("yfinance", 20.0)  # 50ms
-    start = time.monotonic()
-    for _ in range(4):
-        yfinance_client._throttle()
-    # 1本目は即時なので、待ちは3間隔ぶん。
-    assert time.monotonic() - start >= 0.15
-
-
-def test_fx_rate_fetch_is_throttled(monkeypatch):
-    """APIプロセスからの単発FX取得も天井を通ること(設定を読まない経路)。"""
-    from autoscreener.collectors import yfinance_client
-
     yfinance_client._fx_rate_cache.clear()
-    acquired: list[str] = []
 
-    class _Limiter:
-        def acquire(self) -> None:
-            acquired.append("x")
+    def _boom(*_a, **_k):
+        raise AssertionError("fetch_fx_rate はもうリミッターを自分で呼んではいけない(S-1)")
 
-    monkeypatch.setattr(yfinance_client, "get_shared_limiter", lambda key: _Limiter())
+    monkeypatch.setattr(yfinance_client, "get_shared_limiter", _boom)
 
-    class _Boom:
+    class _FakeTicker:
         def __init__(self, *_a, **_k) -> None:
-            raise requests.exceptions.ConnectionError("offline")
+            self.info = {"regularMarketPrice": 1.5}
 
-    monkeypatch.setattr(yfinance_client.yf, "Ticker", _Boom)
+    monkeypatch.setattr(yfinance_client.yf, "Ticker", _FakeTicker)
 
-    assert yfinance_client.fetch_fx_rate("EUR", "USD") is None
-    assert acquired, "FX取得がリミッターを通っていない"
+    assert yfinance_client.fetch_fx_rate("EUR", "USD") == 1.5
 
 
 def test_reset_clears_shared_state():

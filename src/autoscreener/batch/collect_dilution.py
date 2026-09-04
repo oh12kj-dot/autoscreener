@@ -37,6 +37,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from autoscreener.batch.collect_filings import select_tracked_tickers
+from autoscreener.batch.parallel_runner import run_parallel_tickers
 from autoscreener.collectors.edgar_client import EdgarClient
 from autoscreener.collectors.errors import CollectionError
 from autoscreener.config import get_settings, load_edgar_config
@@ -285,40 +286,62 @@ def _collect_one(session: Session, client: EdgarClient, ticker: Ticker, *, as_of
     return True
 
 
-def collect_dilution(symbols: list[str] | None = None, *, limit: int = _DEFAULT_LIMIT) -> dict[str, int]:
+def _process_ticker(session: Session, ticker_id: int, client: EdgarClient, as_of: datetime.date) -> dict[str, int]:
+    """1銘柄ぶんの希薄化キャパシティ収集を専用セッションで行う(S-5:並列化の
+    ため銘柄ごとに独立したセッションを使う)。"""
+    local = {"tickers": 0, "written": 0, "skipped_no_cik": 0, "failures": 0}
+    ticker = session.get(Ticker, ticker_id)
+    if ticker is None:
+        return local
+    if not ticker.cik:
+        local["skipped_no_cik"] += 1
+        return local
+    local["tickers"] += 1
+    try:
+        written = _collect_one(session, client, ticker, as_of=as_of)
+    except Exception:
+        logger.exception("%s: dilution capacity collection failed", ticker.symbol)
+        local["failures"] += 1
+        return local
+    if written:
+        local["written"] += 1
+    return local
+
+
+def collect_dilution(
+    symbols: list[str] | None = None, *, limit: int = _DEFAULT_LIMIT, max_workers: int | None = None
+) -> dict[str, int]:
     """追跡対象銘柄の希薄化キャパシティを収集し `dilution_capacity` へ upsert する。
+
+    S-5(daily_pipeline_throughput_plan_2026-09-04):以前は`for ticker in
+    tickers:`の完全な逐次ループだった。銘柄ごとに独立したセッションを開いて
+    共有`sec`リミッター配下で並列化する——上限自体は動かさない。
 
     戻り値は {"tickers": n, "written": n, "skipped_no_cik": n, "failures": n}。
     1銘柄の失敗で全体を止めない(collect_filings.collect_filings と同じ方針)。
     """
     settings = get_settings()
     config = load_edgar_config()
-    counts = {"tickers": 0, "written": 0, "skipped_no_cik": 0, "failures": 0}
+    zeros = {"tickers": 0, "written": 0, "skipped_no_cik": 0, "failures": 0}
     if not config.enabled:
         logger.info("edgar collection disabled by config")
-        return counts
+        return zeros
 
     client = EdgarClient(config, settings.edgar_user_agent or "")
     today = utc_today()
 
     with session_scope() as session:
         if symbols:
-            tickers = session.query(Ticker).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
+            ticker_ids = [
+                row[0]
+                for row in session.query(Ticker.id).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
+            ]
         else:
-            tickers = select_tracked_tickers(session, limit=limit)
+            ticker_ids = [t.id for t in select_tracked_tickers(session, limit=limit)]
 
-        for ticker in tickers:
-            if not ticker.cik:
-                counts["skipped_no_cik"] += 1
-                continue
-            counts["tickers"] += 1
-            try:
-                written = _collect_one(session, client, ticker, as_of=today)
-            except Exception:
-                logger.exception("%s: dilution capacity collection failed", ticker.symbol)
-                counts["failures"] += 1
-                continue
-            if written:
-                counts["written"] += 1
-
-    return counts
+    counts = run_parallel_tickers(
+        ticker_ids,
+        lambda session, ticker_id: _process_ticker(session, ticker_id, client, today),
+        max_workers=max_workers or config.max_workers,
+    )
+    return {**zeros, **counts}

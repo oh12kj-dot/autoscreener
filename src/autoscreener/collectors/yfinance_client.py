@@ -52,21 +52,55 @@ def _retrying(retry_config: RetryConfig):
 
 
 
-def _throttle() -> None:
-    """Yahooへ1本投げる直前に呼ぶ。
+_HTTP_THROTTLE_MARKER = "_autoscreener_http_throttle_installed"
 
-    **ジッタ(`parallel_runner`)とは役割が違う。** ジッタは1銘柄の処理を
-    始める前に1回入るだけで、送信パターンを揺らすためのもの——秒あたりの
-    上限にはならない。実効レートは「Yahooがどれだけ速く返すか」で決まるので、
-    **相手が元気なときほど速く叩き、制限に触れた瞬間に急に失敗が増える**という
-    一番まずい形になっていた(実測2026-08-23:並列8で30%が transient failure)。
-    ここで秒あたりの天井を入れて、相手の速さに実効レートが引きずられないようにする。
 
-    リミッターはプロセスで1つ。`fetch_raw_financials` は1銘柄あたり複数の
-    HTTPリクエストを内部で出すので、銘柄単位ではなく**呼び出し単位**で通す。
-    リトライの内側に置いてあるので、再試行も必ずここを通る。
+def _install_http_throttle() -> None:
+    """yfinanceの実HTTP境界(`YfData._make_request`)を1箇所でラップし、
+    ここでレート制御する(S-1、docs/daily_pipeline_throughput_plan_2026-09-04.md)。
+
+    **旧実装(`_throttle()`)の問題**:以前は`fetch_raw_financials`等の
+    **呼び出し単位**でacquireしていたが、1回の呼び出しは内部で最大6本の
+    HTTPリクエストを出す(quoteSummary×1 + fundamentals-timeseries×5)。
+    実測(2026-09-02、`YfData._make_request`を計数):設定値
+    `yfinance_requests_per_second: 2.0`に対し、実効HTTPレートは
+    **6.34 req/秒**(名目上限の約3.2倍)——上限は何も表していなかった。
+    consensus工程(`YfinanceConsensusProvider.fetch`)に至っては呼び出し単位の
+    acquireすら通っておらず、2本のHTTPが完全に素通りしていた。
+
+    `YfData`はyfinance側のプロセス内シングルトンで(`data.py`の
+    `SingletonMeta`)、`get()`/`post()`はどちらも最終的に`_make_request()`を
+    通る(`yfinance/data.py`で確認済み:`get`は`_make_request(..., request_method=
+    self._session.get, ...)`、`post`も同様)。ここを1箇所だけモンキーパッチ
+    すれば、`ticker.info`・`.quarterly_income_stmt`・`.history()`・
+    `.get_shares_full()`・`.revenue_estimate`等、経路によらず全てのHTTPが
+    等しく間隔制御を受ける。これに伴い、各関数が個別に呼んでいた旧
+    `_throttle()`(呼び出し単位)は撤去した——残すと二重にacquireするだけで、
+    実HTTP本数あたりの待ち時間が不必要に増える(6本のHTTPに対し呼び出し単位
+    +HTTP単位の両方で待つと7回待つことになり、S-2/S-4で得た削減分を
+    無駄食いする)。
+
+    プロセスで一度だけ適用する。モジュールは通常一度しかimportされない
+    (Pythonのimportロックが並行importでも一度しか実行させない)が、HTTP単位で
+    本当にthrottleされるかを検証するテストが`YfData._make_request`を差し替えて
+    この関数を再度呼ぶ場面があるため、既にラップ済みかをマーカー属性で判定し、
+    二重ラップ(=待ち時間が倍になる)を防ぐ。
     """
-    get_shared_limiter("yfinance").acquire()
+    target = yf.data.YfData
+    if getattr(target._make_request, _HTTP_THROTTLE_MARKER, False):
+        return  # 既にラップ済み
+
+    original_make_request = target._make_request
+
+    def _throttled_make_request(self: Any, *args: Any, **kwargs: Any) -> Any:
+        get_shared_limiter("yfinance").acquire()
+        return original_make_request(self, *args, **kwargs)
+
+    setattr(_throttled_make_request, _HTTP_THROTTLE_MARKER, True)
+    target._make_request = _throttled_make_request
+
+
+_install_http_throttle()
 
 
 def _df_to_json(df: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
@@ -86,17 +120,28 @@ def _df_to_json(df: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
     return result
 
 
-def fetch_raw_financials(symbol: str, retry_config: RetryConfig) -> dict[str, Any]:
+def fetch_raw_financials(
+    symbol: str, retry_config: RetryConfig, *, include_statements: bool = True
+) -> dict[str, Any]:
     """1銘柄分の生データ(info + 財務諸表)を取得する。
 
     戻り値は raw_snapshots.payload にそのまま保存できるJSON化可能な辞書。
     失敗時は CollectionError の各サブクラス(18.1)を送出する。
+
+    S-2(daily_pipeline_throughput_plan_2026-09-04):`include_statements=False`
+    のときは財務諸表5本(fundamentals-timeseries)を取得しない——四半期に
+    1度しか変わらない値を毎日取り直していたのが元々の無駄で、`xbrl_facts`
+    工程(EDGAR側の実績値)は既に同じ理由で週次に格下げ済み
+    (`daily_pipeline.py`のコメント参照)。yfinance側の財務諸表だけが日次の
+    ままになっていた。銘柄あたりのHTTPは6本(info+財務諸表5本)→1本(info)に
+    減る。呼び出し元(`collectors/snapshot_collector.py`の`collect_one`)が、
+    取得しなかった日は直近の`raw_snapshots.payload`から財務諸表5キーを
+    持ち越して補い、payloadの形(キー集合)を日によって変えない。
     """
 
     @_retrying(retry_config)
     def _call() -> dict[str, Any]:
         try:
-            _throttle()
             ticker = yf.Ticker(symbol)
             info = ticker.info or {}
 
@@ -113,22 +158,27 @@ def fetch_raw_financials(symbol: str, retry_config: RetryConfig) -> dict[str, An
             if currency and financial_currency and currency != financial_currency:
                 info["_fx_rate_financial_to_trading"] = fetch_fx_rate(financial_currency, currency)
 
-            return {
-                "info": info,
-                "quarterly_income_stmt": _df_to_json(ticker.quarterly_income_stmt),
-                "income_stmt": _df_to_json(ticker.income_stmt),
-                "balance_sheet": _df_to_json(ticker.balance_sheet),
-                "cash_flow": _df_to_json(ticker.cash_flow),
-                # 15.2のキャッシュランウェイゲート(直近4四半期の平均FCFバーン)に
-                # は四半期粒度が必要。年次cash_flowだけでは代替できない。
-                "quarterly_cash_flow": _df_to_json(ticker.quarterly_cash_flow),
-                # 27.16:`eps_revisions`・`earnings_dates`・`insider_transactions` の
-                # 収集はやめた。これらは旧v2の「予想修正モメンタム」「発掘度」
-                # サブスコア専用のデータであり、実現倍率モデルはどれも使わない。
-                # いずれも**現在時点のスナップショットしか取れず過去に遡れない**
-                # ため、使えばモデルが検証不能になる(27.8)。銘柄あたり3回の
-                # 追加APIコールを削れるので、レート制限(8.3・14.9)にも効く。
-            }
+            payload: dict[str, Any] = {"info": info}
+            if include_statements:
+                payload.update(
+                    {
+                        "quarterly_income_stmt": _df_to_json(ticker.quarterly_income_stmt),
+                        "income_stmt": _df_to_json(ticker.income_stmt),
+                        "balance_sheet": _df_to_json(ticker.balance_sheet),
+                        "cash_flow": _df_to_json(ticker.cash_flow),
+                        # 15.2のキャッシュランウェイゲート(直近4四半期の平均FCFバーン)
+                        # には四半期粒度が必要。年次cash_flowだけでは代替できない。
+                        "quarterly_cash_flow": _df_to_json(ticker.quarterly_cash_flow),
+                        # 27.16:`eps_revisions`・`earnings_dates`・`insider_transactions`
+                        # の収集はやめた。これらは旧v2の「予想修正モメンタム」
+                        # 「発掘度」サブスコア専用のデータであり、実現倍率モデルは
+                        # どれも使わない。いずれも**現在時点のスナップショットしか
+                        # 取れず過去に遡れない**ため、使えばモデルが検証不能になる
+                        # (27.8)。銘柄あたり3回の追加APIコールを削れるので、
+                        # レート制限(8.3・14.9)にも効く。
+                    }
+                )
+            return payload
         except CollectionError:
             raise
         except Exception as exc:
@@ -144,7 +194,6 @@ def fetch_isin(symbol: str) -> str | None:
     `tickers.isin`未設定の銘柄に限って呼ぶ)。取得失敗は収集全体を失敗させない
     best-effortとし、リトライもしない。"""
     try:
-        _throttle()
         isin = yf.Ticker(symbol).get_isin()
     except Exception as exc:  # noqa: BLE001
         logger.debug("%s: failed to fetch ISIN: %s", symbol, exc)
@@ -176,7 +225,6 @@ def fetch_fx_rate(from_currency: str, to_currency: str) -> float | None:
             return _fx_rate_cache[cache_key]
 
     try:
-        _throttle()
         pair = yf.Ticker(f"{from_currency}{to_currency}=X")
         rate = pair.info.get("regularMarketPrice")
     except Exception as exc:  # noqa: BLE001
@@ -231,7 +279,6 @@ def fetch_latest_price(symbol: str, retry_config: RetryConfig) -> dict[str, Any]
     @_retrying(retry_config)
     def _call() -> dict[str, Any] | None:
         try:
-            _throttle()
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period="1mo", auto_adjust=False)
             if hist.empty:
@@ -333,7 +380,6 @@ def fetch_price_and_shares_history(
     @_retrying(retry_config)
     def _call() -> list[dict[str, Any]]:
         try:
-            _throttle()
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=period, auto_adjust=False)
             if hist.empty:

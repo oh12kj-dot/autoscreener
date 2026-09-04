@@ -12,11 +12,32 @@ from __future__ import annotations
 import datetime
 
 from autoscreener.collectors.litigation_source import (
+    EdgarFullTextSearchClient,
     LitigationHit,
     detect_litigation_mentions,
     fetch_litigation,
     parse_litigation_hits,
 )
+from autoscreener.collectors.rate_limit import get_shared_limiter
+
+_USER_AGENT = "TENX test <test@example.com>"
+
+
+# --- S-5監査(2026-09-04、daily_pipeline_throughput_plan_2026-09-04.md):-------
+# `EdgarFullTextSearchClient`は以前、専用の`RateLimiter`インスタンスを
+# 自分で持っていた——`collectors/rate_limit.py`のモジュールdocstringが
+# 名指しで警告している「プロセス内に複数のリミッターがあっても、SEC側から
+# 見れば1つの送信元」というanti-patternそのもの。litigationが逐次ループ
+# だった間は表面化しなかったが、S-5で並列化した結果、このステージの実効
+# レートを共有`sec`アカウンティングから見えない私設リミッターだけが
+# 決めている状態になっていた。
+
+
+def test_full_text_search_client_shares_the_sec_limiter_with_edgar_client():
+    """`EdgarClient`と同じ`get_shared_limiter("sec")`インスタンスを使うこと
+    (専用のprivateなRateLimiterを持たないこと)。"""
+    client = EdgarFullTextSearchClient(_USER_AGENT)
+    assert client._rate_limiter is get_shared_limiter("sec")
 
 # --- detect_litigation_mentions(Item 3 本文の正規表現抽出) ---------------------
 

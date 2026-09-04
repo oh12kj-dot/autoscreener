@@ -18,6 +18,20 @@ import datetime
 import logging
 from collections.abc import Iterable
 
+# 2026-09-04監査(daily_pipeline_throughput_plan_2026-09-04.md、S-1/S-4の
+# 同型欠陥のスイープで発見):この`import`は見た目上未使用に見えるが、
+# 副作用が目的である。`_install_http_throttle()`(S-1)は
+# `collectors/yfinance_client`が**importされた時点で**`yfinance.data.
+# YfData._make_request`をモンキーパッチする——プロセス起動時に自動で
+# 走る保証ではなく、このモジュールの側から明示的にimportして初めて効く。
+# 以前はここで`fetch_calendar()`が独立に`import yfinance as yf`していた
+# ため、`collectors.calendar_source`(延いては週次`events`工程、
+# `batch/collect_events.py`)だけを単体でimportする経路ではスロットルが
+# 一切入らず、`run-daily-pipeline`で偶然先に`yfinance_client`が
+# importされていたから安全に見えていただけだった(`collectors/consensus.py`
+# で見つかったのと同じ欠陥の別インスタンス)。
+from autoscreener.collectors import yfinance_client as _yfinance_client
+
 logger = logging.getLogger(__name__)
 
 _EARNINGS_KEYS = ("Earnings Date", "earningsDate", "Earnings High", "Earnings Low")
@@ -68,9 +82,12 @@ def fetch_calendar(symbol: str) -> dict | None:
     旧バージョンにも備えて dict へ正規化する。
     """
     try:
-        import yfinance as yf
-
-        calendar = yf.Ticker(symbol).calendar
+        # `_yfinance_client.yf`は`collectors/yfinance_client`が既に
+        # `import yfinance as yf`した参照の再利用(モジュール先頭のコメント
+        # 参照)。ここで独立に`import yfinance as yf`しないのは、そちらの
+        # 経路だと「モジュールをimportしただけではスロットルが入る保証が
+        # ない」という元の欠陥に戻ってしまうため。
+        calendar = _yfinance_client.yf.Ticker(symbol).calendar
     except Exception as exc:  # noqa: BLE001
         logger.debug("failed to fetch calendar for %s: %s", symbol, exc)
         return None

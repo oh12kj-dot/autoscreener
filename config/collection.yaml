@@ -8,7 +8,33 @@
 # 実際にこの負荷水準で発動することを確認したため、並列度を下げジッタを広げた。
 # (24.7:旧min_workersは実装のどこからも参照されない死んだ設定値だったため撤去。
 # 常にmax_workers固定で動作する)
-max_workers: 5
+#
+# S-8是正(2026-09-04、docs/daily_pipeline_throughput_plan_2026-09-04.md):
+# 上の8月23日の事故と矛盾するように見えるが、事故当時は**リミッターが実HTTP
+# レートを制限していなかった**——`_throttle()`は`fetch_raw_financials`等の
+# 呼び出し単位でしかacquireせず、1呼び出しが最大6本のHTTPを出すため、
+# ワーカー数がそのまま実HTTPレートに掛かっていた。並列8はYahooを本当に
+# 洪水攻撃していた。S-1(2026-09-04)でリミッターを実HTTPリクエスト境界
+# (`YfData._make_request`)へ移した後は、ワーカー数を上げても実HTTPレートは
+# `yfinance_requests_per_second`(6.0)を超えられない——ワーカー数が埋めるのは
+# 「天井の下で空いている時間」だけである。
+#
+# 実測(2026-09-04、5,799銘柄、並列5):collection は 0.945銘柄/秒
+# (=2.83 req/秒、天井6.0の47%)しか出ていなかった。ボトルネックはレートでは
+# なく、`run_parallel`が銘柄ごとに挟む1〜3秒(平均2.0秒)のジッタで、
+# ワーカー1本あたりの占有時間が5.29秒/銘柄になっていたこと(consensus は
+# ジッタが無いため同じ天井の96%まで使えている)。天井を使い切る2.0銘柄/秒に
+# 必要なワーカー数は 2.0 × 5.29 ≈ 10.6 → 10 に引き上げる。
+#
+# 結果として生じる実効レート(見込み約5.67 req/秒、天井の94%)は、
+# 2026-09-03以前に**数週間、日次で持続していた**6.34 req/秒(失敗率0.5%)
+# より低い。つまり未知の負荷水準に踏み込むわけではない。
+#
+# `max_workers`は`collect_consensus`(S-4)とも共有される設定値だが、
+# consensusは既に実効5.76 req/秒(天井の96%)まで使い切っており、ここに
+# ワーカーを足しても余地が無い。したがってこの引き上げの効果はcollection
+# にのみ生じ、consensusの所要時間は変わらない見込み。
+max_workers: 10
 
 # リクエスト間のジッタ(秒)。固定間隔だと逆にパターン検知されやすいため範囲を持たせる
 request_jitter_min_seconds: 1.0
@@ -17,7 +43,24 @@ request_jitter_max_seconds: 3.0
 # 2026-08-30:Yahooへの秒あたり上限(全ワーカー合計)。ジッタは「送信間隔を
 # 揺らす」ためのもので上限にはならない——Yahooが速く返すほど実効レートが
 # 上がってしまうため、天井をここで別に決める。
-yfinance_requests_per_second: 2.0
+#
+# 2026-09-04是正(S-1、docs/daily_pipeline_throughput_plan_2026-09-04.md):
+# 上の2.0は実効レートを表していなかった。旧`_throttle()`は`fetch_raw_financials`
+# 等の**呼び出し単位**でしかacquireしておらず、1回の呼び出しが出す実HTTPは
+# 最大6本(quoteSummary×1 + fundamentals-timeseries×5)。実測(2026-09-02、
+# `YfData._make_request`を計数)では実効HTTPレートが**6.34 req/秒**——
+# 名目上限の3.2倍で既に走っていた。リミッターを実HTTPリクエスト単位に
+# 是正した(`yfinance_client._install_http_throttle`)うえで、その実測値を
+# わずかに下回る6.0に設定し直す。これによりピークレートは今より下がる
+# (6.34→6.0)一方、以降の並列化(consensus・週次財務諸表の格下げ等)が
+# 「上限を超えない」ことが構造的に保証される。
+yfinance_requests_per_second: 6.0
+
+# S-7(2026-09-04、docs/daily_pipeline_throughput_plan_2026-09-04.md):
+# `event_calendar`の決算日を過ぎたティッカーは週次を待たず財務諸表を
+# 再取得する。この猶予日数(決算日+何日後まで再取得を試みるか)。
+# 3日程度あればyfinance側の反映ラグ(通常1〜2日)を吸収できる。
+statement_refresh_grace_days: 3
 
 retry:
   # TransientFailureのみ対象。PermanentFailure/ParseFailureはリトライしない(18.1)
@@ -47,6 +90,14 @@ edgar:
   # 上限の8割を1プロセスで使い切る設定には余裕が無く、実際に制限に触れた。
   # 個人利用のバッチで数分の差は問題にならないので、半分にして余裕を取る。
   requests_per_second: 5.0
+  # S-5(2026-09-04、docs/daily_pipeline_throughput_plan_2026-09-04.md):
+  # litigation/filing_sections/dilution/customer_concentrationの銘柄ループを
+  # 並列化する際のワーカー数。実測(litigation):299銘柄で実質0.26 req/秒
+  # ——設定上限5.0の5%しか使えていなかった。原因はレート制限ではなく
+  # **完全な逐次ループだったこと**。上限は`requests_per_second`側で効くので、
+  # ここを大きくしても実効レートは上がらない(1リクエストの往復時間が
+  # リミッターの間隔より長いぶんの「遊び」を埋めるだけ)。
+  max_workers: 10
   timeout_seconds: 30.0
   # 本文取得(going concern等の検出)を行うか。1銘柄あたり数MBの転送になるため、
   # 追跡対象銘柄(30.3.4)に限って実行する。

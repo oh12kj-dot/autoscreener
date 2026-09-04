@@ -6,9 +6,10 @@ import hashlib
 import json
 import logging
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from autoscreener.collectors.errors import (
@@ -24,10 +25,186 @@ from autoscreener.collectors.yfinance_client import (
     fetch_raw_financials,
 )
 from autoscreener.config import CollectionConfig
-from autoscreener.db.models import CollectionLog, PriceSnapshot, RawSnapshot, Ticker, TickerAlias
+from autoscreener.dates import WEEKLY_REFRESH_WEEKDAY
+from autoscreener.db.models import CollectionLog, EventCalendar, PriceSnapshot, RawSnapshot, Ticker, TickerAlias
 from autoscreener.validation.rules import detect_day_over_day_spike, validate_info
 
 logger = logging.getLogger(__name__)
+
+# S-2(daily_pipeline_throughput_plan_2026-09-04):`fetch_raw_financials`が
+# `include_statements=True`のときだけ返す財務諸表5キー。`apply_gates.py`
+# (`balance_sheet`・`quarterly_cash_flow`・`quarterly_income_stmt`)・
+# `api/routes.py`(同3キー)・`run_monitoring.py`(`quarterly_income_stmt`・
+# `quarterly_cash_flow`)がいずれも「`raw.payload`の最新1件」からこれらを
+# 読むため、取得しなかった日もキー集合を欠かさず、直近の値を持ち越す。
+_STATEMENT_KEYS = (
+    "quarterly_income_stmt",
+    "income_stmt",
+    "balance_sheet",
+    "cash_flow",
+    "quarterly_cash_flow",
+)
+
+# S-7(daily_pipeline_throughput_plan_2026-09-04.md、設計上の選択肢1):財務諸表を
+# 「本当に取得した日」を記録するキー。DDL無しでこれを実現する方法として、
+# `tickers`にカラムを足す案と、payloadに常設キーを1つ足す案を検討し後者を採る。
+# 理由:
+#   - payloadの形(キー集合)を変えないことがS-2で守った不変条件であり
+#     (`_carry_forward_statements`のdocstring参照)、後続の消費者
+#     (`apply_gates.py`・`api/routes.py`・`run_monitoring.py`)は全て
+#     `payload.get(specific_key)`でアクセスするため、キーを1つ増やすだけなら
+#     既存コードへの影響がゼロ(素通しされる)。
+#   - マイグレーションが要らない。今まさに本番の`run-daily-pipeline`が
+#     `collection`工程を実行中で、Alembicのマイグレーションは同じテーブル群に
+#     ロックを取るため実行できない(運用制約)。カラム追加案だと、マイグレー
+#     ションが適用されるまで本機能は一切効かない「書いたが使えない」状態が
+#     残る。
+# 値は`snapshot_date.isoformat()`(ISO文字列)。JSONBカラムへのバインドは
+# 標準の`json.dumps`を通るため、`date`オブジェクトのまま入れるとシリアライズに
+# 失敗する(他の日付列も`_df_to_json`で文字列化している理由と同じ)。
+_STATEMENTS_AS_OF_KEY = "_statements_as_of"
+
+
+def _carry_forward_statements(session: Session, ticker_id: int, payload: dict[str, Any]) -> None:
+    """財務諸表を取得しなかった日、直近の`raw_snapshots.payload`から
+    財務諸表5キーを持ち越して`payload`に差し込む(破壊的更新)。
+
+    **`payload`の形(キー集合)を日によって変えないことが目的。**
+    `apply_gates._gather_gate_input`は`available_from <= snapshot_date`の
+    最新1件を取るだけで、財務諸表を取得した日かどうかは見ない。財務諸表を
+    欠いた行が最新になるとゲートが静かに壊れる(欠損値=ゼロ扱いになる
+    項目がある)。持ち越し元が無ければ空dict(既存の`payload.get(key, {})`
+    フォールバックと同じ挙動)を入れる——真に何も無いよりは、少なくとも
+    キー自体は揃っている状態にする。
+    """
+    missing = [key for key in _STATEMENT_KEYS if key not in payload]
+    if not missing:
+        return
+    previous = (
+        session.query(RawSnapshot)
+        .filter(RawSnapshot.ticker_id == ticker_id)
+        .order_by(RawSnapshot.snapshot_date.desc())
+        .first()
+    )
+    previous_payload = previous.payload if previous is not None else {}
+    for key in missing:
+        payload[key] = previous_payload.get(key, {})
+    # S-7:`_statements_as_of`(財務諸表を実際に取得した日)も一緒に持ち越す。
+    # **ここを`snapshot_date`(=今日)で更新してはならない。** それをやると
+    # 「持ち越しただけの日」が「今日取得した日」と区別できなくなり、
+    # `_earnings_triggered_refetch`が「もう決算後の値に更新済み」と誤判定して
+    # 二度と再取得しなくなる(自己収束どころか永久に古いまま固定される)。
+    # 持ち越し元(前日以前の行)に無ければ None のまま——S-7導入前の行、または
+    # 初回収集で持ち越し元自体が無いケースで、その場合は「未取得」として扱う。
+    payload[_STATEMENTS_AS_OF_KEY] = previous_payload.get(_STATEMENTS_AS_OF_KEY)
+
+
+def _last_statements_fetch_date(session: Session, ticker_id: int) -> date | None:
+    """直近の`raw_snapshots.payload`から、財務諸表を実際に取得した日
+    (`_statements_as_of`)を読む。
+
+    無ければ None——S-7導入前に書かれた行(キー自体が無い)、`_statements_as_of`
+    がNoneのまま持ち越されてきた行(初回収集より前に遡る持ち越し元が無いケース)、
+    または`raw_snapshots`自体がまだ無い銘柄のいずれか。呼び出し側は「未取得」
+    として扱い、決算日を過ぎていれば再取得の対象にする。
+    """
+    previous = (
+        session.query(RawSnapshot)
+        .filter(RawSnapshot.ticker_id == ticker_id)
+        .order_by(RawSnapshot.snapshot_date.desc())
+        .first()
+    )
+    if previous is None:
+        return None
+    raw = previous.payload.get(_STATEMENTS_AS_OF_KEY)
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _earnings_triggered_refetch(
+    session: Session, ticker_id: int, snapshot_date: date, grace_days: int
+) -> bool:
+    """S-7(daily_pipeline_throughput_plan_2026-09-04.md):決算日を跨いだティッカーは
+    週次(月曜)を待たず財務諸表を再取得する。
+
+    **背景**:S-2で財務諸表を週次へ格下げした副作用として、決算が週の半ば
+    (火〜日)に出た銘柄は`apply_gates`への反映が最大6日遅れうる。実測(計画書
+    のS-2章・本節)では観測された統計諸表の全変化220件中75件(34%)が非月曜日に
+    発生しており、遅延は平均4.8日・最大6日。ゲート対象銘柄でも13銘柄が2週間の
+    観測期間中にこれで影響を受けた。決算発表の翌営業日こそ財務諸表が最も
+    変わりやすい日そのものであり、そこを取りこぼしているのが一番痛い。
+
+    **`event_calendar`は「次回決算日」であり、過ぎればそのまま過去日として
+    残り続ける点に注意**(週次`events`工程が次の日付に更新するまで)。これを
+    単純に「event_date <= snapshot_date なら毎日再取得」にすると、決算通過後
+    次の月曜が来るまで**毎日**再取得し続けてしまい、週次化(S-2)の効果を
+    自ら打ち消す。したがって「決算日から`grace_days`日以内」かつ「まだ猶予窓の
+    終わりまでの財務諸表を取得していない」の両方を要求する。
+
+    **なぜ決算日ちょうど1回だけの再取得では足りないか(`grace_days`既定3)**:
+    yfinanceのfundamentals-timeseriesは決算発表の反映に通常1〜2日ラグがある。
+    `event_date`当日だけを狙うと、発表直後の未更新値を掴んでしまい、その
+    未更新値のまま「取得済み」と判定されて次の月曜まで二度と試さない——
+    決算通過をトリガーにするという目的そのものが骨抜きになる。
+
+    **2026-09-04監査で発見した欠陥(修正済み)**:以前の実装は
+    `last_fetch < event_date`(=決算日そのものより前かどうか)で判定していた。
+    これだと`event_date`当日に1回fetchした瞬間`last_fetch == event_date`と
+    なって条件が偽になり、`grace_days`が何日でも**猶予窓は事実上1回で終わる**
+    ——ちょうど「決算日当日だけ狙って外す」失敗モードをそのまま再現していた。
+    正しくは、猶予窓の**終わり**(`event_date + grace_days`)より前かどうかで
+    判定する。これにより同じ決算に対して猶予窓の日数ぶん(既定4回:
+    E, E+1, E+2, E+3)fetchを試み続け、いつ反映されても取りこぼさない。
+
+    **それでも無限には続かない(自己収束、上のクエリのwhere句が担保する)**:
+    下のクエリは`event_date >= snapshot_date - grace_days`も要求しているため、
+    `snapshot_date > event_date + grace_days`になった時点で対象決算が
+    ヒットしなくなり(`latest_relevant_event_date is None`)、`grace_days`日を
+    超えて毎日再取得し続けることはない——次の月曜、または次に`events`工程が
+    新しい決算日を見つけるまで静かに黙る。
+
+    **コスト試算**:1日あたり決算日を迎えるティッカーは293銘柄中およそ5件
+    (293銘柄 ÷ 四半期91日換算)。それぞれ猶予窓の間(既定4日)毎日fetchする
+    ため、ある1日に「猶予窓の中にいる」ティッカーは重複込みで高々20件程度、
+    1銘柄あたり5リクエスト(財務諸表5本)なので日次+100本程度——S-2後の基準
+    17,397本/日の1%に満たない。
+
+    **「毎回同じ内容なら省略できないか」について**:猶予窓の間、決算が
+    未反映で前日と同じ財務諸表が返り続けるティッカーがいる。これを検知して
+    早期に諦めることは意図的にしない——フェッチしてみるまで「変わって
+    いないこと」自体が分からない(それを知るための手段がフェッチしかない)
+    うえ、最大4回/決算のコストは上のとおり無視できる水準であり、複雑さに
+    見合わない。
+    """
+    # 猶予窓 [snapshot_date - grace_days, snapshot_date] に入る決算日のうち
+    # 最新のものを見る。`event_calendar`は過去日も削除せず積み上がっていく
+    # ため(`collect_events._upsert_event`)、複数行がヒットしうる——その中で
+    # 最も新しい決算日を基準にしないと、古い決算日をとうに消化済みなのに
+    # 別の古い行に引っ張られて判定を誤る。このwhere句自体が「猶予窓を過ぎたら
+    # 対象決算がヒットしなくなる」という自己収束の担保でもある。
+    latest_relevant_event_date = (
+        session.query(func.max(EventCalendar.event_date))
+        .filter(
+            EventCalendar.ticker_id == ticker_id,
+            EventCalendar.event_type == "earnings",
+            EventCalendar.event_date <= snapshot_date,
+            EventCalendar.event_date >= snapshot_date - timedelta(days=grace_days),
+        )
+        .scalar()
+    )
+    if latest_relevant_event_date is None:
+        return False
+    last_fetch = _last_statements_fetch_date(session, ticker_id)
+    # **猶予窓の終わりと比べる(決算日そのものと比べない)。** 決算日当日に
+    # 1回fetchしただけで`last_fetch == event_date`になり、それを`event_date`
+    # と比べると窓の残り日数を無視して即座に「取得済み」扱いになってしまう
+    # (2026-09-04監査で発見・上のdocstring参照)。猶予窓の終わり
+    # (`event_date + grace_days`)より前なら、まだ窓の中でfetchを続ける。
+    return last_fetch is None or last_fetch < latest_relevant_event_date + timedelta(days=grace_days)
 
 
 def _content_hash(payload: dict[str, Any]) -> str:
@@ -280,8 +457,60 @@ def collect_one(
 
     ticker.last_attempted_at = datetime.now(UTC)
 
+    # S-2(daily_pipeline_throughput_plan_2026-09-04):財務諸表(5本の
+    # fundamentals-timeseries)は四半期に1度しか変わらないので、週次日
+    # (`WEEKLY_REFRESH_WEEKDAY`、`xbrl_facts`工程と同じ曜日)だけ取得する。
+    # 例外は2つ:
+    #   1. 持ち越し元(直近のraw_snapshot)が無い銘柄(新規上場・初回収集)は、
+    #      その日に取得しないと財務諸表が永久に空のままになるので週次日で
+    #      なくても取得する。
+    #   2. `delisted_at`が設定されている銘柄は、ISIN確認により別会社への
+    #      再割当て(14.5)が起こりうる。再割当て後の新しいticker_idには
+    #      持ち越し元が無いが、その判定はfetch後(info取得後)にしか
+    #      できないため、このケースは単純に「常に取得」にして持ち越しの
+    #      対象から外す(発生頻度が低く、復活検知自体が例外的なイベントの
+    #      ため、週次最適化の対象にしない)。
+    #
+    # **監査で指摘された副作用(2026-09-04、意図的に許容):**
+    # 財務諸表は週次(月曜)でしか更新されないため、決算が週の半ば(火〜日)に
+    # 出ても`apply_gates`に反映されるまで最大6日かかりうる。これは
+    # `xbrl_facts`工程(週次)で既に受け入れられている方針と同じで、計画が
+    # 明示的に許容したトレードオフである。
+    #
+    # 加えてS-2固有の副作用:`is_quarantined`(18.1)から週の半ばに復帰した
+    # 銘柄は、上の条件(delisted_atではなくquarantineは対象外)に該当しない
+    # ため`include_statements=False`になり、**隔離される前の(=quarantine期間
+    # ぶん古い)財務諸表をそのまま持ち越す**。S-2導入前は日次収集が毎回
+    # 財務諸表を丸ごと取り直していたため、復帰した日には必ず最新の値が
+    # 入っていた——ここは挙動が変わった箇所である。次の月曜まで最新化
+    # されない点も含め、後日この日のゲート判定を「古いデータで壊れている」
+    # と誤診しないよう、ここに明記しておく。
+    #
+    # S-7(2026-09-04、同計画書):上の副作用のうち「決算が週の半ばに出ると
+    # 最大6日遅れる」を実測した結果(観測220件中75件=34%が非月曜変化、平均
+    # 4.8日遅延・ゲート対象銘柄でも13銘柄が影響)、これを許容し続けるのは
+    # 危険と判断し追加の例外を導入した。
+    #   3. `event_calendar`の次回決算日を過ぎ、かつ猶予日数
+    #      (`statement_refresh_grace_days`)以内のティッカーは、週次日で
+    #      なくても財務諸表を取得する(`_earnings_triggered_refetch`。
+    #      自己収束の仕組み・猶予日数が必要な理由はそちらのdocstring参照)。
+    #      `event_calendar`に行が無いティッカー(追跡対象外)はこれまでどおり
+    #      週次のみで、それは意図した挙動(タスク仕様どおりカバレッジを
+    #      広げない)。
+    has_prior_snapshot = (
+        session.query(RawSnapshot.id).filter_by(ticker_id=ticker.id).first() is not None
+    )
+    include_statements = (
+        snapshot_date.weekday() == WEEKLY_REFRESH_WEEKDAY
+        or ticker.delisted_at is not None
+        or not has_prior_snapshot
+        or _earnings_triggered_refetch(
+            session, ticker.id, snapshot_date, collection_config.statement_refresh_grace_days
+        )
+    )
+
     try:
-        payload = fetch_raw_financials(symbol, collection_config.retry)
+        payload = fetch_raw_financials(symbol, collection_config.retry, include_statements=include_statements)
     except PermanentFailure as exc:
         ticker.delisted_at = datetime.now(UTC)
         _log(session, run_id, ticker.id, snapshot_date, "permanent_failure", {"error": str(exc)})
@@ -316,6 +545,19 @@ def collect_one(
         logger.warning("parse failure for %s: %s", symbol, exc)
         _log(session, run_id, ticker.id, snapshot_date, "parse_failure", {"error": str(exc)})
         return "parse_failure"
+
+    if not include_statements:
+        # `ticker.delisted_at is not None` の分岐では常に`include_statements`が
+        # Trueになる(上の判定条件)ため、ここに来る時点で`ticker`は再割当て
+        # されていない(=このticker_idの持ち越し元を安全に参照できる)。
+        _carry_forward_statements(session, ticker.id, payload)
+    else:
+        # S-7:財務諸表を実際に取得した日を刻む。ISO文字列にするのは
+        # `_STATEMENTS_AS_OF_KEY`の定義コメント参照(JSONBバインドが`date`を
+        # 直接扱えないため)。これが無いと`_earnings_triggered_refetch`は
+        # 「いつ最後に取得したか」を知る手段が無く、決算通過後も毎日
+        # 再取得し続けるか、逆に一度も再取得しないかのどちらかに壊れる。
+        payload[_STATEMENTS_AS_OF_KEY] = snapshot_date.isoformat()
 
     info = payload["info"]
     if ticker.delisted_at is not None:

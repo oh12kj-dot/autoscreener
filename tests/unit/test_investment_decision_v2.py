@@ -133,7 +133,7 @@ def test_consensus_conflict_is_isolated_and_recorded():
     class ConflictingProvider:
         name = "test-conflict"
 
-        def fetch(self, ticker, as_of):
+        def fetch(self, ticker, as_of, target_mean_price=None):
             common = dict(
                 observed_at=as_of,
                 source=self.name,

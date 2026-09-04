@@ -23,6 +23,7 @@ from collections.abc import Callable
 from sqlalchemy.orm import Session
 
 from autoscreener.batch.collect_filings import select_tracked_tickers
+from autoscreener.batch.parallel_runner import run_parallel_tickers
 from autoscreener.collectors.edgar_client import EdgarClient
 from autoscreener.collectors.errors import CollectionError, EmptyResponseError
 from autoscreener.config import get_settings, load_edgar_config
@@ -163,21 +164,68 @@ def _collect_from_xbrl(
         )
 
 
+def _process_ticker(session: Session, ticker_id: int, fetcher: XbrlFetcher, today: datetime.date) -> dict[str, int]:
+    """1銘柄ぶんの顧客集中度収集を専用セッションで行う(S-5:並列化のため
+    銘柄ごとに独立したセッションを使う)。"""
+    local = {"tickers": 1, "new_rows": 0, "existing": 0, "no_filing_sections": 0, "xbrl_not_reported": 0, "failures": 0}
+    ticker = session.get(Ticker, ticker_id)
+    if ticker is None:
+        return local
+    try:
+        _collect_from_text(session, ticker, today, local)
+    except CollectionError:
+        logger.exception("%s: concentration text collection failed", ticker.symbol)
+        local["failures"] += 1
+        return local
+
+    try:
+        _collect_from_xbrl(session, ticker, fetcher, today, local)
+    except EmptyResponseError:
+        # This optional company-concept tag is absent for most issuers.
+        # Its 404 must not discard disclosures recovered from filing text.
+        local["xbrl_not_reported"] += 1
+    except CollectionError:
+        logger.exception("%s: concentration XBRL collection failed", ticker.symbol)
+        local["failures"] += 1
+    return local
+
+
 def collect_concentration(
     symbols: list[str] | None = None,
     *,
     limit: int = _DEFAULT_TICKER_LIMIT,
     xbrl_fetcher: XbrlFetcher | None = None,
+    max_workers: int | None = None,
 ) -> dict[str, int]:
     """`filing_sections`(本文)とXBRLの両方から顧客集中を抽出し、
     `customer_concentration` に upsert する。
+
+    S-5(daily_pipeline_throughput_plan_2026-09-04):以前は`for ticker in
+    tickers:`の完全な逐次ループだった。銘柄ごとに独立したセッションを開いて
+    共有`sec`リミッター配下で並列化する——上限自体は動かさない。
 
     戻り値: {"tickers", "new_rows", "existing", "no_filing_sections", "failures"}。
     `CollectionError` 系の例外は銘柄単位で握って次へ進む(全体を止めない)。
     """
     today = utc_today()
     fetcher = xbrl_fetcher or _default_xbrl_fetcher()
-    counts = {
+
+    with session_scope() as session:
+        if symbols:
+            ticker_ids = [
+                row[0]
+                for row in session.query(Ticker.id).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
+            ]
+        else:
+            ticker_ids = [t.id for t in select_tracked_tickers(session, limit=limit)]
+
+    config = load_edgar_config()
+    counts = run_parallel_tickers(
+        ticker_ids,
+        lambda session, ticker_id: _process_ticker(session, ticker_id, fetcher, today),
+        max_workers=max_workers or config.max_workers,
+    )
+    zeros = {
         "tickers": 0,
         "new_rows": 0,
         "existing": 0,
@@ -185,31 +233,4 @@ def collect_concentration(
         "xbrl_not_reported": 0,
         "failures": 0,
     }
-
-    with session_scope() as session:
-        if symbols:
-            tickers = session.query(Ticker).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
-        else:
-            tickers = select_tracked_tickers(session, limit=limit)
-
-        for ticker in tickers:
-            counts["tickers"] += 1
-            try:
-                _collect_from_text(session, ticker, today, counts)
-            except CollectionError:
-                logger.exception("%s: concentration text collection failed", ticker.symbol)
-                counts["failures"] += 1
-                continue
-
-            try:
-                _collect_from_xbrl(session, ticker, fetcher, today, counts)
-            except EmptyResponseError:
-                # This optional company-concept tag is absent for most issuers.
-                # Its 404 must not discard disclosures recovered from filing text.
-                counts["xbrl_not_reported"] += 1
-            except CollectionError:
-                logger.exception("%s: concentration XBRL collection failed", ticker.symbol)
-                counts["failures"] += 1
-                continue
-
-    return counts
+    return {**zeros, **counts}

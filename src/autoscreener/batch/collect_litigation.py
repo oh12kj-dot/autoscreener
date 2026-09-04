@@ -24,6 +24,7 @@ from collections.abc import Callable
 from sqlalchemy.orm import Session
 
 from autoscreener.batch.collect_filings import select_tracked_tickers
+from autoscreener.batch.parallel_runner import run_parallel_tickers
 from autoscreener.collectors.litigation_source import (
     LITIGATION_QUERY_PHRASES,
     EdgarFullTextSearchClient,
@@ -134,11 +135,47 @@ def _default_fetcher() -> LitigationFetcher | None:
     return _fetch
 
 
+def _process_ticker(
+    session: Session, ticker_id: int, active_fetcher: LitigationFetcher | None
+) -> dict[str, int]:
+    """1銘柄ぶんの訴訟収集を専用セッションで行う(S-5:並列化のため銘柄ごとに
+    独立したセッションを使う——SQLAlchemyのSessionはスレッドセーフではない、
+    `batch/run_daily_collection.py`のworkerと同じ理由)。"""
+    local = {"tickers": 1, "new_events": 0, "existing": 0, "failures": 0}
+    ticker = session.get(Ticker, ticker_id)
+    if ticker is None:
+        return local
+    try:
+        found_kinds = _collect_from_item3(session, ticker, collected_on=utc_today(), counts=local)
+
+        missing_kinds = frozenset(LITIGATION_QUERY_PHRASES) - found_kinds
+        if missing_kinds and active_fetcher is not None:
+            hits = active_fetcher(ticker, missing_kinds)
+            for hit in hits:
+                created = _upsert(
+                    session,
+                    ticker.id,
+                    kind=hit.kind,
+                    title=hit.title,
+                    event_date=hit.event_date,
+                    detail=hit.detail,
+                    source_url=hit.source_url,
+                    source_accession=hit.source_accession,
+                    collected_on=utc_today(),
+                )
+                local["new_events" if created else "existing"] += 1
+    except Exception:
+        logger.exception("%s: litigation collection failed", ticker.symbol)
+        local["failures"] += 1
+    return local
+
+
 def collect_litigation(
     symbols: list[str] | None = None,
     *,
     limit: int = _DEFAULT_LIMIT,
     fetcher: LitigationFetcher | None = None,
+    max_workers: int | None = None,
 ) -> dict[str, int]:
     """追跡対象銘柄の訴訟・SEC調査・ショートレポートを収集し `litigation_events`
     へ upsert する。
@@ -147,43 +184,29 @@ def collect_litigation(
     `_default_fetcher()` が組み立てるEDGAR全文検索クライアント。
     `EDGAR_USER_AGENT` 未設定ならItem3経路のみで動作する)。
 
+    S-5(daily_pipeline_throughput_plan_2026-09-04):以前は
+    `for ticker in tickers:` の完全な逐次ループだった(実測:299銘柄で
+    実質0.26 req/秒、設定上限5.0の5%)。銘柄ごとに独立したセッションを
+    開いて共有`sec`リミッター配下で並列化する——上限自体は動かさない。
+
     戻り値は {"tickers": n, "new_events": n, "existing": n, "failures": n}。
     """
     config = load_edgar_config()
-    counts = {"tickers": 0, "new_events": 0, "existing": 0, "failures": 0}
-
     active_fetcher = fetcher if fetcher is not None else (_default_fetcher() if config.enabled else None)
 
     with session_scope() as session:
         if symbols:
-            tickers = session.query(Ticker).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
+            ticker_ids = [
+                row[0]
+                for row in session.query(Ticker.id).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
+            ]
         else:
-            tickers = select_tracked_tickers(session, limit=limit)
+            ticker_ids = [t.id for t in select_tracked_tickers(session, limit=limit)]
 
-        for ticker in tickers:
-            counts["tickers"] += 1
-            try:
-                found_kinds = _collect_from_item3(session, ticker, collected_on=utc_today(), counts=counts)
-
-                missing_kinds = frozenset(LITIGATION_QUERY_PHRASES) - found_kinds
-                if missing_kinds and active_fetcher is not None:
-                    hits = active_fetcher(ticker, missing_kinds)
-                    for hit in hits:
-                        created = _upsert(
-                            session,
-                            ticker.id,
-                            kind=hit.kind,
-                            title=hit.title,
-                            event_date=hit.event_date,
-                            detail=hit.detail,
-                            source_url=hit.source_url,
-                            source_accession=hit.source_accession,
-                            collected_on=utc_today(),
-                        )
-                        counts["new_events" if created else "existing"] += 1
-            except Exception:
-                logger.exception("%s: litigation collection failed", ticker.symbol)
-                counts["failures"] += 1
-                continue
-
-    return counts
+    counts = run_parallel_tickers(
+        ticker_ids,
+        lambda session, ticker_id: _process_ticker(session, ticker_id, active_fetcher),
+        max_workers=max_workers or config.max_workers,
+    )
+    zeros = {"tickers": 0, "new_events": 0, "existing": 0, "failures": 0}
+    return {**zeros, **counts}

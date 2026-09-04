@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+
+from sqlalchemy.orm import Session
 
 from autoscreener.collectors.rate_limit import configure_shared_limiter
 from autoscreener.config import CollectionConfig
@@ -206,3 +209,46 @@ def run_parallel(
             )
         )
     return status_counts
+
+
+def run_parallel_tickers(
+    ticker_ids: list[int],
+    worker_fn: Callable[[Session, int], dict[str, int]],
+    max_workers: int,
+) -> dict[str, int]:
+    """EDGAR系工程(litigation/filing_sections/dilution/customer_concentration)
+    向けの軽量並列実行(S-5、docs/daily_pipeline_throughput_plan_2026-09-04.md)。
+
+    `run_parallel`(yfinance収集向け、`CollectionConfig`のジッタ・サーキット
+    ブレーカーを要する)とは別に用意する。EDGAR側は共有`sec`リミッター
+    (`collectors/rate_limit.py`)が既にHTTPリクエスト単位で秒間上限を守って
+    おり、ここが遅かったのはレート制限ではなく**単に並列度がゼロ
+    (完全な逐次ループ)だったから**(実測:litigationは299銘柄で実質
+    0.26 req/秒、設定上限5.0の5%しか使えていなかった)。余っている枠を
+    並列化で使い切るだけなので、上限(`edgar.requests_per_second`)は
+    触らない。ジッタもサーキットブレーカーも、SEC側の障害検知は
+    `EdgarClient._apply_server_backoff`(429/503のRetry-After・403の遮断で
+    全体を止める)が既に別の層で持っているため、ここでは不要。
+
+    SQLAlchemyの`Session`はスレッドセーフではないため、銘柄ごとに専用の
+    `session_scope()`を開く(`run_daily_collection.py`のworkerと同じ理由)。
+    `worker_fn`は`(session, ticker_id)`を受け取り、その銘柄ぶんの件数辞書
+    (例:`{"tickers": 1, "new_events": 2, "failures": 0}`)を返す——
+    呼び出し元がキー単位で合算する。
+    """
+    totals: dict[str, int] = {}
+    totals_lock = threading.Lock()
+
+    def _run(ticker_id: int) -> None:
+        with session_scope() as session:
+            result = worker_fn(session, ticker_id)
+        with totals_lock:
+            for key, value in result.items():
+                totals[key] = totals.get(key, 0) + value
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_run, ticker_id) for ticker_id in ticker_ids]
+        for future in as_completed(futures):
+            future.result()  # ワーカー内の想定外の例外はここで再送出する
+
+    return totals

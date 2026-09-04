@@ -24,6 +24,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from autoscreener.batch.collect_filings import select_tracked_tickers
+from autoscreener.batch.parallel_runner import run_parallel_tickers
 from autoscreener.collectors.edgar_client import EdgarClient, filing_file_url
 from autoscreener.collectors.errors import CollectionError
 from autoscreener.collectors.filing_text import split_sections
@@ -211,12 +212,87 @@ def _process_foreign_filing(session: Session, ticker: Ticker, filing: Filing,
         counts["new_sections"] += 1
 
 
+def _process_ticker(
+    session: Session, ticker_id: int, source: SectionSource, today: Any, target_forms: set[str]
+) -> dict[str, int]:
+    """1銘柄ぶんの本文切り出しを専用セッションで行う(S-5:並列化のため
+    銘柄ごとに独立したセッションを使う)。"""
+    local = {
+        "tickers": 1,
+        "new_sections": 0,
+        "existing": 0,
+        "not_found": 0,
+        "no_ex99": 0,
+        "skipped_no_url": 0,
+        "failures": 0,
+    }
+    ticker = session.get(Ticker, ticker_id)
+    if ticker is None:
+        return local
+    try:
+        if "10-K" in target_forms:
+            latest_10k = (
+                session.query(Filing)
+                .filter_by(ticker_id=ticker.id, form="10-K")
+                .order_by(Filing.filed_date.desc())
+                .first()
+            )
+            if latest_10k is not None:
+                _process_body_filing(session, ticker, latest_10k, source, today, local)
+
+        if "10-Q" in target_forms:
+            latest_10q = (
+                session.query(Filing)
+                .filter_by(ticker_id=ticker.id, form="10-Q")
+                .order_by(Filing.filed_date.desc())
+                .first()
+            )
+            if latest_10q is not None:
+                _process_body_filing(session, ticker, latest_10q, source, today, local)
+
+        if "8-K" in target_forms:
+            eightk_filings = (
+                session.query(Filing)
+                .filter_by(ticker_id=ticker.id, form="8-K")
+                .order_by(Filing.filed_date.desc())
+                .limit(_MAX_8K_PER_TICKER)
+                .all()
+            )
+            for filing in eightk_filings:
+                if "2.02" not in (filing.items or []):
+                    continue
+                _process_ex99_filing(session, ticker, filing, source, today, local)
+
+        if "DEF 14A" in target_forms:
+            latest_proxy = (
+                session.query(Filing)
+                .filter_by(ticker_id=ticker.id, form="DEF 14A")
+                .order_by(Filing.filed_date.desc())
+                .first()
+            )
+            if latest_proxy is not None:
+                _process_proxy_filing(session, ticker, latest_proxy, source, today, local)
+
+        for foreign_form in ("20-F", "40-F", "6-K"):
+            if foreign_form not in target_forms:
+                continue
+            filings = (session.query(Filing).filter_by(ticker_id=ticker.id, form=foreign_form)
+                .order_by(Filing.filed_date.desc()).limit(_MAX_8K_PER_TICKER if foreign_form == "6-K" else 1).all())
+            for filing in filings:
+                _process_foreign_filing(session, ticker, filing, source, today, local)
+    except CollectionError:
+        logger.exception("%s: filing section collection failed", ticker.symbol)
+        local["failures"] += 1
+    return local
+
+
 def collect_filing_sections(
     symbols: list[str] | None = None,
     *,
     limit: int = 300,
     forms: set[str] | None = None,
     fetcher: SectionSource | None = None,
+    max_workers: int | None = None,
 ) -> dict[str, int]:
     """追跡対象銘柄の直近10-K・最新10-Q・決算発表8-KのEX-99添付をItem単位で
     `filing_sections` に保存する。
@@ -230,13 +306,33 @@ def collect_filing_sections(
     - `CollectionError` 系の例外は**銘柄単位**で握って次のティッカーへ進む
       (1銘柄の失敗で全体を止めない)。
 
+    S-5(daily_pipeline_throughput_plan_2026-09-04):以前は`for ticker in
+    tickers:`の完全な逐次ループだった。銘柄ごとに独立したセッションを開いて
+    共有`sec`リミッター配下で並列化する——上限自体は動かさない。
+
     戻り値: {"tickers", "new_sections", "existing", "not_found", "no_ex99",
     "skipped_no_url", "failures"}。
     """
     target_forms = forms or _DEFAULT_FORMS
     source = fetcher or _default_source()
     today = utc_today()
-    counts = {
+
+    with session_scope() as session:
+        if symbols:
+            ticker_ids = [
+                row[0]
+                for row in session.query(Ticker.id).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
+            ]
+        else:
+            ticker_ids = [t.id for t in select_tracked_tickers(session, limit=limit)]
+
+    config = load_edgar_config()
+    counts = run_parallel_tickers(
+        ticker_ids,
+        lambda session, ticker_id: _process_ticker(session, ticker_id, source, today, target_forms),
+        max_workers=max_workers or config.max_workers,
+    )
+    zeros = {
         "tickers": 0,
         "new_sections": 0,
         "existing": 0,
@@ -245,69 +341,4 @@ def collect_filing_sections(
         "skipped_no_url": 0,
         "failures": 0,
     }
-
-    with session_scope() as session:
-        if symbols:
-            tickers = session.query(Ticker).filter(Ticker.symbol.in_([s.upper() for s in symbols])).all()
-        else:
-            tickers = select_tracked_tickers(session, limit=limit)
-
-        for ticker in tickers:
-            counts["tickers"] += 1
-            try:
-                if "10-K" in target_forms:
-                    latest_10k = (
-                        session.query(Filing)
-                        .filter_by(ticker_id=ticker.id, form="10-K")
-                        .order_by(Filing.filed_date.desc())
-                        .first()
-                    )
-                    if latest_10k is not None:
-                        _process_body_filing(session, ticker, latest_10k, source, today, counts)
-
-                if "10-Q" in target_forms:
-                    latest_10q = (
-                        session.query(Filing)
-                        .filter_by(ticker_id=ticker.id, form="10-Q")
-                        .order_by(Filing.filed_date.desc())
-                        .first()
-                    )
-                    if latest_10q is not None:
-                        _process_body_filing(session, ticker, latest_10q, source, today, counts)
-
-                if "8-K" in target_forms:
-                    eightk_filings = (
-                        session.query(Filing)
-                        .filter_by(ticker_id=ticker.id, form="8-K")
-                        .order_by(Filing.filed_date.desc())
-                        .limit(_MAX_8K_PER_TICKER)
-                        .all()
-                    )
-                    for filing in eightk_filings:
-                        if "2.02" not in (filing.items or []):
-                            continue
-                        _process_ex99_filing(session, ticker, filing, source, today, counts)
-
-                if "DEF 14A" in target_forms:
-                    latest_proxy = (
-                        session.query(Filing)
-                        .filter_by(ticker_id=ticker.id, form="DEF 14A")
-                        .order_by(Filing.filed_date.desc())
-                        .first()
-                    )
-                    if latest_proxy is not None:
-                        _process_proxy_filing(session, ticker, latest_proxy, source, today, counts)
-
-                for foreign_form in ("20-F", "40-F", "6-K"):
-                    if foreign_form not in target_forms:
-                        continue
-                    filings = (session.query(Filing).filter_by(ticker_id=ticker.id, form=foreign_form)
-                        .order_by(Filing.filed_date.desc()).limit(_MAX_8K_PER_TICKER if foreign_form == "6-K" else 1).all())
-                    for filing in filings:
-                        _process_foreign_filing(session, ticker, filing, source, today, counts)
-            except CollectionError:
-                logger.exception("%s: filing section collection failed", ticker.symbol)
-                counts["failures"] += 1
-                continue
-
-    return counts
+    return {**zeros, **counts}

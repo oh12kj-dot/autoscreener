@@ -160,6 +160,16 @@ class CollectionConfig(BaseModel):
     # 制限に触れた瞬間から急に失敗が増える、という一番まずい形になっていた。
     # ワーカー数とジッタ(実測で調整済み)はそのままに、秒あたりの天井を足す。
     yfinance_requests_per_second: float = Field(gt=0, default=2.0)
+    # S-7(2026-09-04、docs/daily_pipeline_throughput_plan_2026-09-04.md):
+    # S-2で財務諸表を週次(月曜)へ格下げした副作用として、決算が週の半ばに
+    # 出ると`apply_gates`への反映が最大6日遅れる(実測:非月曜変化75/220件、
+    # 平均4.8日遅延)。`event_calendar`の次回決算日を過ぎたティッカーは、
+    # 週次を待たずに財務諸表を再取得する。この値は「決算日から何日後まで
+    # 再取得を試み続けるか」の猶予日数——yfinanceのfundamentals-timeseriesは
+    # 決算発表の反映に1〜2日ラグがあるため、決算日当日1回だけでは
+    # 発表前の古い値を掴んで終わってしまう(`snapshot_collector.py`の
+    # `_earnings_triggered_refetch`docstring参照)。0にすると決算日当日のみ。
+    statement_refresh_grace_days: int = Field(ge=0, default=3)
     retry: RetryConfig
     circuit_breaker: CircuitBreakerConfig
     quarantine: QuarantineConfig
@@ -772,6 +782,14 @@ class EdgarConfig(BaseModel):
     # ときに、SEC向けリクエスト**全体**を止める秒数。個別リクエストのバックオフ
     # (`retry`)とは別物で、こちらは残りの銘柄が叩き続けるのを防ぐためにある。
     throttle_cooldown_seconds: float = Field(gt=0, default=60.0)
+    # S-5(2026-09-04、docs/daily_pipeline_throughput_plan_2026-09-04.md):
+    # litigation/filing_sections/dilution/customer_concentrationの銘柄ループを
+    # 並列化する際のワーカー数。実効レートの上限は共有`sec`リミッター
+    # (`requests_per_second`)側で効くので、これを大きくしても実効レートは
+    # 上がらない——1リクエストの往復時間(ネットワークレイテンシ)がリミッター
+    # の間隔より長いと並列度1では間隔いっぱいに送信できず遊びが生じる。
+    # その遊びを埋めるだけの値であり、レート上限を動かす設定ではない。
+    max_workers: int = Field(gt=0, default=10)
     retry: EdgarRetryConfig
 
 

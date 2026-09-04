@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from autoscreener.api.main import app
 from autoscreener.config import load_scoring_config
-from autoscreener.db.models import RawSnapshot, Score, Ticker, UniverseSnapshot
+from autoscreener.db.models import CollectionLog, RawSnapshot, Score, Ticker, UniverseSnapshot
 from autoscreener.db.session import session_scope
 
 client = TestClient(app)
@@ -30,6 +30,25 @@ def _cleanup(symbols: list[str]) -> None:
     with session_scope() as session:
         tickers = session.query(Ticker).filter(Ticker.symbol.in_(symbols)).all()
         for t in tickers:
+            # 2026-09-04監査で発見:この`_cleanup`は`collection_logs`だけを
+            # 消しておらず、`session.delete(t)`が
+            # `collection_logs_ticker_id_fkey`で散発的に落ちていた。他の
+            # 子テーブル(scores/universe_snapshots/raw_snapshots)は消して
+            # いたので、単純な消し忘れである。
+            #
+            # **原因についての注記(誤診を残さないため)。** 発見当時
+            # 「共有Postgresで動いている日次パイプラインがこの`ZZT2*`を
+            # 収集対象に拾い、本物の`collection_logs`行を書いた」と説明されたが、
+            # **それは起こりえない**。`batch/daily_pipeline.py` は収集工程に
+            # 入る前に `select_collectable_symbols()` で対象シンボルを**一度
+            # 確定させてから** `run_daily_collection(symbols, ...)` に渡す。
+            # 工程開始後に作られたティッカーはそのリストに入らない
+            # (実際、当日の`collection_logs`のrun_idは1つだけで、ZZ*の行は
+            # 0件だった)。実際の引き金は、同じDBに対して**pytestを同時に
+            # 2本走らせた**こと——共有の`ZZ*`シンボルを取り合って散発的に
+            # 壊れる。テストを並行実行しないこと自体が前提だが、消し忘れは
+            # それとは独立の欠陥なので、ここで直しておく。
+            session.query(CollectionLog).filter_by(ticker_id=t.id).delete()
             session.query(Score).filter_by(ticker_id=t.id).delete()
             session.query(UniverseSnapshot).filter_by(ticker_id=t.id).delete()
             session.query(RawSnapshot).filter_by(ticker_id=t.id).delete()
