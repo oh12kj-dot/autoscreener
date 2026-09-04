@@ -190,17 +190,29 @@ def evaluate_objectives(distribution: dict, config: ObjectivesConfig, *, horizon
             drawdown_lambda = definition.drawdown_lambda or 0.0
             permanent_loss_lambda = definition.permanent_loss_lambda or 0.0
             uncertainty_lambda = definition.uncertainty_lambda or 0.0
-            # DDExcess and P(PermanentLoss) are `unavailable` in the
-            # distribution contract (no path simulation / competing-risk
-            # model yet -- see distribution.py's WP-B additions). They
-            # are computed as exactly 0 here, which is *not* the same
-            # claim as "distribution.py reports 0 risk": the distribution
-            # fields themselves stay None+reason. `omitted_terms` below
-            # exists specifically so this score is never misread as
-            # "already risk-adjusted for drawdown/permanent loss" -- per
-            # the plan's explicit requirement that this must not be papered
-            # over.
-            dd_excess = 0.0
+            # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): DDExcess is
+            # now read directly from the distribution -- estimated by
+            # `path_risk.estimate_path_risk` from the ticker's own realized
+            # price history (block-bootstrap historical simulation), never
+            # from this ticker's V4 seed mu/sigma. When path risk is itself
+            # `unavailable` for this ticker (insufficient price history),
+            # the term is priced as exactly 0 -- the same "omit, don't
+            # fabricate" convention `ten_bagger`/`risk_adjusted` already use
+            # elsewhere for a missing input, *not* a claim that this
+            # ticker's drawdown risk is zero. `omitted_terms` below is only
+            # populated when this ticker's own DDExcess could not be
+            # measured, so a universe-wide "drawdown" placeholder no longer
+            # appears on every ticker regardless of data availability.
+            dd_excess = distribution.get("expected_drawdown_excess_35")
+            dd_excess_unavailable = dd_excess is None
+            if dd_excess_unavailable:
+                dd_excess = 0.0
+            # P(PermanentLoss) stays unavailable regardless of path risk --
+            # it requires the cause-classified competing-risk/recovery
+            # model (WP-F2), a distinct, still-unimplemented quantity. The
+            # distribution's own `p_permanent_loss` field stays None+reason
+            # (distribution.py); computed as exactly 0 here for the same
+            # "omit, don't fabricate" reason as above.
             p_permanent_loss = 0.0
             model_confidence = distribution.get("model_confidence") or 0.0
             # ModelUncertainty (audit §5.2: "CE CAGR推定標準誤差を半分控除",
@@ -248,10 +260,25 @@ def evaluate_objectives(distribution: dict, config: ObjectivesConfig, *, horizon
                 "drawdown_lambda": drawdown_lambda,
                 "permanent_loss_lambda": permanent_loss_lambda,
                 "uncertainty_lambda": uncertainty_lambda,
-                # Required by the plan (B-3): must always be present while
-                # drawdown/permanent-loss remain unavailable, so nothing
-                # downstream can read this score as risk-complete.
-                "omitted_terms": ["drawdown", "permanent_loss"],
+                # WP-F1: "drawdown" no longer sits in this list
+                # unconditionally -- DDExcess is now a real, per-ticker
+                # quantity for any ticker with enough realized price
+                # history (path_risk.py). It reappears here only for the
+                # specific tickers whose own path-risk estimate came back
+                # `unavailable` (insufficient history), so this score is
+                # never misread as risk-adjusted-for-drawdown when that
+                # ticker's own DDExcess was priced as a fallback 0, not
+                # measured. "permanent_loss" stays unconditionally: WP-F2
+                # (cause-classified competing-risk/recovery model) is not
+                # implemented for any ticker yet.
+                "omitted_terms": (
+                    ["drawdown", "permanent_loss"] if dd_excess_unavailable
+                    else ["permanent_loss"]
+                ),
+                "dd_excess_unavailable_reason": (
+                    distribution.get("expected_max_drawdown_unavailable_reason")
+                    if dd_excess_unavailable else None
+                ),
             }
         else:
             results[name] = ObjectiveResult(name, "unsupported", None, {"reason": "objective_requires_later_phase_inputs"})

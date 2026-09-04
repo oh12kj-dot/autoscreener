@@ -47,16 +47,24 @@ objectives:
   # `failure_lambda` prices failure frequency as its own separate term --
   # see `ObjectiveDefinition.failure_lambda` in config.py for why this is
   # not the same field as `permanent_loss_lambda`.
+  # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): DDExcess is now live,
+  # estimated from realized price history (path_risk.py's block-bootstrap
+  # historical simulation), never from the V4 seed's mu/sigma -- see that
+  # module's docstring for why that independence matters. `drawdown_lambda`
+  # now multiplies a real, per-ticker DDExcess instead of an explicit 0.
+  # `permanent_loss_lambda` stays multiplying 0 -- `p_permanent_loss` is
+  # unrelated work (WP-F2, blocked on delisting cause/settlement coverage).
   risk_adjusted_compounding:
     enabled: true
     description: >-
       Certainty-equivalent CAGR less tail-loss (conditional on survival),
-      failure-frequency, drawdown, permanent-loss, and model-uncertainty
-      penalties (shadow; default_objective stays ten_bagger until
-      promotion). Drawdown and permanent-loss terms are currently omitted
-      (unavailable) -- see explanation.omitted_terms on every scored
-      ticker. Contract version v5.racr2: RACR values are not comparable
-      across contract versions (see docs/racr_wp_b2_risk_terms_2026-09-04.md).
+      failure-frequency, drawdown (from realized price history), permanent-
+      loss, and model-uncertainty penalties (shadow; default_objective
+      stays ten_bagger until promotion). The permanent-loss term is
+      currently omitted (unavailable) -- see explanation.omitted_terms on
+      every scored ticker. Contract version v5.racr3: RACR values are not
+      comparable across contract versions (see
+      docs/racr_wp_f1_path_risk_2026-09-04.md).
     tail_lambda: 0.35
     failure_lambda: 0.20
     drawdown_lambda: 0.10

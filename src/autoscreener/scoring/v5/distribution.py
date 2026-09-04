@@ -6,6 +6,7 @@ import math
 from statistics import NormalDist
 
 from autoscreener.scoring.moic import MoicResult
+from autoscreener.scoring.v5.path_risk import PathRiskResult
 from autoscreener.scoring.v5.scenario import ReturnScenario
 
 _NORMAL = NormalDist()
@@ -251,19 +252,34 @@ def unavailable_distribution(*, target_moic: float, confidence: float) -> dict:
         # duplicating the not-implemented reason under a different status
         # would obscure which condition actually applies.
         "p_permanent_loss": None, "p_permanent_loss_unavailable_reason": None,
+        # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): path-risk fields
+        # are now implemented (see ``path_risk.py``/``scenario_distribution``
+        # below), but an *unavailable* base distribution has no MoicResult
+        # to build price-independent context from at all -- consistent with
+        # every other field in this function, an unavailable distribution
+        # reports these as None too, reason left None (the top-level
+        # ``status: "unavailable"`` is already the operative reason, same
+        # convention as ``p_permanent_loss`` above).
         "expected_max_drawdown": None, "expected_max_drawdown_unavailable_reason": None,
         "p_mdd_above_30": None, "p_mdd_above_30_unavailable_reason": None,
         "p_mdd_above_50": None, "p_mdd_above_50_unavailable_reason": None,
         "p_mdd_above_70": None, "p_mdd_above_70_unavailable_reason": None,
+        "expected_drawdown_excess_35": None, "expected_drawdown_excess_35_unavailable_reason": None,
         "recovery_time_median": None, "recovery_time_median_unavailable_reason": None,
+        "recovery_time_p90": None, "recovery_time_p90_unavailable_reason": None,
+        "path_risk_method": None, "path_risk_horizon_years": None,
+        "path_risk_observations_used": None, "path_risk_simulations": None,
     }
     return {
-        "contract_version": "v5.racr2", "status": "unavailable",
+        "contract_version": "v5.racr3", "status": "unavailable",
         "distribution_family": None,
         "source_model_version": "v4_structural_seed",
         "target_moic": target_moic, "model_confidence": confidence,
         "scenarios": [], **fields,
     }
+
+
+_PATH_RISK_NOT_PROVIDED_REASON = "path_simulation_not_provided"
 
 
 def scenario_distribution(
@@ -274,6 +290,7 @@ def scenario_distribution(
     confidence: float,
     sigma_multiplier: float = 1.0,
     left_tail_extra: float = 0.0,
+    path_risk: PathRiskResult | None = None,
 ) -> dict:
     """Return the full Phase 2 contract, including failure mass and ES10.
 
@@ -288,6 +305,17 @@ def scenario_distribution(
     signal -- needed to stop ``ten_bagger`` from mechanically rewarding
     that widening (see docs/model_v5_phase10_*.md). Purely additive: no
     existing field's value changes because of these two parameters.
+
+    ``path_risk`` (WP-F1, docs/racr_wp_f1_path_risk_2026-09-04.md) is a
+    ``path_risk.PathRiskResult`` computed *outside* this function, from a
+    ticker's own realized ``price_snapshots`` history -- never derived from
+    ``scenarios``/``survival`` (see path_risk.py's module docstring for why
+    that independence is the entire point of this work package).
+    ``None`` (the default) means the caller did not attempt a price-history
+    estimate at all, reported as ``path_simulation_not_provided`` --
+    distinct from a real attempt that came back ``unavailable`` (e.g.
+    ``insufficient_price_history``), which is reported using that
+    ``PathRiskResult``'s own reason.
     """
     if not scenarios:
         return unavailable_distribution(
@@ -352,19 +380,24 @@ def scenario_distribution(
         rate: exceed((1.0 + rate) ** horizon_years) for rate in (0.15, 0.20, 0.25)
     }
 
-    # Permanent loss / drawdown: the audit (§4.3, §5.3, §6.2) is explicit
-    # that these must never be fabricated as 0 from the terminal-only
-    # distribution above -- permanent loss requires a cause-specific
-    # competing-risk + recovery-rate model (delisting cause/settlement
-    # backfill, not yet collected), and drawdown requires a *path*
-    # simulation this terminal-wealth-only distribution cannot produce.
-    # Reported as None + an explicit machine-readable reason so no
-    # consumer can mistake "not implemented" for "zero risk measured".
+    # Permanent loss: the audit (§4.3, §5.3, §6.2) is explicit that this
+    # must never be fabricated as 0 from the terminal-only distribution
+    # above -- it requires a cause-specific competing-risk + recovery-rate
+    # model (delisting cause/settlement backfill, not yet collected: WP-F2,
+    # still blocked on 94/94 unknown-cause delisting_events rows). Reported
+    # as None + an explicit machine-readable reason so no consumer can
+    # mistake "not implemented" for "zero risk measured".
     _competing_risk_reason = "competing_risk_model_not_implemented"
-    _path_sim_reason = "path_simulation_not_implemented"
+
+    # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): drawdown/recovery are
+    # no longer computed from this terminal-wealth-only distribution at all
+    # -- they come from ``path_risk`` (a ``path_risk.PathRiskResult``
+    # estimated from the ticker's own realized price history, passed in by
+    # the caller). See ``_path_risk_fields`` below.
+    path_risk_fields = _path_risk_contract_fields(path_risk, horizon_years=horizon_years)
 
     return {
-        "contract_version": "v5.racr2", "status": "available",
+        "contract_version": "v5.racr3", "status": "available",
         "distribution_family": "failure_atom_plus_scenario_lognormal_mixture",
         "source_model_version": "v4_structural_seed",
         "target_moic": target_moic,
@@ -405,11 +438,65 @@ def scenario_distribution(
         "p_terminal_wealth_below_0_5": p_moic_below_0_5,
         "p_permanent_loss": None,
         "p_permanent_loss_unavailable_reason": _competing_risk_reason,
-        "expected_max_drawdown": None,
-        "expected_max_drawdown_unavailable_reason": _path_sim_reason,
-        "p_mdd_above_30": None, "p_mdd_above_30_unavailable_reason": _path_sim_reason,
-        "p_mdd_above_50": None, "p_mdd_above_50_unavailable_reason": _path_sim_reason,
-        "p_mdd_above_70": None, "p_mdd_above_70_unavailable_reason": _path_sim_reason,
-        "recovery_time_median": None,
-        "recovery_time_median_unavailable_reason": _path_sim_reason,
+        # -- WP-F1 additions below: purely additive, no existing key above
+        # changes value or meaning. --
+        **path_risk_fields,
+    }
+
+
+def _path_risk_contract_fields(path_risk: PathRiskResult | None, *, horizon_years: int) -> dict:
+    """Project a ``path_risk.PathRiskResult`` (or its absence) onto the
+    distribution contract's drawdown/recovery keys.
+
+    Kept as its own function (rather than inlined into ``scenario_distribution``)
+    so the "not provided" vs. "provided but unavailable" vs. "available"
+    three-way split is expressed once and cannot drift between the
+    ``available`` and future callers of this helper.
+    """
+    method = "block_bootstrap_weekly_v1"
+    if path_risk is None:
+        reason = _PATH_RISK_NOT_PROVIDED_REASON
+        return {
+            "expected_max_drawdown": None, "expected_max_drawdown_unavailable_reason": reason,
+            "p_mdd_above_30": None, "p_mdd_above_30_unavailable_reason": reason,
+            "p_mdd_above_50": None, "p_mdd_above_50_unavailable_reason": reason,
+            "p_mdd_above_70": None, "p_mdd_above_70_unavailable_reason": reason,
+            "expected_drawdown_excess_35": None,
+            "expected_drawdown_excess_35_unavailable_reason": reason,
+            "recovery_time_median": None, "recovery_time_median_unavailable_reason": reason,
+            "recovery_time_p90": None, "recovery_time_p90_unavailable_reason": reason,
+            "path_risk_method": None, "path_risk_horizon_years": horizon_years,
+            "path_risk_observations_used": 0, "path_risk_simulations": 0,
+        }
+    if path_risk.status != "available":
+        reason = path_risk.unavailable_reason
+        return {
+            "expected_max_drawdown": None, "expected_max_drawdown_unavailable_reason": reason,
+            "p_mdd_above_30": None, "p_mdd_above_30_unavailable_reason": reason,
+            "p_mdd_above_50": None, "p_mdd_above_50_unavailable_reason": reason,
+            "p_mdd_above_70": None, "p_mdd_above_70_unavailable_reason": reason,
+            "expected_drawdown_excess_35": None,
+            "expected_drawdown_excess_35_unavailable_reason": reason,
+            "recovery_time_median": None, "recovery_time_median_unavailable_reason": reason,
+            "recovery_time_p90": None, "recovery_time_p90_unavailable_reason": reason,
+            "path_risk_method": method, "path_risk_horizon_years": horizon_years,
+            "path_risk_observations_used": path_risk.observations_used,
+            "path_risk_simulations": 0,
+        }
+    recovery_reason = path_risk.recovery_time_unavailable_reason
+    return {
+        "expected_max_drawdown": path_risk.expected_max_drawdown,
+        "expected_max_drawdown_unavailable_reason": None,
+        "p_mdd_above_30": path_risk.p_mdd_above_30, "p_mdd_above_30_unavailable_reason": None,
+        "p_mdd_above_50": path_risk.p_mdd_above_50, "p_mdd_above_50_unavailable_reason": None,
+        "p_mdd_above_70": path_risk.p_mdd_above_70, "p_mdd_above_70_unavailable_reason": None,
+        "expected_drawdown_excess_35": path_risk.dd_excess,
+        "expected_drawdown_excess_35_unavailable_reason": None,
+        "recovery_time_median": path_risk.recovery_time_median_days,
+        "recovery_time_median_unavailable_reason": recovery_reason,
+        "recovery_time_p90": path_risk.recovery_time_p90_days,
+        "recovery_time_p90_unavailable_reason": recovery_reason,
+        "path_risk_method": method, "path_risk_horizon_years": horizon_years,
+        "path_risk_observations_used": path_risk.observations_used,
+        "path_risk_simulations": path_risk.simulations,
     }

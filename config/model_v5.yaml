@@ -20,6 +20,14 @@ reliability:
   target_annual_periods: 4.0
   target_price_history_rows: 756.0
 
+# WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): block-bootstrap
+# historical-simulation tuning for scoring/v5/path_risk.py. Governs the
+# simulation only -- not a return/volatility parameter, and never read from
+# the V4 seed.
+path_risk:
+  simulations: 300
+  block_weeks: 4
+
 uncertainty:
   confidence_sigma_multiplier: 0.50
   left_tail_multiplier: 1.25

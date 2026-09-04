@@ -91,7 +91,7 @@ OLD_ATOM_CONSTANT_H7 = math.log(CE_CAGR_FAILURE_FLOOR_MOIC) / 7  # -0.6578814551
 
 def test_contract_version_is_racr2():
     dist = _distribution()
-    assert dist["contract_version"] == "v5.racr2"
+    assert dist["contract_version"] == "v5.racr3"
 
 
 def test_new_field_present_on_available_distribution():

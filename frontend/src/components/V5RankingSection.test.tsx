@@ -52,7 +52,7 @@ vi.mock("../api/client", () => {
         confidence: 0.7,
         warnings: [],
         distribution: {
-          contract_version: "v5.racr2",
+          contract_version: "v5.racr3",
           status: "available",
           distribution_family: "failure_atom_plus_scenario_lognormal_mixture",
           source_model_version: "v4_structural_seed",
@@ -92,16 +92,30 @@ vi.mock("../api/client", () => {
           // The field under test: always null today. Must never render as 0%.
           p_permanent_loss: null,
           p_permanent_loss_unavailable_reason: "competing_risk_model_not_implemented",
+          // WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): drawdown is now
+          // implemented, but this fixture ticker still has too little
+          // realized price history -- still null, still must render as
+          // "— 未推定", never 0%. This is the realistic unavailable case
+          // post-WP-F1 (the "not implemented" reason no longer applies to
+          // any real run).
           expected_max_drawdown: null,
-          expected_max_drawdown_unavailable_reason: "path_simulation_not_implemented",
+          expected_max_drawdown_unavailable_reason: "insufficient_price_history",
           p_mdd_above_30: null,
-          p_mdd_above_30_unavailable_reason: "path_simulation_not_implemented",
+          p_mdd_above_30_unavailable_reason: "insufficient_price_history",
           p_mdd_above_50: null,
-          p_mdd_above_50_unavailable_reason: "path_simulation_not_implemented",
+          p_mdd_above_50_unavailable_reason: "insufficient_price_history",
           p_mdd_above_70: null,
-          p_mdd_above_70_unavailable_reason: "path_simulation_not_implemented",
+          p_mdd_above_70_unavailable_reason: "insufficient_price_history",
+          expected_drawdown_excess_35: null,
+          expected_drawdown_excess_35_unavailable_reason: "insufficient_price_history",
           recovery_time_median: null,
-          recovery_time_median_unavailable_reason: "path_simulation_not_implemented",
+          recovery_time_median_unavailable_reason: "insufficient_price_history",
+          recovery_time_p90: null,
+          recovery_time_p90_unavailable_reason: "insufficient_price_history",
+          path_risk_method: null,
+          path_risk_horizon_years: 7,
+          path_risk_observations_used: 120,
+          path_risk_simulations: 0,
         },
       },
     ],
@@ -147,12 +161,23 @@ describe("V5RankingSection", () => {
     // ...each carrying its machine-readable reason as a native tooltip,
     // in plain Japanese -- not the raw unavailable_reason code, and never
     // silently dropped.
+    //
+    // WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): drawdown/path-risk
+    // estimation is now implemented, so this fixture's
+    // expected_max_drawdown_unavailable_reason is "insufficient_price_history"
+    // (this specific ticker's own realized history is too short), not the
+    // old "path_simulation_not_implemented" -- that old reason no longer
+    // applies to any real run, so asserting for it here would be asserting
+    // a fact that stopped being true. Updated deliberately, not weakened:
+    // the assertion still requires a real, non-empty, human-readable
+    // Japanese reason, and still forbids the raw reason code leaking
+    // through unrendered.
     const reasons = unavailableMarkers.map((el) => el.title);
     expect(reasons.every((title) => title.length > 0)).toBe(true);
     expect(reasons.some((title) => title.includes("破綻・上場廃止の原因別"))).toBe(true);
-    expect(reasons.some((title) => title.includes("価格経路シミュレーション"))).toBe(true);
+    expect(reasons.some((title) => title.includes("実現価格履歴が不足"))).toBe(true);
     expect(reasons.every((title) => title !== "competing_risk_model_not_implemented")).toBe(true);
-    expect(reasons.every((title) => title !== "path_simulation_not_implemented")).toBe(true);
+    expect(reasons.every((title) => title !== "insufficient_price_history")).toBe(true);
   });
 
   it("shows an explicit message, not an empty ranking table, when the run predates the objective", async () => {

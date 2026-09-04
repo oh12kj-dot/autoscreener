@@ -79,12 +79,12 @@ def test_distribution_contract_version_is_racr2():
     # v5.racr1 to v5.racr2: new conditional-tail-loss/failure-frequency
     # fields, RACR values are not comparable across contract versions.
     dist = _distribution()
-    assert dist["contract_version"] == "v5.racr2"
+    assert dist["contract_version"] == "v5.racr3"
 
 
 def test_unavailable_distribution_contract_version_is_racr2_too():
     dist = unavailable_distribution(target_moic=10.0, confidence=0.0)
-    assert dist["contract_version"] == "v5.racr2"
+    assert dist["contract_version"] == "v5.racr3"
 
 
 # -- B-2: identity tests ---------------------------------------------------
@@ -199,11 +199,6 @@ def test_expected_shortfall_10pct_log_uses_continuous_slice_when_failure_mass_be
     "field,reason_field,reason_value",
     [
         ("p_permanent_loss", "p_permanent_loss_unavailable_reason", "competing_risk_model_not_implemented"),
-        ("expected_max_drawdown", "expected_max_drawdown_unavailable_reason", "path_simulation_not_implemented"),
-        ("p_mdd_above_30", "p_mdd_above_30_unavailable_reason", "path_simulation_not_implemented"),
-        ("p_mdd_above_50", "p_mdd_above_50_unavailable_reason", "path_simulation_not_implemented"),
-        ("p_mdd_above_70", "p_mdd_above_70_unavailable_reason", "path_simulation_not_implemented"),
-        ("recovery_time_median", "recovery_time_median_unavailable_reason", "path_simulation_not_implemented"),
     ],
 )
 def test_unimplemented_fields_are_none_with_explicit_reason_on_available_distribution(
@@ -213,6 +208,32 @@ def test_unimplemented_fields_are_none_with_explicit_reason_on_available_distrib
     assert dist["status"] == "available"
     assert dist[field] is None
     assert dist[reason_field] == reason_value
+
+
+# WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): drawdown/recovery are now
+# implemented (path_risk.py), so a caller that does not pass a `path_risk`
+# result to `scenario_distribution` (this file's `_distribution()` helper
+# does not) gets "path_simulation_not_provided" -- distinct from
+# "path_simulation_not_implemented" (which no longer applies to anything)
+# and from a real attempt that came back unavailable for insufficient data
+# (see test_v5_wp_f1_path_risk.py for that case).
+@pytest.mark.parametrize(
+    "field,reason_field",
+    [
+        ("expected_max_drawdown", "expected_max_drawdown_unavailable_reason"),
+        ("p_mdd_above_30", "p_mdd_above_30_unavailable_reason"),
+        ("p_mdd_above_50", "p_mdd_above_50_unavailable_reason"),
+        ("p_mdd_above_70", "p_mdd_above_70_unavailable_reason"),
+        ("recovery_time_median", "recovery_time_median_unavailable_reason"),
+    ],
+)
+def test_path_risk_fields_are_none_with_not_provided_reason_when_no_path_risk_passed(
+    field, reason_field,
+):
+    dist = _distribution()
+    assert dist["status"] == "available"
+    assert dist[field] is None
+    assert dist[reason_field] == "path_simulation_not_provided"
 
 
 @pytest.mark.parametrize(

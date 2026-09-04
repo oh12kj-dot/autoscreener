@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from autoscreener.db.models import PriceSnapshot, RawSnapshot, Ticker, UniverseSnapshot
 from autoscreener.scoring.engine import build_inputs_for_ticker
 from autoscreener.scoring.moic import MoicInputs
+from autoscreener.scoring.v5.path_risk import PriceObservation
 from autoscreener.screening.financial_history import FinancialPeriod, build_financial_history
 from autoscreener.validation.rules import sanitize_info
 
@@ -44,6 +45,14 @@ class V5PitInput:
     price_first_date: datetime.date | None = None
     raw_is_valid: bool = True
     raw_validation_error_count: int = 0
+    # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): the same PIT-filtered
+    # ``price_snapshots`` rows already queried below (``trade_date <= as_of``),
+    # reduced to the three fields ``path_risk.py`` needs. Carried here so
+    # ``path_risk.estimate_path_risk`` never re-queries the DB and can never
+    # see a price row this PIT filter would have excluded -- single source
+    # of truth for "which prices this ticker's run may see" (same rationale
+    # as ``financial_annual`` above).
+    price_observations: tuple[PriceObservation, ...] = ()
 
     def evidence(self) -> dict:
         return {
@@ -88,12 +97,21 @@ def build_v5_pit_inputs(session: Session, *, as_of: datetime.date) -> list[V5Pit
         )
         price_as_of = prices[-1].trade_date if prices else None
         price_first_date = prices[0].trade_date if prices else None
+        price_observations = tuple(
+            PriceObservation(
+                trade_date=row.trade_date,
+                close=float(row.close) if row.close is not None else None,
+                dividend=float(row.dividend) if row.dividend is not None else None,
+            )
+            for row in prices
+        )
         if raw is None:
             built.append(V5PitInput(
                 ticker.id, ticker.symbol, as_of, None, None, None,
                 price_as_of, "not_collected",
                 sector=ticker.sector, price_row_count=len(prices),
                 price_first_date=price_first_date,
+                price_observations=price_observations,
             ))
             continue
         info = sanitize_info(raw.payload.get("info") or {})
@@ -119,5 +137,6 @@ def build_v5_pit_inputs(session: Session, *, as_of: datetime.date) -> list[V5Pit
             price_first_date=price_first_date,
             raw_is_valid=bool(raw.is_valid),
             raw_validation_error_count=len(raw.validation_errors or []),
+            price_observations=price_observations,
         ))
     return built

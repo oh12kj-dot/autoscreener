@@ -45,7 +45,11 @@ export const V5_RACR_TERM_LABELS: Record<string, string> = {
   // 廃止)の発生確率×保守的な回収率仮定。原因別competing-riskモデルに
   // よる推定である p_permanent_loss とは別物であることをラベルにも残す。
   failure_loss: "失敗頻度損失(P(失敗)×(1-回収率仮定)、永久損失ではない)",
-  dd_excess: "ドローダウン超過(未実装のため常に0)",
+  // WP-F1(docs/racr_wp_f1_path_risk_2026-09-04.md): 実現価格履歴からの
+  // ブロックブートストラップ推定で実装済み。ただし十分な価格履歴が無い
+  // 銘柄は0ではなく「推定不能」としてフォールバックの0が使われる
+  // (omitted_termsにその銘柄だけ"drawdown"が載る)。
+  dd_excess: "ドローダウン超過(E[max(MDD-35%,0)]、実現価格履歴から推定)",
   p_permanent_loss: "永久損失確率(未実装のため常に0)",
   model_uncertainty: "モデル不確実性(信頼度由来)",
   tail_lambda: "λ(テール)",
@@ -64,8 +68,24 @@ export function v5RacrTermLabel(key: string): string {
 export const V5_UNAVAILABLE_REASON_LABELS: Record<string, string> = {
   competing_risk_model_not_implemented:
     "破綻・上場廃止の原因別competing-riskモデルと回収率分布が未実装のため推定できません。",
+  // WP-F1(docs/racr_wp_f1_path_risk_2026-09-04.md)より前のrunにだけ残る
+  // 旧理由文字列。ドローダウン/回復期間は実装済みになったため新規runでは
+  // 出ないが、古いrunのexplanationを読んだときに文字列そのままより分かる
+  // ようにラベルは残す。
   path_simulation_not_implemented:
-    "保有期間中の価格経路シミュレーションが未実装のため推定できません(現行モデルは7年後の終端時点のみを扱います)。",
+    "(旧)保有期間中の価格経路シミュレーションが未実装のため推定できませんでした。",
+  // WP-F1: 実現価格履歴からのブロックブートストラップ推定に十分な取引日数
+  // (目安2年、約504営業日)が無い銘柄。
+  insufficient_price_history:
+    "実現価格履歴が不足しているため推定できません(目安:直近2年・約504取引日分が必要)。",
+  // WP-F1: この分布計算の呼び出し元が価格経路推定を一切試みなかった場合
+  // (未実装ではなく、単に呼ばれなかった)。
+  path_simulation_not_provided:
+    "この分布計算では価格経路推定が実行されませんでした。",
+  // WP-F1: シミュレーション上のドローダウンがホライズン内に十分回復しな
+  // かったため、回復期間の中央値・P90を出すだけの標本が無い。
+  insufficient_recoveries_within_horizon:
+    "ホライズン内に回復したシミュレーション経路が少なすぎるため、回復期間を推定できません。",
 };
 
 export function v5UnavailableReasonLabel(reason: string | null | undefined): string {
@@ -90,6 +110,7 @@ export const V5_METRIC_LABELS: Record<string, string> = {
   p_mdd_above_50: "P(MDD>50%)",
   p_mdd_above_70: "P(MDD>70%)",
   recovery_time_median: "回復期間中央値",
+  recovery_time_p90: "回復期間P90",
   expected_shortfall_10pct_log: "下位10%期待損失(年率log)",
 };
 

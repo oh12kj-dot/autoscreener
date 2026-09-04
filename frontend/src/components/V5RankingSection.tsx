@@ -197,16 +197,22 @@ export function V5RankingSection() {
           />
         </label>
         {/* WP-C:計画の不変条件2「未実装メトリクスへのフィルタを作らない」。
-            永久損失・MDDのフィルタはAPIに存在しないため、無効化した状態で
-            理由だけ示す——「そもそも列が無い」より「なぜ選べないか」が
-            分かるほうが利用者の誤解が少ない。 */}
+            永久損失は引き続きAPIに値が無い(常にnull)ため無効化のまま。 */}
         <label className="v5-disabled-filter" title={v5UnavailableReasonLabel("competing_risk_model_not_implemented")}>
           {v5MetricLabel("p_permanent_loss")}上限
           <input type="number" disabled placeholder="未実装" />
         </label>
-        <label className="v5-disabled-filter" title={v5UnavailableReasonLabel("path_simulation_not_implemented")}>
+        {/* WP-F1(docs/racr_wp_f1_path_risk_2026-09-04.md): P(MDD>50%)自体は
+            実現価格履歴から推定済みの銘柄については値を持つようになった
+            (下のランキング表の列を参照)。ただし本フィルタUI(上限で
+            絞り込む機能)自体はまだ配線していない——「値が存在しない」から
+            「フィルタ入力欄がまだ無効」へ理由を正直に書き換える。 */}
+        <label
+          className="v5-disabled-filter"
+          title="P(MDD>50%)自体は銘柄ごとに推定済みですが、この上限フィルタはまだ実装していません(表の列で個別に確認できます)。"
+        >
           {v5MetricLabel("p_mdd_above_50")}上限
-          <input type="number" disabled placeholder="未実装" />
+          <input type="number" disabled placeholder="未配線" />
         </label>
       </div>
 
@@ -258,7 +264,7 @@ export function V5RankingSection() {
                 <tr>
                   <th>順位</th>
                   <th>銘柄</th>
-                  <th title="explanation.omitted_terms: ドローダウン・永久損失は未実装のためこのスコアに反映されていません(詳細ページ参照)">
+                  <th title="explanation.omitted_terms: 永久損失は未実装のためこのスコアに反映されていません。ドローダウンは銘柄自身の実現価格履歴から推定できた場合のみ反映されます(詳細ページ参照)">
                     {v5ObjectiveLabel(objective)}
                     {objective === "risk_adjusted_compounding" && (
                       <V5FailureFloorNote floor={ceCagrFailureFloor} />
@@ -277,7 +283,7 @@ export function V5RankingSection() {
                   <th title={v5UnavailableReasonLabel("competing_risk_model_not_implemented")}>
                     {v5MetricLabel("p_permanent_loss")}
                   </th>
-                  <th title={v5UnavailableReasonLabel("path_simulation_not_implemented")}>
+                  <th title="この銘柄自身の実現価格履歴からブロックブートストラップで推定した予想最大ドローダウン。終端分布からの計算ではありません。価格履歴が不足する銘柄は「— 未推定」になります(詳細ページ参照)">
                     {v5MetricLabel("expected_max_drawdown")}
                   </th>
                   <th>信頼度・鮮度</th>

@@ -39,6 +39,13 @@ function fmtDelta(v: number, digits = 3): string {
   return `${v >= 0 ? "+" : ""}${v.toFixed(digits)}`;
 }
 
+/** WP-F1(docs/racr_wp_f1_path_risk_2026-09-04.md): recovery_time_median/p90
+ * は暦日(calendar days)で返る。月表記(小数点1桁)にして「620日」のような
+ * 読みにくい大きな整数を避ける。 */
+function fmtRecoveryDays(days: number): string {
+  return `${(days / 30.44).toFixed(1)}ヶ月`;
+}
+
 function pct(v: number | null | undefined): string {
   if (v == null) return "—";
   const p = v * 100;
@@ -228,10 +235,24 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic, o
 
       <h4>分布の主要な数値</h4>
       <p className="v5-caveat">
-        同じ分布(終端7年後のwealth分布)から一貫して導いた値です。永久損失・予想MDDは
-        <strong>現行モデルでは未実装</strong>のため、値ではなく理由付きで「— 未推定」と表示します
-        ——0%(リスク無し)という意味では絶対にありません。
+        CE CAGR・期待/中央値CAGR・P(CAGR&gt;X%)等は同じ分布(終端7年後のwealth分布)から
+        一貫して導いた値です。<strong>永久損失は現行モデルでは未実装</strong>のため、値ではなく
+        理由付きで「— 未推定」と表示します——0%(リスク無し)という意味では絶対にありません。
       </p>
+      {/* WP-F1(docs/racr_wp_f1_path_risk_2026-09-04.md): ドローダウン系
+          (予想最大ドローダウン・P(MDD>X%)・回復期間)は上のCE CAGR等とは
+          別物——終端分布からではなく、この銘柄自身の実現価格履歴から
+          ブロックブートストラップで推定した値であることを画面上に明記する。 */}
+      {dist.path_risk_method != null && (
+        <p className="v5-caveat">
+          ドローダウン系の指標(下の3行)は<strong>終端分布からの計算ではなく</strong>、
+          この銘柄自身の実現価格履歴(直近{dist.path_risk_observations_used ?? "?"}取引日分)を
+          ブロックブートストラップで再標本化し、{dist.path_risk_horizon_years ?? "?"}年ホライズンの
+          擬似的な価格経路を{dist.path_risk_simulations ?? "?"}本シミュレーションして推定した値です
+          (手法: {dist.path_risk_method})。将来の価格経路を予測しているのではなく、
+          「この銘柄の過去の値動きが今後も続くとしたら」という前提の下での経験的推定です。
+        </p>
+      )}
       <table className="v5-compare-table v5-distribution-table">
         <tbody>
           <tr>
@@ -287,25 +308,44 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic, o
             </td>
           </tr>
           <tr>
-            <td>{v5MetricLabel("recovery_time_median")}</td>
+            <td>{v5MetricLabel("recovery_time_median")} / {v5MetricLabel("recovery_time_p90")}</td>
             <td>
               {dist.recovery_time_median == null
                 ? <V5UnavailableMetric reason={dist.recovery_time_median_unavailable_reason} />
-                : `${dist.recovery_time_median.toFixed(1)}年`}
+                : fmtRecoveryDays(dist.recovery_time_median)}
+              {" / "}
+              {dist.recovery_time_p90 == null
+                ? <V5UnavailableMetric reason={dist.recovery_time_p90_unavailable_reason} />
+                : fmtRecoveryDays(dist.recovery_time_p90)}
             </td>
           </tr>
         </tbody>
       </table>
 
-      {isRacr && racrExplanation && (
+      {isRacr && racrExplanation && (() => {
+        // WP-F1(docs/racr_wp_f1_path_risk_2026-09-04.md): ドローダウンは
+        // 実装済みになったため、"drawdown" が omitted_terms に載るのは
+        // この銘柄自身の価格履歴が不足している場合だけ("permanent_loss"は
+        // 常に載る)。以前のように両方を恒常的な文言で括ると、実際には
+        // ドローダウンを織り込んでいる銘柄まで「未調整」と誤読させる。
+        const omittedTerms = (racrExplanation.omitted_terms as string[]) ?? [];
+        const drawdownOmitted = omittedTerms.includes("drawdown");
+        return (
         <>
           <h4>RACRの内訳(各ペナルティ項とλ)</h4>
           <p className="v5-caveat">
             <strong>
-              このスコアはドローダウン・永久損失を含んでいません(explanation.omitted_terms)。
+              このスコアは永久損失を含んでいません(explanation.omitted_terms)。
             </strong>{" "}
-            両項は未実装のため恒常的に0として計算されており、「リスク調整済み」と読み違えないための表示です。
-            λは全てbacktestで最適化した値ではなく、固定の投資方針パラメータです。
+            永久損失は未実装のため恒常的に0として計算されており、「リスク調整済み」と読み違えないための表示です。
+            {drawdownOmitted && (
+              <>
+                {" "}
+                <strong>ドローダウンもこの銘柄では未推定です</strong>
+                (実現価格履歴が不足しているため0として計算)。
+              </>
+            )}
+            {" "}λは全てbacktestで最適化した値ではなく、固定の投資方針パラメータです。
           </p>
           <table className="v5-compare-table v5-racr-table">
             <thead>
@@ -394,7 +434,8 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic, o
             </p>
           )}
         </>
-      )}
+        );
+      })()}
 
       <h4>なぜこの分布になったか(特徴量ごとの寄与)</h4>
       <p className="v5-caveat">

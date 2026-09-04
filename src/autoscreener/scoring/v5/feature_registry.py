@@ -82,9 +82,24 @@ def _spec(
 
 FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     _spec("base_financial_statements", "raw_snapshots", "base_distribution", enabled=True,
-          notes="Phase 1 structural seed; filtered by available_from and reporting lag."),
+          notes="Phase 1 structural seed; filtered by available_from and reporting lag. "
+                "WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md, audit §8.2): "
+                "freshness_half_life_days is deliberately None here, not a missed case -- "
+                "this feature's age already gets its own dedicated exponential decay via "
+                "reliability.core_evidence_reliability's statement_freshness_half_life_days "
+                "config (currently 270 days), applied directly to model_confidence rather "
+                "than through this registry's generic decayed_reliability path (which only "
+                "ever sees the growth/quality/capital/tail Signal objects below). Adding a "
+                "second half-life field here would either duplicate that decay or silently "
+                "do nothing (this key never reaches decayed_reliability at all)."),
     _spec("price_history", "price_snapshots", "base_distribution", enabled=True,
-          notes="Only trade_date <= as_of is visible."),
+          notes="Only trade_date <= as_of is visible. WP-F1 (audit §8.2): "
+                "freshness_half_life_days is deliberately None -- this feature measures "
+                "sample *quantity* (q_sample: row count vs. target_price_history_rows), not "
+                "an aging point observation whose informativeness decays with time. There is "
+                "no 'age' for a row count to decay by; the honest freshness signal for this "
+                "feature is q_pit (how stale the *latest* price row is as of as_of), already "
+                "computed separately in reliability.py's _pit_quality."),
     _spec("tam_headroom", "market_opportunity_estimates", "growth_duration", direction="higher_better",
           required_coverage=0.50, notes="Caps duration only; a large TAM is not a direct positive score."),
     _spec("operating_kpi_nowcast", "operating_kpi_observations", "revenue_growth_path",
@@ -96,74 +111,99 @@ FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     _spec("guidance", "management_guidance_snapshots", "revenue_growth_path", freshness_days=180,
           required_coverage=0.50, notes="Validated revenue guidance only; missing guidance remains neutral."),
     _spec("incremental_roic", "raw_snapshots_financial_history", "growth_duration", direction="higher_better",
-          enabled=True, required_coverage=0.90, min_reliability=0.5,
+          enabled=True, required_coverage=0.90, min_reliability=0.5, freshness_days=270,
           notes="Phase 4: ANOPAT/AIC only shortens duration when growth is high and ROIC is below "
-                "the config hurdle; never extends duration on its own."),
+                "the config hurdle; never extends duration on its own. WP-F1 (audit §8.2: "
+                "'financials effective stepwise until the next filing'): freshness_half_life_days "
+                "= 270, matching reliability.py's statement_freshness_half_life_days -- this "
+                "signal is derived from the same annual financial-statement history and goes "
+                "stale on the same reporting cadence."),
     _spec("per_share_economics", "raw_snapshots_financial_history", "growth_mean_multiplier",
           direction="lower_better", enabled=True, required_coverage=0.90,
-          min_reliability=0.5,
+          min_reliability=0.5, freshness_days=270,
           notes="Phase 4: gross-profit/FCF per-share vs total CAGR gap decays the growth mean "
                 "multiplier; deliberately excludes revenue to avoid double-counting v4's "
-                "capital.diluted_share_factor (dilution_drag)."),
+                "capital.diluted_share_factor (dilution_drag). WP-F1 (audit §8.2): "
+                "freshness_half_life_days = 270, same annual-filing cadence as "
+                "incremental_roic above."),
     _spec("cash_conversion", "raw_snapshots_financial_history", "economics_cash_conversion",
-          enabled=True, required_coverage=0.90, min_reliability=0.5,
+          enabled=True, required_coverage=0.90, min_reliability=0.5, freshness_days=270,
           notes="Phase 4: fills economics.cash_conversion / reinvestment_efficiency (OCF/NI, "
                 "FCF/NI) which Phase 2/3 left unsupported. Diagnostic state only; no distribution "
-                "multiplier."),
+                "multiplier. WP-F1 (audit §8.2): freshness_half_life_days = 270, same "
+                "annual-filing cadence as the other financial-statement-derived signals above."),
     _spec("accounting_quality", "raw_snapshots_financial_history", "uncertainty", direction="higher_better",
-          enabled=True, required_coverage=0.90, min_reliability=0.5,
+          enabled=True, required_coverage=0.90, min_reliability=0.5, freshness_days=270,
           notes="Phase 4: accrual ratio / weak cash conversion / receivables & inventory gap / "
                 "SBC / goodwill severity widens sigma and the left tail only; the conditional "
-                "mean is never lowered (Issue #3 section 6.3)."),
+                "mean is never lowered (Issue #3 section 6.3). WP-F1 (audit §8.2): "
+                "freshness_half_life_days = 270, same annual-filing cadence as the other "
+                "financial-statement-derived signals above."),
     _spec("reconciliation_confidence", "xbrl_facts", "uncertainty_confidence",
-          enabled=True, required_coverage=0.80, min_reliability=0.5,
+          enabled=True, required_coverage=0.80, min_reliability=0.5, freshness_days=270,
           notes="Phase 4: yfinance-vs-SEC-XBRL mismatch/magnitude_mismatch only lowers "
-                "model_confidence; the state is never moved."),
+                "model_confidence; the state is never moved. WP-F1 (audit §8.2): "
+                "freshness_half_life_days = 270 -- XBRL facts are filed on the same annual/"
+                "quarterly cadence as the statements they reconcile against."),
     _spec("capital_allocation", "capital_allocation_events", "refinancing_survival",
           direction="lower_better", enabled=True,
-          required_coverage=0.50, min_reliability=0.5,
+          required_coverage=0.50, min_reliability=0.5, freshness_days=180,
           notes="Phase 5: trailing-window committed cash return (buyback+dividend) net of "
                 "raised capital (debt_raise+equity_raise), relative to cash balance. Reads "
                 "only already-announced events in a bounded window -- never extrapolates a "
-                "historical buyback rate forward (Issue #3 section 7)."),
+                "historical buyback rate forward (Issue #3 section 7). WP-F1 (audit §8.2: "
+                "'filing-derived capital/tail data: material event and next filing'): "
+                "freshness_half_life_days = 180 -- shorter than the pure-accounting-ratio "
+                "group above because an announced capital-return event's relevance decays "
+                "faster than a reported financial ratio, even between filings."),
     _spec("debt_maturity", "debt_instruments", "refinancing_survival",
           direction="lower_better", enabled=True,
-          required_coverage=0.50, min_reliability=0.5,
+          required_coverage=0.50, min_reliability=0.5, freshness_days=180,
           notes="Phase 5: 12-month debt maturity wall (routes.py:3619's due_12m definition, "
                 "reused) vs cash + revolver_available. Only ever shortens survival_probability "
-                "(Phase 2/3/4 held it fixed); never grants a bonus for being well covered."),
+                "(Phase 2/3/4 held it fixed); never grants a bonus for being well covered. "
+                "WP-F1 (audit §8.2): freshness_half_life_days = 180, same event-driven "
+                "capital/tail cadence as capital_allocation above."),
     _spec("liquidity", "liquidity_facilities", "refinancing_survival", direction="higher_better",
-          enabled=True, required_coverage=0.50, min_reliability=0.5,
+          enabled=True, required_coverage=0.50, min_reliability=0.5, freshness_days=180,
           notes="Phase 5: cash runway from the latest annual FCF burn, separate from the "
-                "long-term-leverage-driven debt_maturity signal above."),
+                "long-term-leverage-driven debt_maturity signal above. WP-F1 (audit §8.2): "
+                "freshness_half_life_days = 180, same event-driven capital/tail cadence."),
     _spec("future_dilution_capacity", "dilution_capacity", "growth_mean_multiplier",
           direction="lower_better", enabled=True,
-          required_coverage=0.50, min_reliability=0.5,
+          required_coverage=0.50, min_reliability=0.5, freshness_days=180,
           notes="Phase 6 (Issue #3 section 12, user decision 2026-09-03): ATM/shelf remaining "
                 "authorization + unexercised options/warrants + variable-conversion flag decay "
                 "the growth mean multiplier -- unissued future capacity, distinct from v4's "
                 "dilution_drag and Phase 4's per_share_economics (both realized/historical). "
                 "Shares an explicit anti-triple-counting reduction budget with those two "
-                "(config.capital.max_combined_dilution_reduction)."),
+                "(config.capital.max_combined_dilution_reduction). WP-F1 (audit §8.2): "
+                "freshness_half_life_days = 180, same event-driven capital/tail cadence."),
     _spec("customer_concentration", "customer_concentration", "tail_risk",
           direction="lower_better", enabled=True,
-          required_coverage=0.50, min_reliability=0.5,
+          required_coverage=0.50, min_reliability=0.5, freshness_days=180,
           notes="Phase 6: total disclosed 10%+ customer revenue concentration widens the left "
-                "tail only (Issue #3 section 12: never lowers the mean growth rate directly)."),
+                "tail only (Issue #3 section 12: never lowers the mean growth rate directly). "
+                "WP-F1 (audit §8.2): freshness_half_life_days = 180, same event-driven "
+                "capital/tail cadence as the other filing-derived tail signals."),
     _spec("litigation", "litigation_events", "tail_risk", direction="lower_better",
           historical=False, enabled=True, required_coverage=0.50,
-          min_reliability=0.5,
+          min_reliability=0.5, freshness_days=180,
           notes="Phase 6: shadow only until severity/amount coverage is reliable -- the table "
                 "has no severity/amount field at all yet, only kind/title/detail text; trailing-"
                 "window event count is used as an explicitly bounded, crude proxy for the left "
-                "tail only."),
+                "tail only. WP-F1 (audit §8.2): freshness_half_life_days = 180, same "
+                "event-driven capital/tail cadence."),
     _spec("macro_regime", "macro_exposure_snapshots", "scenario_distribution",
           direction="lower_better", historical=False,
-          enabled=True, required_coverage=0.50, min_reliability=0.5,
+          enabled=True, required_coverage=0.50, min_reliability=0.5, freshness_days=90,
           notes="Phase 6: downside_beta widens the left tail only, and only when "
                 "fred_vintage_supported=true (0% of current rows) -- FRED current observations "
                 "are never used in historical reconstruction. High beta/exposure alone is not "
-                "treated as bad (Issue #3 section 10)."),
+                "treated as bad (Issue #3 section 10). WP-F1 (audit §8.2: 'price/liquidity/macro "
+                "on a trading-day basis'): freshness_half_life_days = 90 -- shorter than every "
+                "filing-derived group above, since a macro exposure snapshot reflects prevailing "
+                "conditions that move faster than any single company's own filings."),
     _spec("acquisition_competing_risk", "delisting_events", "competing_risk", historical=False,
           notes="Phase 6: deliberately NOT implemented. 94/94 delisting_events rows are "
                 "event_type=unknown (Phase 0 baseline), below any defensible classification-"

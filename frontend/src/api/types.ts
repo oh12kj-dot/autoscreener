@@ -943,10 +943,11 @@ export interface ModelV5Distribution {
   reliability_left_tail_extra: number | null;
   scenarios: ModelV5Scenario[];
   // WP-C/WP-B (docs/racr_wp_c_api_ui_2026-09-04.md; docs/racr_wp_b_output
-  // _contract_2026-09-04.md): RACR output contract, bumped again by WP-B2
-  // (docs/racr_wp_b2_risk_terms_2026-09-04.md) to contract_version
-  // "v5.racr2". Every field above is unchanged; RACR values are not
-  // comparable across contract versions.
+  // _contract_2026-09-04.md): RACR output contract, bumped by WP-B2
+  // (docs/racr_wp_b2_risk_terms_2026-09-04.md) to "v5.racr2" and again by
+  // WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md) to "v5.racr3" (adds
+  // live drawdown/recovery fields below). Every field above is unchanged;
+  // RACR values are not comparable across contract versions.
   ce_cagr: number | null;
   /** MOIC floor applied to the failure atom before taking logs (currently
    * always 0.01 when computed) -- see ce_cagr's tooltip copy. Recorded so
@@ -966,13 +967,22 @@ export interface ModelV5Distribution {
   /** Rename of p_moic_below_0_5: "large principal impairment probability",
    * explicitly *not* permanent loss (see p_permanent_loss below). */
   p_terminal_wealth_below_0_5: number | null;
-  // -- Permanent loss / drawdown: unimplemented by design (competing-risk
-  // and path-simulation models do not exist yet -- plan WP-F). These are
-  // *never* 0 -- always null, always paired with a machine-readable
-  // reason. Rendering these as 0%/empty instead of "-- 未推定" is the
-  // exact defect this contract exists to prevent (task brief, audit §9.1).
+  // -- Permanent loss: unimplemented by design (competing-risk model does
+  // not exist yet -- plan WP-F2, blocked on delisting cause/settlement
+  // coverage). *Never* 0 -- always null, always paired with a
+  // machine-readable reason. Rendering this as 0%/empty instead of
+  // "-- 未推定" is the exact defect this contract exists to prevent (task
+  // brief, audit §9.1).
   p_permanent_loss: number | null;
   p_permanent_loss_unavailable_reason: string | null;
+  // -- Drawdown/recovery (WP-F1, docs/racr_wp_f1_path_risk_2026-09-04.md,
+  // contract_version "v5.racr3"): estimated from the ticker's own realized
+  // `price_snapshots` history via a block-bootstrap historical simulation
+  // (`path_risk_method`) -- NOT derived from the return-model distribution
+  // above. Still null + a reason for a ticker with too little price
+  // history ("insufficient_price_history") or when a run did not attempt
+  // the estimate at all ("path_simulation_not_provided") -- same
+  // never-fabricate-a-zero contract as p_permanent_loss.
   expected_max_drawdown: number | null;
   expected_max_drawdown_unavailable_reason: string | null;
   p_mdd_above_30: number | null;
@@ -981,8 +991,25 @@ export interface ModelV5Distribution {
   p_mdd_above_50_unavailable_reason: string | null;
   p_mdd_above_70: number | null;
   p_mdd_above_70_unavailable_reason: string | null;
+  /** E[max(MDD - 35%, 0)] -- the live RACR drawdown-penalty term. */
+  expected_drawdown_excess_35: number | null;
+  expected_drawdown_excess_35_unavailable_reason: string | null;
+  /** Calendar days from a simulated drawdown's trough back to its prior
+   * peak, median/P90 across simulated paths. Null (with its own reason)
+   * when too few simulated drawdown episodes recovered within the horizon
+   * to report a quantile honestly. */
   recovery_time_median: number | null;
   recovery_time_median_unavailable_reason: string | null;
+  recovery_time_p90: number | null;
+  recovery_time_p90_unavailable_reason: string | null;
+  /** Method name (e.g. "block_bootstrap_weekly_v1") and the horizon/sample
+   * size behind the drawdown fields above -- surfaced so the UI can say
+   * plainly which window and how many realized price observations this
+   * estimate came from. */
+  path_risk_method: string | null;
+  path_risk_horizon_years: number | null;
+  path_risk_observations_used: number | null;
+  path_risk_simulations: number | null;
 }
 
 export interface ModelV5Run {

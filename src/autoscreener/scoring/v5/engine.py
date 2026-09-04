@@ -39,6 +39,7 @@ from autoscreener.scoring.v5.growth import (
 )
 from autoscreener.scoring.v5.inputs import V5PitInput, build_v5_pit_inputs
 from autoscreener.scoring.v5.objectives import evaluate_objectives
+from autoscreener.scoring.v5.path_risk import PathRiskResult, estimate_path_risk, stable_seed
 from autoscreener.scoring.v5.quality import (
     QualityFeatureSet,
     QualityUpdate,
@@ -245,6 +246,7 @@ def _distribution_for(
     tail_features: TailFeatureSet,
     base_confidence: float,
     model_config: ModelV5Config,
+    path_risk_result: PathRiskResult | None = None,
 ) -> tuple[GrowthUpdate, QualityUpdate, CapitalUpdate, TailUpdate, float, dict]:
     """Compute one (growth_update, quality_update, capital_update, tail_update,
     confidence, distribution) tuple.
@@ -254,6 +256,13 @@ def _distribution_for(
     with any signal excluded from any feature set and get a directly
     comparable counterfactual, instead of duplicating the combination logic
     per phase (handoff 4.8: do not copy-paste the Phase 3 ablation loop).
+
+    ``path_risk_result`` (WP-F1) is computed once per ticker by the caller
+    (from realized price history, independent of every growth/quality/
+    capital/tail feature) and simply passed through to
+    ``scenario_distribution`` here -- ablation counterfactuals reuse the
+    same value rather than recomputing it, since none of those features
+    can change a ticker's own price history.
     """
     confidence = max(
         0.0,
@@ -292,6 +301,7 @@ def _distribution_for(
         target_moic=model_config.target_moic, confidence=confidence,
         sigma_multiplier=quality_update.sigma_multiplier,
         left_tail_extra=left_tail_extra,
+        path_risk=path_risk_result,
     )
     return growth_update, quality_update, capital_update, tail_update, confidence, distribution
 
@@ -312,6 +322,7 @@ def _ablate(
     full_tail_update: TailUpdate,
     full_confidence: float,
     full_distribution: dict,
+    path_risk_result: PathRiskResult | None = None,
 ) -> dict:
     """Leave-one-feature-out counterfactual, any growth/quality/capital/tail key."""
     is_growth_key = any(signal.key == key for signal in growth_features.signals)
@@ -332,6 +343,7 @@ def _ablate(
         result, growth_features=without_growth, quality_features=without_quality,
         capital_features=without_capital, tail_features=without_tail,
         base_confidence=base_confidence, model_config=model_config,
+        path_risk_result=path_risk_result,
     )
     full_duration = full_growth_update.updated_duration_years * full_quality_update.duration_multiplier
     without_duration = without_growth_update.updated_duration_years * without_quality_update.duration_multiplier
@@ -442,6 +454,14 @@ _DIAGNOSTIC_DISTRIBUTION_FIELDS = (
     "expected_shortfall_10pct_log",
     "expected_shortfall_10pct_log_given_survival",
     "p_target",
+    # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): tracked here so the
+    # existing distinct-value/constant-field diagnostic automatically
+    # covers path risk too -- this is the acceptance-criteria measurement
+    # ("distinct-value count and quantiles of expected_max_drawdown across
+    # the scored universe") persisted per run instead of only ever computed
+    # by hand.
+    "expected_max_drawdown",
+    "expected_drawdown_excess_35",
 )
 
 
@@ -704,6 +724,9 @@ def run_v5_shadow(
             # accumulated across the per-ticker loop below, consumed after
             # ranking is assigned to build ``objective_diagnostics``.
             ce_cagr_by_ticker: dict[int, float] = {}
+            # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): mirrors
+            # ce_cagr_by_ticker above, for the same reason.
+            expected_max_drawdown_by_ticker: dict[int, float] = {}
             distribution_field_values: dict[str, set[float]] = {
                 field: set() for field in _DIAGNOSTIC_DISTRIBUTION_FIELDS
             }
@@ -763,7 +786,25 @@ def run_v5_shadow(
                     distribution = unavailable_distribution(
                         target_moic=model_config.target_moic, confidence=confidence
                     )
+                    path_risk_result = None
                 else:
+                    # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md):
+                    # computed once per ticker, strictly from this
+                    # ticker's own PIT-filtered `price_snapshots` rows
+                    # (``item.price_observations``, already filtered to
+                    # ``trade_date <= as_of`` by ``build_v5_pit_inputs``) --
+                    # never from ``result`` (the V4 seed's mu/sigma/
+                    # survival) or from any growth/quality/capital/tail
+                    # feature, so it is independent of every other risk
+                    # term in the distribution/RACR by construction.
+                    path_risk_result = estimate_path_risk(
+                        item.price_observations,
+                        as_of=as_of,
+                        horizon_years=model_config.target_horizon_years,
+                        simulations=model_config.path_risk.simulations,
+                        block_weeks=model_config.path_risk.block_weeks,
+                        seed=stable_seed(item.ticker_id, as_of),
+                    )
                     (
                         growth_update, quality_update, capital_update, tail_update,
                         confidence, distribution,
@@ -771,6 +812,7 @@ def run_v5_shadow(
                         result, growth_features=growth_features, quality_features=quality_features,
                         capital_features=capital_features, tail_features=tail_features,
                         base_confidence=base_confidence, model_config=model_config,
+                        path_risk_result=path_risk_result,
                     )
                     if quality_update.no_effect_keys:
                         quality_features = _reconcile_quality_features(quality_features, quality_update)
@@ -807,7 +849,7 @@ def run_v5_shadow(
                             model_config=model_config, full_growth_update=growth_update,
                             full_quality_update=quality_update, full_capital_update=capital_update,
                             full_tail_update=tail_update, full_confidence=confidence,
-                            full_distribution=distribution,
+                            full_distribution=distribution, path_risk_result=path_risk_result,
                         )
                         ablation_count += 1
                 # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md B2-1):
@@ -819,6 +861,16 @@ def run_v5_shadow(
                 if distribution.get("status") == "available":
                     if distribution.get("ce_cagr") is not None:
                         ce_cagr_by_ticker[item.ticker_id] = distribution["ce_cagr"]
+                    # WP-F1: per-ticker expected_max_drawdown, so the run's
+                    # own diagnostics can report Spearman(expected_max_drawdown,
+                    # ce_cagr) -- the acceptance-criteria measurement that
+                    # distinguishes "real independent risk signal" from "the
+                    # V4-seed-collinearity failure the prior three WPs hit"
+                    # (docs/racr_shadow_run_diagnostic_2026-09-04.md §6).
+                    if distribution.get("expected_max_drawdown") is not None:
+                        expected_max_drawdown_by_ticker[item.ticker_id] = (
+                            distribution["expected_max_drawdown"]
+                        )
                     for field in _DIAGNOSTIC_DISTRIBUTION_FIELDS:
                         numeric_value = _numeric(distribution.get(field))
                         if numeric_value is not None:
@@ -949,6 +1001,26 @@ def run_v5_shadow(
                 "model_confidence": _value_summary(sorted(distribution_field_values["model_confidence"])),
                 "core_evidence_reliability": _value_summary(core_evidence_values),
             }
+            # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): the acceptance
+            # criteria this WP's doc has to report -- distinct-value count
+            # and quantiles of expected_max_drawdown across the scored
+            # universe, and its Spearman against ce_cagr (the number that
+            # tells whether this is a real independent risk signal or a
+            # V4-seed-collinearity repeat of WP-B2/WP-D's failure).
+            common_mdd_tickers = sorted(set(expected_max_drawdown_by_ticker) & set(ce_cagr_by_ticker))
+            path_risk_diagnostics = {
+                "expected_max_drawdown": _value_summary(
+                    sorted(expected_max_drawdown_by_ticker.values())
+                ),
+                "spearman_expected_max_drawdown_vs_ce_cagr": (
+                    spearman(
+                        [expected_max_drawdown_by_ticker[t] for t in common_mdd_tickers],
+                        [ce_cagr_by_ticker[t] for t in common_mdd_tickers],
+                    )
+                    if len(common_mdd_tickers) >= 3 else None
+                ),
+                "available_count": len(expected_max_drawdown_by_ticker),
+            }
             diagnostic_warnings = [
                 *spearman_warnings, *constant_term_warnings, *distribution_warnings,
             ]
@@ -990,6 +1062,7 @@ def run_v5_shadow(
                 "default_objective": objectives_config.default_objective,
                 "objective_diagnostics": objective_diagnostics,
                 "reliability_diagnostics": reliability_diagnostics,
+                "path_risk_diagnostics": path_risk_diagnostics,
             }
         return {
             "run_id": str(run_id),

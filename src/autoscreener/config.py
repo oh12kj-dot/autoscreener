@@ -489,6 +489,21 @@ class ModelV5ReliabilityConfig(BaseModel):
         return self
 
 
+class ModelV5PathRiskConfig(BaseModel):
+    """WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md): tuning for
+    ``scoring/v5/path_risk.py``'s block-bootstrap historical-simulation
+    estimator. Every field here only controls *how the simulation is run*
+    (sample size, block length) -- none of them is a return/volatility
+    parameter fit to any model output, and none of them is read from the
+    V4 seed. Kept as its own config section (not folded into
+    ``ModelV5ReliabilityConfig``) because it governs a simulation, not a
+    reliability/confidence weight.
+    """
+
+    simulations: int = Field(gt=0, default=300)
+    block_weeks: int = Field(gt=0, default=4)
+
+
 class ModelV5UncertaintyConfig(BaseModel):
     """Controls for the explicit Phase 2 scenario-mixture distribution."""
 
@@ -700,6 +715,7 @@ class ModelV5Config(BaseModel):
     target_horizon_years: int = Field(gt=0, le=30, default=7)
     target_moic: float = Field(gt=1, default=10.0)
     reliability: ModelV5ReliabilityConfig = Field(default_factory=ModelV5ReliabilityConfig)
+    path_risk: ModelV5PathRiskConfig = Field(default_factory=ModelV5PathRiskConfig)
     uncertainty: ModelV5UncertaintyConfig = Field(default_factory=ModelV5UncertaintyConfig)
     growth: ModelV5GrowthConfig = Field(default_factory=ModelV5GrowthConfig)
     quality: ModelV5QualityConfig = Field(default_factory=ModelV5QualityConfig)

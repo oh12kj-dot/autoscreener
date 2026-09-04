@@ -198,7 +198,7 @@ def test_v5_shadow_persists_separately_without_touching_v4(monkeypatch):
             # distribution contract to v5.racr1; WP-B2
             # (docs/racr_wp_b2_risk_terms_2026-09-04.md) bumped it again to
             # v5.racr2.
-            assert score.distribution["contract_version"] == "v5.racr2"
+            assert score.distribution["contract_version"] == "v5.racr3"
             assert score.states["state_updates_applied"] == []
             # WP-D (docs/racr_wp_d_reliability_layer_2026-09-04.md): the flat
             # `ready_input_confidence=0.5` constant this test used to assert

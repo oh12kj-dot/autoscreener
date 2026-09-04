@@ -175,7 +175,7 @@ def test_phase2_api_exposes_typed_list_and_detail(phase2_api_run):
     # v5.racr2 (new conditional-tail/failure-frequency fields). `states`'
     # own contract_version (set above in the fixture) is a separate field
     # owned by state_model.py, unaffected by either bump.
-    assert detail.json()["distribution"]["contract_version"] == "v5.racr2"
+    assert detail.json()["distribution"]["contract_version"] == "v5.racr3"
     assert detail.json()["objectives"][0]["objective"] == "ten_bagger"
 
 

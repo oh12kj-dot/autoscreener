@@ -1253,6 +1253,13 @@ class ModelV5DistributionView(BaseModel):
     # measured", which is the exact failure mode this contract fixes.
     p_permanent_loss: float | None = None
     p_permanent_loss_unavailable_reason: str | None = None
+    # WP-F1 (docs/racr_wp_f1_path_risk_2026-09-04.md, contract_version
+    # "v5.racr3"): drawdown/recovery are now populated from
+    # `path_risk.estimate_path_risk` -- a block-bootstrap historical
+    # simulation over the ticker's own realized `price_snapshots` (never
+    # derived from the V4 lognormal seed's mu/sigma). `p_permanent_loss`
+    # above is unaffected -- it remains a distinct, unimplemented quantity
+    # (WP-F2, competing-risk/recovery model) with its own reason.
     expected_max_drawdown: float | None = None
     expected_max_drawdown_unavailable_reason: str | None = None
     p_mdd_above_30: float | None = None
@@ -1261,8 +1268,16 @@ class ModelV5DistributionView(BaseModel):
     p_mdd_above_50_unavailable_reason: str | None = None
     p_mdd_above_70: float | None = None
     p_mdd_above_70_unavailable_reason: str | None = None
+    expected_drawdown_excess_35: float | None = None
+    expected_drawdown_excess_35_unavailable_reason: str | None = None
     recovery_time_median: float | None = None
     recovery_time_median_unavailable_reason: str | None = None
+    recovery_time_p90: float | None = None
+    recovery_time_p90_unavailable_reason: str | None = None
+    path_risk_method: str | None = None
+    path_risk_horizon_years: int | None = None
+    path_risk_observations_used: int | None = None
+    path_risk_simulations: int | None = None
 
 
 class ModelV5RunView(BaseModel):
