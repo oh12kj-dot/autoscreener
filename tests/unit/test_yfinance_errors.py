@@ -10,10 +10,12 @@ from autoscreener.collectors.errors import (
     ParseFailure,
     PermanentFailure,
     TransientFailure,
+    YFinanceSessionFailure,
     classify_exception,
+    collection_error_detail,
     is_known_yfinance_session_typeerror,
 )
-from autoscreener.collectors.yfinance_client import fetch_latest_price
+from autoscreener.collectors.yfinance_client import fetch_latest_price, fetch_raw_financials
 from autoscreener.config import RetryConfig
 
 
@@ -71,6 +73,95 @@ def test_only_yfinance_stack_none_iterable_typeerror_is_retry_eligible():
     with pytest.raises(TypeError) as unknown:
         raise TypeError("argument of type 'NoneType' is not iterable")
     assert is_known_yfinance_session_typeerror(unknown.value) is False
+
+
+def test_known_yfinance_session_typeerror_resets_and_retries(monkeypatch):
+    namespace: dict[str, object] = {}
+    exec(
+        compile(
+            "def raise_known():\n    raise TypeError(\"argument of type 'NoneType' is not iterable\")",
+            "yfinance/data.py",
+            "exec",
+        ),
+        namespace,
+    )
+    attempts = 0
+
+    class FlakyTicker:
+        @property
+        def info(self):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                namespace["raise_known"]()
+            return {"marketCap": 1_000_000, "sector": "Technology", "currency": "USD"}
+
+    reset = Mock()
+    monkeypatch.setattr("autoscreener.collectors.yfinance_client.yf.Ticker", lambda _symbol: FlakyTicker())
+    monkeypatch.setattr("autoscreener.collectors.yfinance_client._reset_yfinance_session_state", reset)
+
+    result = fetch_raw_financials(
+        "ZZRETRY",
+        RetryConfig(max_attempts=2, backoff_base_seconds=0.001, backoff_max_seconds=0.001),
+        include_statements=False,
+    )
+
+    assert result["info"]["marketCap"] == 1_000_000
+    assert attempts == 2
+    reset.assert_called_once_with()
+
+
+def test_exhausted_known_yfinance_failure_keeps_bounded_diagnostics(monkeypatch):
+    namespace: dict[str, object] = {}
+    exec(
+        compile(
+            "def raise_known():\n    raise TypeError(\"argument of type 'NoneType' is not iterable\")",
+            "yfinance/data.py",
+            "exec",
+        ),
+        namespace,
+    )
+
+    class BrokenTicker:
+        @property
+        def info(self):
+            namespace["raise_known"]()
+
+    monkeypatch.setattr("autoscreener.collectors.yfinance_client.yf.Ticker", lambda _symbol: BrokenTicker())
+    monkeypatch.setattr("autoscreener.collectors.yfinance_client._reset_yfinance_session_state", Mock())
+
+    with pytest.raises(YFinanceSessionFailure) as raised:
+        fetch_raw_financials(
+            "ZZBROKEN",
+            RetryConfig(max_attempts=1, backoff_base_seconds=0.001, backoff_max_seconds=0.001),
+            include_statements=False,
+        )
+    detail = collection_error_detail(raised.value)
+    assert detail["operation"] == "fetch_raw_financials"
+    assert detail["original_error"] == "TypeError: argument of type 'NoneType' is not iterable"
+    assert "yfinance/data.py" in detail["traceback"]
+    assert len(detail["traceback"]) <= 4000
+
+
+def test_non_yfinance_typeerror_is_not_retried(monkeypatch):
+    attempts = 0
+
+    class BrokenTicker:
+        @property
+        def info(self):
+            nonlocal attempts
+            attempts += 1
+            raise TypeError("argument of type 'NoneType' is not iterable")
+
+    monkeypatch.setattr("autoscreener.collectors.yfinance_client.yf.Ticker", lambda _symbol: BrokenTicker())
+
+    with pytest.raises(ParseFailure):
+        fetch_raw_financials(
+            "ZZPARSE",
+            RetryConfig(max_attempts=3, backoff_base_seconds=0.001, backoff_max_seconds=0.001),
+            include_statements=False,
+        )
+    assert attempts == 1
 
 
 def test_latest_price_forces_share_refresh_when_split_is_present(monkeypatch):

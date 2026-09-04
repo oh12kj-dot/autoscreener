@@ -361,41 +361,81 @@ def _run_daily_pipeline_body(
     # complete price session suppress it: the first completed US session of a
     # week may be observed on Tuesday JST, or the price stage may be skipped.
     statement_week = market_week_start(market_decision.expected_session)
-    with session_scope() as session:
-        statement_due = refresh_is_due(session, statement_week)
-        missing_statement_symbols = (
-            active_symbols_missing_statement_observation(session, statement_week)
-            if statement_due else []
-        )
-    if statement_due and missing_statement_symbols:
-        logger.info("refreshing statements for %d symbols in market week %s", len(missing_statement_symbols), statement_week)
-        with recorder.stage("statement_refresh", PIPELINE_STAGE_SEQUENCE["statement_refresh"]) as st:
-            statement_result = run_daily_collection(
-                missing_statement_symbols,
-                collection_config=collection_config,
-                snapshot_date=today,
-                market_session_date=market_decision.expected_session,
-                force_statement_refresh=True,
-            )
-            with session_scope() as session:
-                remaining = active_symbols_missing_statement_observation(session, statement_week)
-                if not remaining:
-                    mark_refresh_complete(
-                        session, statement_week, legacy_unmarked=len(missing_statement_symbols)
-                    )
-            st.result = {**statement_result, "remaining": len(remaining), "week_start": statement_week.isoformat()}
-            results["statement_refresh"] = st.result
-    elif statement_due:
-        # All active symbols already carry an observed provider date for this
-        # market week, so it is safe to establish the cursor without guessing
-        # any legacy date.
-        with recorder.stage("statement_refresh", PIPELINE_STAGE_SEQUENCE["statement_refresh"]) as st:
-            with session_scope() as session:
-                mark_refresh_complete(session, statement_week, legacy_unmarked=0)
-            st.result = {"success": 0, "remaining": 0, "week_start": statement_week.isoformat()}
-            results["statement_refresh"] = st.result
+    previous_statement_result = previous_results.get("statement_refresh")
+    # A completed stage must remain completed on --resume.  Rewriting it as a
+    # skip loses the checkpoint and changes the persisted history.  A partial
+    # stage (remaining > 0) is deliberately retried on resume.
+    if previous_statement_result is not None and int(previous_statement_result.get("remaining", 0)) == 0:
+        results["statement_refresh"] = previous_statement_result
     else:
-        recorder.skip("statement_refresh", PIPELINE_STAGE_SEQUENCE["statement_refresh"], "already_completed_for_market_week")
+        with session_scope() as session:
+            statement_due = refresh_is_due(session, statement_week)
+            eligible_statement_symbols = set(select_collectable_symbols(session, collection_config))
+            missing_statement_symbols = (
+                active_symbols_missing_statement_observation(
+                    session,
+                    statement_week,
+                    eligible_symbols=eligible_statement_symbols,
+                )
+                if statement_due else []
+            )
+        if statement_due:
+            logger.info(
+                "refreshing statements for %d symbols in market week %s",
+                len(missing_statement_symbols),
+                statement_week,
+            )
+            with recorder.stage("statement_refresh", PIPELINE_STAGE_SEQUENCE["statement_refresh"]) as st:
+                statement_result = (
+                    run_daily_collection(
+                        missing_statement_symbols,
+                        collection_config=collection_config,
+                        snapshot_date=today,
+                        market_session_date=market_decision.expected_session,
+                        force_statement_refresh=True,
+                    )
+                    if missing_statement_symbols else {"success": 0}
+                )
+                with session_scope() as session:
+                    # Recompute eligibility after collection.  A symbol that
+                    # just entered quarantine must not keep the weekly cursor
+                    # open forever; its normal quarantine-recovery path forces
+                    # statements when it becomes eligible again.
+                    remaining_eligible = set(select_collectable_symbols(session, collection_config))
+                    remaining = active_symbols_missing_statement_observation(
+                        session,
+                        statement_week,
+                        eligible_symbols=remaining_eligible,
+                    )
+                    if not remaining:
+                        mark_refresh_complete(
+                            session,
+                            statement_week,
+                            scheduled_count=len(missing_statement_symbols),
+                        )
+                st.result = {
+                    **statement_result,
+                    "remaining": len(remaining),
+                    "week_start": statement_week.isoformat(),
+                }
+                results["statement_refresh"] = st.result
+            if remaining:
+                health.append(
+                    HealthFinding(
+                        code="statement_refresh_incomplete",
+                        severity="warning",
+                        message=f"weekly statement refresh left {len(remaining)} eligible symbols incomplete",
+                        detail={"remaining": len(remaining), "week_start": statement_week.isoformat()},
+                    )
+                )
+        else:
+            _skip_stage_unless_resumed(
+                recorder,
+                results,
+                previous_results,
+                "statement_refresh",
+                "already_completed_for_market_week",
+            )
     # A resumed run may see the just-written market session as fully covered.
     # In that case the collection stage must be reused, while its unfinished
     # downstream stages still need to run.

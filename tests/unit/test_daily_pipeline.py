@@ -396,6 +396,55 @@ def test_completed_market_session_skips_market_stages_without_health_error(
     assert health_check.call_args.kwargs["scoring_result"] is None
 
 
+@patch("autoscreener.batch.daily_pipeline.utc_today", return_value=datetime.date(2026, 9, 8))
+def test_statement_refresh_runs_even_when_price_session_is_complete(
+    mock_utc_today, _stub_phase2367_steps
+):
+    """P0-A: price completeness must not suppress the weekly statement work."""
+    _stub_phase2367_steps["market_session"].return_value = MarketSessionDecision(
+        should_run=False,
+        expected_session=datetime.date(2026, 9, 7),
+        latest_covered_session=datetime.date(2026, 9, 7),
+        covered_count=1,
+        target_count=1,
+        reason="no_new_market_session",
+    )
+    _stub_phase2367_steps["statement_due"].return_value = True
+    with (
+        patch("autoscreener.batch.daily_pipeline.select_collectable_symbols", return_value=["AAPL"]),
+        patch("autoscreener.batch.daily_pipeline.collection_population_counts", return_value=(0, 1)),
+        patch("autoscreener.batch.daily_pipeline.select_tracked_tickers", return_value=[]),
+        patch(
+            "autoscreener.batch.daily_pipeline.active_symbols_missing_statement_observation",
+            side_effect=[["AAPL"], []],
+        ),
+        patch("autoscreener.batch.daily_pipeline.mark_refresh_complete") as mark_complete,
+        patch(
+            "autoscreener.batch.daily_pipeline.run_daily_collection",
+            return_value={"success": 1},
+        ) as collection,
+        patch("autoscreener.batch.daily_pipeline.run_backup"),
+        patch("autoscreener.batch.daily_pipeline.check_pipeline_health", return_value=[]),
+        patch("autoscreener.batch.daily_pipeline.check_quarantine_health", return_value=[]),
+    ):
+        results = run_daily_pipeline()
+
+    collection.assert_called_once_with(
+        ["AAPL"],
+        collection_config=ANY,
+        snapshot_date=datetime.date(2026, 9, 8),
+        market_session_date=datetime.date(2026, 9, 7),
+        force_statement_refresh=True,
+    )
+    mark_complete.assert_called_once()
+    assert results["collection"]["skipped_reason"] == "no_new_market_session"
+    assert results["statement_refresh"] == {
+        "success": 1,
+        "remaining": 0,
+        "week_start": "2026-09-07",
+    }
+
+
 @patch("autoscreener.batch.daily_pipeline.check_quarantine_health", return_value=[])
 @patch("autoscreener.batch.daily_pipeline.check_collection_health", return_value=[])
 @patch("autoscreener.batch.daily_pipeline.run_backup", side_effect=RuntimeError("docker unavailable"))
@@ -624,6 +673,8 @@ def test_resume_does_not_redo_an_already_succeeded_expensive_stage(
     pre_recorder = RealPipelineRecorder(resume_date, is_weekly=False)
     with pre_recorder.stage("collection", PIPELINE_STAGE_SEQUENCE["collection"]) as st:
         st.result = {"success": 999, "quarantined": 0, "universe_size": 0}
+    with pre_recorder.stage("statement_refresh", PIPELINE_STAGE_SEQUENCE["statement_refresh"]) as st:
+        st.result = {"success": 999, "remaining": 0, "week_start": "2026-08-24"}
     with pytest.raises(RuntimeError):
         with pre_recorder.stage("gates", PIPELINE_STAGE_SEQUENCE["gates"]) as st:
             raise RuntimeError("FK violation (simulated 2026-09-03)")
@@ -646,6 +697,7 @@ def test_resume_does_not_redo_an_already_succeeded_expensive_stage(
         # それでも結果は前回の値がそのまま引き継がれている(捏造した0件では
         # なく、実際に前回計算された999件)。
         assert results["collection"]["success"] == 999
+        assert results["statement_refresh"]["remaining"] == 0
 
         # 同じrun_idへ合流している(新しいrunを作っていない)。
         assert captured["recorder"].run_id == pre_recorder.run_id
@@ -661,6 +713,14 @@ def test_resume_does_not_redo_an_already_succeeded_expensive_stage(
             assert gates_row.status == "succeeded"
             assert gates_row.result == {"included": 1}
             assert gates_row.error_message is None
+
+            statement_row = (
+                session.query(PipelineStageRun)
+                .filter_by(run_id=pre_recorder.run_id, stage="statement_refresh")
+                .one()
+            )
+            assert statement_row.status == "succeeded"
+            assert statement_row.result["remaining"] == 0
 
             run_row = session.query(PipelineRun).filter_by(run_id=pre_recorder.run_id).one()
             assert run_row.status == "succeeded"

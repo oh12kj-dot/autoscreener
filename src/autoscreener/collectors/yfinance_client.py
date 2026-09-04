@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import traceback
 from datetime import timedelta
 from typing import Any
 
@@ -61,9 +62,19 @@ def _reset_yfinance_session_state() -> None:
     yfinance versions that do not expose one of these private caches.
     """
     data = yf.data.YfData()
-    for attr in ("_cookie", "_crumb"):
-        if hasattr(data, attr):
-            setattr(data, attr, None)
+    lock = getattr(data, "_cookie_lock", None)
+    if lock is None:
+        for attr in ("_cookie", "_crumb"):
+            if hasattr(data, attr):
+                setattr(data, attr, None)
+        return
+    # YfData is a process-wide singleton shared by collection workers.  Use
+    # yfinance's own cookie lock so a reset cannot interleave with another
+    # worker's cookie/crumb acquisition.
+    with lock:
+        for attr in ("_cookie", "_crumb"):
+            if hasattr(data, attr):
+                setattr(data, attr, None)
 
 
 def _raise_classified_yfinance_exception(exc: Exception, *, operation: str) -> None:
@@ -71,7 +82,9 @@ def _raise_classified_yfinance_exception(exc: Exception, *, operation: str) -> N
     if is_known_yfinance_session_typeerror(exc):
         _reset_yfinance_session_state()
         raise YFinanceSessionFailure(
-            f"known yfinance session TypeError in {operation}; session state reset"
+            operation=operation,
+            original_error=f"{type(exc).__name__}: {exc}",
+            traceback_text="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
         ) from exc
     raise classify_exception(exc) from exc
 

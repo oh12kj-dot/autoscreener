@@ -86,14 +86,19 @@ def run_daily_collection(
 
     def worker(symbol: str, run_id: uuid.UUID) -> str:
         with session_scope() as session:
+            common_args = {"market_session_date": market_session_date}
+            # Preserve the existing call shape for the normal daily path.
+            # The force flag is exceptional and should only be attached to the
+            # dedicated weekly statement work item.
+            if force_statement_refresh:
+                common_args["force_statement_refresh"] = True
             return collect_one(
                 session,
                 run_id,
                 symbol,
                 collection_config,
                 snapshot_date,
-                market_session_date=market_session_date,
-                force_statement_refresh=force_statement_refresh,
+                **common_args,
             )
 
     # A-1(docs/defect_and_edge_audit_2026-08-28.md D-12):広域障害でブレーカーが

@@ -63,6 +63,28 @@ class YFinanceSessionFailure(TransientFailure):
     it; all other type errors remain parse failures.
     """
 
+    def __init__(self, operation: str, original_error: str, traceback_text: str) -> None:
+        self.operation = operation
+        self.original_error = original_error
+        self.traceback_text = traceback_text
+        super().__init__(
+            f"known yfinance session TypeError in {operation}; session state reset"
+        )
+
+
+def collection_error_detail(exc: CollectionError) -> dict[str, str]:
+    """Return bounded diagnostic metadata suitable for ``collection_logs``."""
+    detail = {"error": str(exc), "exception_type": type(exc).__name__}
+    if isinstance(exc, YFinanceSessionFailure):
+        detail.update(
+            {
+                "operation": exc.operation,
+                "original_error": exc.original_error,
+                "traceback": exc.traceback_text[:4000],
+            }
+        )
+    return detail
+
 
 def is_known_yfinance_session_typeerror(exc: Exception) -> bool:
     """Return true only for the documented transient yfinance failure shape."""

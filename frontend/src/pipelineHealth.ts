@@ -70,6 +70,11 @@ export const PIPELINE_HEALTH_INFO: Record<string, PipelineHealthInfo> = {
     describe: (d) =>
       `ユニバースのうち隔離中の銘柄が${pct(num(d, "ratio"))}(${count(num(d, "quarantined"))}/${count(num(d, "universe_size"))}件)に達しています。`,
   },
+  statement_refresh_incomplete: {
+    label: "週次財務更新が未完了",
+    describe: (d) =>
+      `週次財務諸表の更新が${count(num(d, "remaining"))}銘柄で未完了です。次回実行で不足分を再試行します。`,
+  },
   stage_failed: {
     label: "工程が失敗",
     describe: (d) => `工程「${str(d, "stage") ?? "?"}」が失敗しました。`,

@@ -18,6 +18,7 @@ from autoscreener.collectors.errors import (
     ParseFailure,
     PermanentFailure,
     TransientFailure,
+    collection_error_detail,
 )
 from autoscreener.collectors.yfinance_client import (
     fetch_isin,
@@ -599,12 +600,26 @@ def collect_one(
         return "empty_response"
     except TransientFailure as exc:
         _register_failure(ticker, collection_config)
-        _log(session, run_id, ticker.id, snapshot_date, "transient_failure", {"error": str(exc)})
+        _log(
+            session,
+            run_id,
+            ticker.id,
+            snapshot_date,
+            "transient_failure",
+            collection_error_detail(exc),
+        )
         return "transient_failure"
     except ParseFailure as exc:
         # スキーマ変更の疑い(11章・14.14)。個別銘柄は失敗させるが全体は継続する。
         logger.warning("parse failure for %s: %s", symbol, exc)
-        _log(session, run_id, ticker.id, snapshot_date, "parse_failure", {"error": str(exc)})
+        _log(
+            session,
+            run_id,
+            ticker.id,
+            snapshot_date,
+            "parse_failure",
+            collection_error_detail(exc),
+        )
         return "parse_failure"
 
     if not include_statements:
@@ -715,7 +730,14 @@ def collect_one(
         )
     except CollectionError as exc:
         price = None
-        _log(session, run_id, ticker.id, snapshot_date, "price_fetch_failed", {"error": str(exc)})
+        _log(
+            session,
+            run_id,
+            ticker.id,
+            snapshot_date,
+            "price_fetch_failed",
+            collection_error_detail(exc),
+        )
 
     if price is not None and price["trade_date"] < market_session_date:
         # Some provider responses return a stale last row for halted or
