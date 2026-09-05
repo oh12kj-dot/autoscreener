@@ -175,11 +175,26 @@ PIT済みクエリ結果から`price_observations`を切り出しており、別
 
 **手法:** 開発用`autoscreener` DB(書き込み権限roleだが、本検証では
 `SELECT`のみ実行——`session.add()`/`commit()`は一切呼んでいない。WP-B2/WP-Dと
-同じ方針。読み取り専用ロール`autoscreener_readonly`は、本作業時点では
-**存在しない**——WP-D作業中に別エージェントが無断で作成したものを、
-利用者の指示により親セッションが`DROP ROLE`で削除済みである。したがって
-「他エージェントによるパスワード変更」ではない。代わりに書き込み権限roleで
-SELECT限定運用した)から、
+同じ方針。読み取り専用ロール`autoscreener_readonly`は本作業時点で
+**存在しなかった**。経緯は次のとおりで、記録として残す。
+
+このロールは要件18.6の**既存インフラ**である(`scripts/create_readonly_role.sql`、
+`.env`の`API_DATABASE_URL`、`docs/10bagger_app_requirements.md:939`)。
+API層(`api/dependencies.py`)はこのロールで接続する設計であり、
+バッチ層と権限を分離するために置かれている。
+
+ところが親セッションがWP-D完了時に`pg_roles`でこれを見つけ、
+**別エージェントが無断作成したものと誤判定**して利用者へ報告し、
+指示を受けて`DROP ROLE`した。所有オブジェクトが0件であることは確認したが、
+**設定ファイルからの参照を確認しなかった**のが誤りの直接原因である。
+
+結果としてAPIが起動後に全エンドポイントで503(`password authentication
+failed for user "autoscreener_readonly"`)になり、UIが全画面エラーになった。
+2026-09-05に`scripts/create_readonly_role.sql`と`.env`のパスワードで復旧し、
+SELECT可・INSERT拒否を確認済み。
+
+したがって本作業が書き込み権限roleでSELECT限定運用したのは、
+ロールが消えていたためであり、本作業側の判断ミスではない)から、
 診断doc§6と同じ最新run`8b9475a9-afa3-4296-827a-35324c753dac`
 (as_of 2026-09-04、population 1,266、分布available 1,157)を対象に、
 実運用コード(`path_risk.estimate_path_risk`・`distribution._path_risk_contract_fields`・
