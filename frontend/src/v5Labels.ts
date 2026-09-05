@@ -111,7 +111,9 @@ export const V5_METRIC_LABELS: Record<string, string> = {
   p_mdd_above_70: "P(MDD>70%)",
   recovery_time_median: "回復期間中央値",
   recovery_time_p90: "回復期間P90",
-  expected_shortfall_10pct_log: "下位10%期待損失(年率log)",
+  // 非推奨(defect 3, 2026-09-05監査): 全銘柄で同一定数になる。表示箇所は
+  // 必ず V5DeprecatedMetricNote を併記すること(V5TickerDetailSection.tsx)。
+  expected_shortfall_10pct_log: "下位10%期待損失(年率log・旧)",
 };
 
 export function v5MetricLabel(key: string): string {

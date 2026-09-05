@@ -1,3 +1,4 @@
+import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
@@ -10,6 +11,7 @@ from alembic import context
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from autoscreener.config import get_settings  # noqa: E402
+from autoscreener.db.migration_guard import resolve_alembic_database_url  # noqa: E402
 from autoscreener.db.models import Base  # noqa: E402
 
 # this is the Alembic Config object, which provides
@@ -21,8 +23,30 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# DB接続文字列は alembic.ini に重複させず、アプリの Settings(.env)から取得する
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# DB接続文字列は alembic.ini に重複させず、アプリの Settings(.env)から取得する。
+#
+# **2026-09-05 の事故**(docs/audit_followup_2026-09-05.md):
+# `TEST_DATABASE_URL=...autoscreener_test uv run alembic upgrade head` を
+# 「テストDBへ流すつもり」で実行したところ、alembicは `TEST_DATABASE_URL` を
+# 一切見ないため(常に `get_settings().database_url` = `DATABASE_URL`/.env の
+# 開発用DBを見る)、**サイレントに開発用DBへマイグレーションしてしまった**。
+# そのときは実害なかったが、pytest向けにWP-A
+# (docs/racr_wp_a_operational_safety_2026-09-04.md)が閉じたのと同じ種類の
+# 事故クラス。`resolve_alembic_database_url`(autoscreener.db.migration_guard)
+# が、`TEST_DATABASE_URL` が設定されているのに解決先が非テストDBのままという
+# 「2つの合図が食い違う」状態だけを検出し、どちらかを黙って優先せず例外で
+# 止める。
+#
+# 正しい実行方法:
+#   開発用DBへ:  uv run alembic upgrade head
+#   テストDBへ:  DATABASE_URL=$TEST_DATABASE_URL uv run alembic upgrade head
+#               (`TEST_DATABASE_URL` 単体では効かない -- 上記のとおり)
+config.set_main_option(
+    "sqlalchemy.url",
+    resolve_alembic_database_url(
+        get_settings().database_url, os.environ.get("TEST_DATABASE_URL")
+    ),
+)
 
 target_metadata = Base.metadata
 

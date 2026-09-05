@@ -1234,7 +1234,28 @@ class ModelV5DistributionView(BaseModel):
     p_cagr_above_15: float | None = None
     p_cagr_above_20: float | None = None
     p_cagr_above_25: float | None = None
-    expected_shortfall_10pct_log: float | None = None
+    # DEPRECATED (defect 3, 2026-09-05 audit, docs/audit_followup_2026-09-05
+    # .md; degeneracy first documented docs/racr_shadow_run_diagnostic_2026
+    # -09-04.md §3.1): this field is computed at a fixed 10% probability
+    # quantile that every real ticker's failure atom already exceeds, so it
+    # is the *same constant value for every ticker* (measured:
+    # -0.657881455 for the entire 2026-09-04 universe) -- it carries no
+    # per-ticker ranking or risk information. Do NOT read this as a live
+    # risk measure. Kept only for backward compatibility (anything already
+    # reading it directly keeps working, unchanged) -- use
+    # `expected_shortfall_10pct_log_given_survival` below instead, which
+    # does not have this failure mode. `deprecated=` below puts this in the
+    # actual OpenAPI schema (visible in /docs), not just a source comment.
+    expected_shortfall_10pct_log: float | None = Field(
+        default=None,
+        deprecated=(
+            "Degenerate: identical constant value for every ticker "
+            "(fixed 10% quantile that every real ticker's failure atom "
+            "already exceeds). Not a live risk measure -- kept only for "
+            "backward compatibility. Use "
+            "expected_shortfall_10pct_log_given_survival instead."
+        ),
+    )
     # WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md, contract_version
     # "v5.racr2"): additive-only, nullable. Worst-decile log-CAGR
     # conditional on survival (the failure atom excluded, not floored) --

@@ -499,7 +499,7 @@ Live Intelligence API は `as_of` を受け取り、その日より後に観測�
 | `docker compose up -d --wait` がタイムアウトする | Docker Desktopが起動しているか確認 |
 | 収集中に`HTTP Error 401/429`が多発する | Yahoo Finance側のレート制限。短時間に何度も全銘柄収集を実行すると起きやすい。自動的にリトライ・隔離される設計だが、頻発する場合は時間を空けて再実行する。秒あたりの上限は `config/collection.yaml` の `yfinance_requests_per_second`(既定6.0)で下げられます |
 | EDGARが403や429を返す | SECの制限は**IP単位**です。`config/collection.yaml` の `edgar.requests_per_second`(既定5.0、SECの上限は約10)を下げてください。403/429を受けると `edgar.throttle_cooldown_seconds`(既定60秒)だけSEC向けリクエスト全体が自動で止まります。**同じマシンで日次パイプラインとテストスイートを同時に走らせない**こと——レートは単純に足し算になります |
-| APIから`http://localhost:5173`のCORSエラーが出る | `autoscreener/api/main.py`のCORS許可オリジンを確認(既定は`localhost:5173`のみ許可) |
+| APIから`http://localhost:5173`のCORSエラーが出る | `autoscreener/api/main.py`のCORS許可オリジンを確認(既定は`localhost:5173`のみ許可)。`frontend/vite.config.ts`は`server.port: 5173`+`strictPort: true`で固定してあるため、5173が既に使われていると`npm run dev`は5174等へ黙って移らず**起動自体が失敗する**(意図的な仕様: 5174で起動されるとAPIのCORSが全リクエストを拒否し、画面には汎用の接続エラーしか出ないため)。起動が失敗したら5173を掴んでいるプロセスを`netstat -ano \| findstr :5173`で特定して止めること |
 | スコアが表示されない・空になる | `collect` → `apply-gates` → `run-scoring` の順で実行されているか確認。`GET /api/v1/universe/status` で直近の実行状況を確認できる |
 | 監視リストの「見通しがマイナス」から銘柄を開くとエラーになる | v4で修正済みです(要件定義書 28.19②)。それでも起きる場合はAPIプロセスを再起動してください |
 | 「1年オンペース率」が全銘柄「—」になる | 較正写像が無い状態です。`config/scoring.yaml` を変更したあとに `run-backtest` を実行していないと起きます(較正写像は設定のハッシュが完全一致するときだけ使われます)。`run-backtest` → `run-scoring` の順で実行してください |

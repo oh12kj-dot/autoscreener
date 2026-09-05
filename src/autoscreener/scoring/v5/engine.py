@@ -542,6 +542,53 @@ def _top20_overlap_vs_expected_return(
     return overlap
 
 
+# Defect 3 (2026-09-05 audit, docs/audit_followup_2026-09-05.md): the first
+# cut of `_constant_explanation_terms` flagged *every* numeric explanation
+# key that came out constant, including keys that are declared policy
+# parameters -- config-supplied coefficients that are, by construction, the
+# same for every ticker in a run (they are read once from
+# ``ObjectivesConfig``/a module constant, never derived from a ticker's own
+# data). Each real run then reported e.g. ``objective_constant_term:
+# risk_adjusted_compounding.tail_lambda=0.35`` alongside any genuine
+# defect -- noise that risks masking the one finding this diagnostic exists
+# to catch (docs/racr_shadow_run_diagnostic_2026-09-04.md). This registry
+# is the explicit, per-key, commented allowlist the audit asked for: only
+# keys that are *never* computed from ticker data belong here, one entry
+# per objective, each with the reason it is a declared constant rather
+# than a computed term. Adding a key here silences its constant-term
+# warning permanently, so anything computed from a distribution/ticker
+# input -- even something that happens to be constant *today* for a
+# structural reason, like the old `expected_shortfall_10pct_log`-derived
+# `cond_tail_loss_10` was -- must NOT be added.
+_POLICY_PARAMETER_EXPLANATION_KEYS: dict[str, frozenset[str]] = {
+    # `objectives.py` ten_bagger branch: `target_moic` is
+    # `definition.target_moic`/`distribution["target_moic"]`, itself sourced
+    # from `ObjectivesConfig` -- one value for the whole run (default 10.0),
+    # never computed per ticker.
+    "ten_bagger": frozenset({"target_moic"}),
+    # `objectives.py` risk_adjusted branch: `lambda` is
+    # `definition.downside_lambda`, an `ObjectivesConfig` coefficient.
+    "risk_adjusted": frozenset({"lambda"}),
+    # `objectives.py` risk_adjusted_compounding branch: the five `*_lambda`
+    # keys are `ObjectivesConfig` coefficients (tail/failure/drawdown/
+    # permanent_loss/uncertainty). `assumed_recovery` is
+    # `distribution["ce_cagr_failure_floor"]`, which is
+    # `CE_CAGR_FAILURE_FLOOR_MOIC` (distribution.py) -- a single global
+    # policy constant (currently 0.01) reused verbatim for every ticker in
+    # every run, not derived from that ticker's own data.
+    "risk_adjusted_compounding": frozenset(
+        {
+            "tail_lambda",
+            "failure_lambda",
+            "drawdown_lambda",
+            "permanent_loss_lambda",
+            "uncertainty_lambda",
+            "assumed_recovery",
+        }
+    ),
+}
+
+
 def _constant_explanation_terms(
     objective_explanations: dict[str, list[dict]],
 ) -> tuple[dict[str, list[str]], list[str]]:
@@ -559,22 +606,26 @@ def _constant_explanation_terms(
     cannot launder a real (if small) cross-sectional difference into a
     false "constant".
 
-    Flags every qualifying key, including fixed policy constants that are
-    constant *by design* (lambda coefficients, ``ce_cagr_failure_floor``,
-    the zeroed placeholder terms for unavailable statistics) --
-    distinguishing "expected constant" from "defect" is left to the run's
-    own docs/review, per this WP's instruction that a constant term "must
-    never again be found by hand": false positives on known constants are
-    an acceptable cost of never again missing a real one.
+    Keys listed in ``_POLICY_PARAMETER_EXPLANATION_KEYS`` for the given
+    objective are skipped entirely -- they are declared policy parameters
+    (lambda coefficients, ``target_moic``, ``assumed_recovery``), constant
+    by construction, not by an accident of ticker data. Only computed terms
+    can raise ``objective_constant_term`` here; distinguishing "expected
+    constant" from "defect" among *those* is still left to the run's own
+    docs/review, per this WP's instruction that a constant computed term
+    "must never again be found by hand".
     """
     constant_terms: dict[str, list[str]] = {}
     warnings: list[str] = []
     for name, explanations in objective_explanations.items():
         if len(explanations) < 2:
             continue
+        policy_keys = _POLICY_PARAMETER_EXPLANATION_KEYS.get(name, frozenset())
         numeric_keys: set[str] = set()
         for explanation in explanations:
             for key, value in explanation.items():
+                if key in policy_keys:
+                    continue
                 if _numeric(value) is not None:
                     numeric_keys.add(key)
         for key in sorted(numeric_keys):
@@ -591,6 +642,29 @@ def _constant_explanation_terms(
     return constant_terms, warnings
 
 
+# Defect 3 (2026-09-05 audit, docs/audit_followup_2026-09-05.md): explicit,
+# per-field allowlist of distribution fields that are *known*, deliberately
+# retained constants -- never a blanket suppression of this diagnostic.
+# Each entry must be a field that is constant for a documented structural
+# reason (not merely "happened to be constant in one run"), and stays
+# listed in `_DIAGNOSTIC_DISTRIBUTION_FIELDS` above so its constancy is
+# still measured and reported every run -- just tagged as explained rather
+# than as an unexplained finding.
+_KNOWN_CONSTANT_DISTRIBUTION_FIELDS: dict[str, str] = {
+    "expected_shortfall_10pct_log": (
+        "deprecated (WP-B2, docs/racr_wp_b2_risk_terms_2026-09-04.md): "
+        "computed at a fixed 10% probability quantile that every real "
+        "ticker's failure atom already exceeds, so this field is "
+        "byte-for-byte the same constant for the whole universe by "
+        "construction, not by accident -- retained only for backward "
+        "compatibility (API contract field is documented deprecated). "
+        "Superseded by expected_shortfall_10pct_log_given_survival, which "
+        "does not have this failure mode -- see "
+        "docs/racr_shadow_run_diagnostic_2026-09-04.md §3.1."
+    ),
+}
+
+
 def _distribution_field_diagnostics(
     distribution_field_values: dict[str, set[float]],
     distribution_field_counts: dict[str, int],
@@ -603,6 +677,14 @@ def _distribution_field_diagnostics(
     would have caught ``model_confidence`` sitting at the single value 0.5
     for the entire 2026-09-04 universe
     (docs/racr_shadow_run_diagnostic_2026-09-04.md §3.2).
+
+    Every constant field is still reported -- this diagnostic must never be
+    silenced generically. Fields listed in
+    ``_KNOWN_CONSTANT_DISTRIBUTION_FIELDS`` (currently only the deprecated
+    ``expected_shortfall_10pct_log``) get a distinctly-tagged
+    ``distribution_constant_field_known`` warning carrying the documented
+    reason, instead of the plain ``distribution_constant_field`` warning
+    that means "this is new/unexplained and needs investigating".
     """
     distinct_counts = {
         field: len(values) for field, values in distribution_field_values.items()
@@ -612,10 +694,16 @@ def _distribution_field_diagnostics(
         for field, values in distribution_field_values.items()
         if distribution_field_counts.get(field, 0) >= 2 and len(values) == 1
     ]
-    warnings = [
-        f"distribution_constant_field:{field}={next(iter(distribution_field_values[field]))}"
-        for field in constant_fields
-    ]
+    warnings = []
+    for field in constant_fields:
+        value = next(iter(distribution_field_values[field]))
+        known_reason = _KNOWN_CONSTANT_DISTRIBUTION_FIELDS.get(field)
+        if known_reason is not None:
+            warnings.append(
+                f"distribution_constant_field_known:{field}={value} ({known_reason})"
+            )
+        else:
+            warnings.append(f"distribution_constant_field:{field}={value}")
     return distinct_counts, constant_fields, warnings
 
 

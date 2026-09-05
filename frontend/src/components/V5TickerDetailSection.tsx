@@ -4,6 +4,7 @@ import type { ModelV5AblationEntry, ModelV5ObjectivesResponse, ModelV5ScoreDetai
 import { V5WarningBadges } from "./V5WarningBadges";
 import { V5UnavailableMetric } from "./V5UnavailableMetric";
 import { V5FailureFloorNote } from "./V5FailureFloorNote";
+import { V5DeprecatedMetricNote } from "./V5DeprecatedMetricNote";
 import {
   v5AblationReasonLabel,
   v5DistributionStatusLabel,
@@ -278,7 +279,10 @@ export function V5TickerDetailSection({ ticker, v4Probability, v4ExpectedMoic, o
             <td>{v5FormatProbability(dist.p_terminal_wealth_below_0_5)}</td>
           </tr>
           <tr>
-            <td>{v5MetricLabel("expected_shortfall_10pct_log")}</td>
+            <td>
+              {v5MetricLabel("expected_shortfall_10pct_log")}
+              <V5DeprecatedMetricNote />
+            </td>
             <td>{dist.expected_shortfall_10pct_log != null ? v5FormatRate(dist.expected_shortfall_10pct_log) : "—"}</td>
           </tr>
           <tr>

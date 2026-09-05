@@ -956,6 +956,15 @@ export interface ModelV5Distribution {
   p_cagr_above_15: number | null;
   p_cagr_above_20: number | null;
   p_cagr_above_25: number | null;
+  /** @deprecated Defect 3 (2026-09-05 audit, docs/audit_followup_2026-09-05
+   * .md): computed at a fixed 10% probability quantile that every real
+   * ticker's failure atom already exceeds, so this is the *same constant
+   * value for every ticker* (measured -0.657881455 for the entire
+   * 2026-09-04 universe) -- it carries no per-ticker ranking or risk
+   * information. Do not read this as a live risk measure. Kept only for
+   * backward compatibility (the API schema field also carries
+   * `deprecated=true`) -- use
+   * `expected_shortfall_10pct_log_given_survival` instead. */
   expected_shortfall_10pct_log: number | null;
   /** WP-B2 (docs/racr_wp_b2_risk_terms_2026-09-04.md, contract_version
    * "v5.racr2"): worst-decile log-CAGR conditional on survival -- the

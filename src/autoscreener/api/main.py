@@ -125,6 +125,17 @@ async def error_envelope(request: Request, call_next):
 # なり、フロントには「APIに接続できません」としか見えなくなった。書き込み系の
 # メソッドも許可する(いずれも `Content-Type: application/json` 必須なので単純
 # フォーム CSRF はプリフライトで弾かれる)。
+#
+# **5173決め打ちについて(defect 2, 2026-09-05監査, docs/audit_followup
+# _2026-09-05.md)**:ここに列挙したポートは `frontend/vite.config.ts` の
+# `server.port`(同じく5173に固定、`strictPort: true`)と手動で一致させている
+# 独立した2つのハードコードであり、共有の設定源はない。ポートが5173で
+# 埋まっていた場合、Viteの既定動作は「黙って5174に逃げる」で、その5174は
+# ここが弾く——ブラウザには汎用の接続エラーしか出ず、原因がポートだとは
+# わからない(2026-09-05時点でこのマシン上に5173と5174が同時にLISTENして
+# いた、実際に踏んだ事故)。`vite.config.ts` 側は `strictPort: true` にして
+# 「黙って5174に移る」代わりに起動を失敗させることで対処済み——このポートを
+# 変える場合は **両ファイルを同時に** 変更すること。
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

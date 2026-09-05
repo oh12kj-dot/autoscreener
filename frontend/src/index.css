@@ -2155,6 +2155,16 @@ td.negative {
   font-size: 0.78rem;
 }
 
+/* Defect 3 (2026-09-05 audit, docs/audit_followup_2026-09-05.md): the
+   expected_shortfall_10pct_log deprecation note -- same affordance/sizing
+   as .v5-failure-floor-note, distinct class so the two annotations (a
+   disclosed assumption vs. a deprecated degenerate field) stay
+   semantically separate even though they look alike. */
+.v5-deprecated-metric-note {
+  margin-left: 0.35rem;
+  font-size: 0.78rem;
+}
+
 .v5-objective-not-computed {
   padding: 1rem;
   border: 1px dashed var(--border);
