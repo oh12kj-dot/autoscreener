@@ -777,6 +777,50 @@ def rollback_false_delistings_cmd(
         )
 
 
+@app.command("classify-delistings")
+def classify_delistings_cmd(
+    apply: bool = typer.Option(
+        False, "--apply", help="実際に event_type/confidence/source_url をDBへ反映する。"
+    ),
+    lookback_days: int = typer.Option(730, help="廃止日より前を何日まで証拠として見るか。"),
+    lookahead_days: int = typer.Option(60, help="廃止日より後を何日まで証拠として見るか。"),
+) -> None:
+    """`delisting_events` の `unknown` 行を、既存の `filings` 証拠だけで分類する。
+
+    docs/delisting_label_backfill_2026-09-04.md 参照。**新規のEDGAR取得はしない**
+    ——`filings` は `delisted_at` が立った時点で収集が止まる設計のため、原因を語る
+    フォーム(Form 25/15、8-K Item 1.03/2.01/3.01)はほぼ存在しない。2026-09-04
+    時点の実測では対象94件中0件が分類可能だった。証拠が無ければ `unknown` の
+    まま——原因や決済額を推測することは無い。
+
+    `--apply` 無しでは分類結果の内訳(件数・代表例)だけを出して
+    `typer.BadParameter` で止める(`rollback-false-delistings` と同じ作法)。
+    """
+    from autoscreener.batch.collect_delistings import classify_delistings
+
+    result = classify_delistings(apply=apply, lookback_days=lookback_days, lookahead_days=lookahead_days)
+    outcomes = result.pop("outcomes", [])
+    for key, count in result.items():
+        typer.echo(f"  {key}: {count}")
+
+    non_unknown = [o for o in outcomes if o.classification.event_type != "unknown"]
+    if non_unknown:
+        typer.echo("  --- classified (evidence) ---")
+        for outcome in non_unknown:
+            flag = ""
+            if outcome.bundle.ambiguous_shared_cik:
+                shared = ", ".join(outcome.bundle.shared_cik_active_symbols)
+                flag = f" [AMBIGUOUS: CIK shared with active ticker(s) {shared}]"
+            typer.echo(
+                f"  {outcome.bundle.symbol}: {outcome.classification.event_type} "
+                f"(confidence={outcome.classification.confidence}, form={outcome.classification.evidence_form}){flag}"
+            )
+    if not apply:
+        raise typer.BadParameter(
+            "これはDB変更です。上の内訳を確認し、必要なら --apply を付けて再実行してください。"
+        )
+
+
 @app.command("estimate-hazard")
 def estimate_hazard_cmd() -> None:
     """D-9(D-1 完了後):health_index から上場廃止ハザードを実測較正する。

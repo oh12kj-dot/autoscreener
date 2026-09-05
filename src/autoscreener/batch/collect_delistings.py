@@ -16,6 +16,12 @@ import logging
 from autoscreener.db.models import DelistingEvent, Ticker
 from autoscreener.db.session import session_scope
 
+from autoscreener.collectors.delisting_classification import (
+    DEFAULT_LOOKAHEAD_DAYS,
+    DEFAULT_LOOKBACK_DAYS,
+    apply_classifications,
+    classify_stored_delisting_events,
+)
 from autoscreener.collectors.delisting_source import (
     collect_delisting_events,
     last_trade_after_delisting,
@@ -112,4 +118,46 @@ def backfill_delisting_events_from_tickers(*, observed_at: datetime.datetime | N
             session.add(DelistingEvent(ticker_id=ticker.id, event_date=event_date, event_type="unknown", source="ticker_master_backfill",
                 source_url=None, observed_at=observed_at, confidence="low"))
             counts["inserted"] += 1
+    return counts
+
+
+def classify_delistings(
+    *,
+    apply: bool = False,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    lookahead_days: int = DEFAULT_LOOKAHEAD_DAYS,
+) -> dict:
+    """`delisting_events` の `unknown` 行を、DBに既にある `filings` から分類する
+    (docs/delisting_label_backfill_2026-09-04.md)。
+
+    **新規のEDGAR取得は行わない。** `filings` は `delisted_at IS NOT NULL` に
+    なった時点で収集が止まる設計(`batch/collect_filings.py` / `run_daily_collection.py`)
+    のため、廃止の原因を語るフォーム(Form 25/15、8-K Item 1.03/2.01/3.01)は
+    ほぼ存在しない——2026-09-04時点の実測では94件中0件が分類可能だった。それでも
+    このコマンドは (a) 将来 `filings` に該当フォームが入った時点で自動的に効く
+    受け皿、(b) 現状の証拠不足を件数・理由付きで可視化する、の2点のために存在する。
+
+    戻り値には `outcomes`(`EventClassificationOutcome` のリスト、CLI表示用)を
+    含む——DB書き込みが必要な件数を人間が確認できるようにするため。
+    """
+    with session_scope() as session:
+        outcomes = classify_stored_delisting_events(
+            session, lookback_days=lookback_days, lookahead_days=lookahead_days
+        )
+        counts: dict = {"unknown_total": len(outcomes)}
+        if apply:
+            counts.update(apply_classifications(session, outcomes))
+        else:
+            # ドライラン:`apply_classifications` と同じ内訳を、書き込み無しで数える。
+            true_unknown = sum(1 for o in outcomes if o.classification.event_type == "unknown")
+            ambiguous = sum(
+                1
+                for o in outcomes
+                if o.classification.event_type != "unknown" and o.bundle.ambiguous_shared_cik
+            )
+            counts["classified"] = len(outcomes) - true_unknown - ambiguous
+            counts["left_unknown"] = true_unknown
+            counts["ambiguous_shared_cik_skipped"] = ambiguous
+            session.rollback()
+        counts["outcomes"] = outcomes
     return counts
