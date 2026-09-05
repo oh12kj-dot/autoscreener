@@ -287,3 +287,60 @@ def test_forward_validation_v5_settles_a_matured_synthetic_run():
             session.query(ModelRun).filter_by(id=run_id).delete()
             session.query(PriceSnapshot).filter_by(ticker_id=ticker_id).delete()
             session.query(Ticker).filter_by(id=ticker_id).delete()
+
+
+def test_forward_validation_v5_reports_too_recent_boundary():
+    """2026-09-05(観測可能性の欠陥、docs/audit_followup_2026-09-05.md):
+    直近すぎてどの `ModelRun` も最短ホライズン(1M=30日)に達していない実行は
+    `computed=0` になるが、それだけでは工程が壊れているのか単に何も熟して
+    いないだけなのかオペレーターには判別できない。v4側の
+    `test_not_matured_before_shortest_horizon_is_skipped_entirely` と同じ
+    観測可能性のギャップがv5パスにもあったため、`too_recent`・`cutoff_date`・
+    `oldest_score_date`・`first_horizon_matures_on` が結果に含まれることを
+    直接検証する。
+    """
+    ticker_symbol = "ZZV5FWD2"
+    run_as_of = datetime.date(2026, 8, 20)
+    with session_scope() as session:
+        old = session.query(Ticker).filter_by(symbol=ticker_symbol).one_or_none()
+        if old is not None:
+            session.query(PriceSnapshot).filter_by(ticker_id=old.id).delete()
+            session.delete(old)
+            session.flush()
+        ticker = Ticker(symbol=ticker_symbol, market="US")
+        session.add(ticker)
+        session.flush()
+        ticker_id = ticker.id
+        run_id = uuid.uuid4()
+        session.add(ModelRun(
+            id=run_id, model_version="v5", config_hash="testhash3", as_of=run_as_of,
+            mode="shadow", status="succeeded", population_count=1,
+            started_at=datetime.datetime.now(datetime.timezone.utc),
+            finished_at=datetime.datetime.now(datetime.timezone.utc),
+            metrics={}, warnings=[],
+        ))
+        session.flush()
+        session.add(ModelScore(
+            run_id=run_id, ticker_id=ticker_id, target_horizon_years=7, target_moic=10.0,
+            distribution={"status": "available"}, states={}, features={}, confidence=0.5,
+            warnings=[],
+        ))
+    try:
+        as_of = run_as_of + datetime.timedelta(days=5)  # 1Mホライズン(30日)に遠く満たない
+        counts = run_forward_validation_v5(as_of)
+        assert counts["cutoff_date"] == (as_of - datetime.timedelta(days=30)).isoformat()
+        # 上で作った run 自体が cutoff より新しいので、必ず1件以上数えられる。
+        assert counts["too_recent"] >= 1
+        assert counts["oldest_score_date"] is not None
+        assert counts["first_horizon_matures_on"] is not None
+        oldest = datetime.date.fromisoformat(counts["oldest_score_date"])
+        matures = datetime.date.fromisoformat(counts["first_horizon_matures_on"])
+        assert matures == oldest + datetime.timedelta(days=30)
+        # MINである以上、我々の行(2026-08-20)より新しいことはあり得ない。
+        assert oldest <= run_as_of
+    finally:
+        with session_scope() as session:
+            session.query(ModelScore).filter_by(run_id=run_id).delete()
+            session.query(ModelRun).filter_by(id=run_id).delete()
+            session.query(PriceSnapshot).filter_by(ticker_id=ticker_id).delete()
+            session.query(Ticker).filter_by(id=ticker_id).delete()

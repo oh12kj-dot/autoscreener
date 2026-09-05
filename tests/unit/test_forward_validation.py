@@ -67,6 +67,9 @@ def test_matured_horizon_computes_realized_return(matured_ticker):
     result = run_forward_validation(as_of_date=as_of)
 
     assert result["computed"] >= 1
+    # 熟した行がある実行でも、境界情報のキー自体は常に返る(2026-09-05)。
+    assert isinstance(result["too_recent"], int)
+    assert result["cutoff_date"] == (as_of - datetime.timedelta(days=30)).isoformat()
 
     ticker_id = _get_ticker_id(symbol)
     with session_scope() as session:
@@ -109,12 +112,34 @@ def test_not_matured_before_shortest_horizon_is_skipped_entirely():
             )
 
         # スコア確定からわずか5日後 -> 最短ホライズン(1M=30日)にも満たない
-        result = run_forward_validation(as_of_date=datetime.date(2026, 8, 25))
+        as_of = datetime.date(2026, 8, 25)
+        result = run_forward_validation(as_of_date=as_of)
 
         ticker_id = _get_ticker_id(symbol)
         with session_scope() as session:
             count = session.query(ForwardReturn).filter_by(ticker_id=ticker_id).count()
             assert count == 0
+
+        # 観測可能性の境界情報(2026-09-05):全カウンタ0が「何も熟していない」
+        # 正常状態であることを、ソースを読まずに区別できる材料が結果に無ければ
+        # ならない。cutoffは as_of_date - 30日 から一意に決まるので厳密比較できる。
+        assert result["computed"] == 0
+        expected_cutoff = as_of - datetime.timedelta(days=30)
+        assert result["cutoff_date"] == expected_cutoff.isoformat()
+        # このテストの行(score_date=2026-08-20)自体がcutoffより後なので、
+        # 少なくとも1件はtoo_recentとして数えられているはず。
+        assert result["too_recent"] >= 1
+        # oldest_score_date/first_horizon_matures_onは全テーブル横断のMINなので
+        # 共有テストDB上の値そのものは固定できないが、返ってきた2つの値は
+        # 「最古スコア日 + 最短ホライズン(30日)」という関係を必ず満たす。
+        assert result["oldest_score_date"] is not None
+        assert result["first_horizon_matures_on"] is not None
+        oldest = datetime.date.fromisoformat(result["oldest_score_date"])
+        matures = datetime.date.fromisoformat(result["first_horizon_matures_on"])
+        assert matures == oldest + datetime.timedelta(days=30)
+        # 我々が挿入した行より古いスコアがテーブル全体のどこかにあるとは限らないが、
+        # 少なくとも我々の行より新しいということは無い(MINである以上)。
+        assert oldest <= datetime.date(2026, 8, 20)
     finally:
         _cleanup([symbol])
 

@@ -18,6 +18,7 @@ export const STAGE_LABELS: Record<string, string> = {
   backtest: "バックテスト(週次)",
   scoring: "スコアリング",
   forward_validation: "前方検証",
+  forward_validation_v5: "前方検証(v5)",
   filings: "提出書類収集",
   monitoring: "四半期モニタリング",
   backup: "バックアップ",
@@ -61,6 +62,32 @@ function fallbackFormat(result: Record<string, unknown>): string {
 }
 
 /**
+ * 前方検証(v4/v5共通)の結果整形(2026-09-05、docs/audit_followup_2026-09-05.md
+ * 追記分)。`computed`が0件は「まだ何も熟していない」正常状態と「工程が壊れて
+ * いる」異常状態の両方でありうるため、`computed` が0で、かつ`too_recent`
+ * (cutoffで除外された=最短ホライズンにすら達していない行)が1件でもあれば、
+ * 境界日(最古スコア確定日・最短ホライズンの成熟見込み日)を併記して区別できる
+ * ようにする。`too_recent` を持たない古い結果や、成熟済みの結果では従来どおり
+ * 件数だけを出す。
+ */
+function formatForwardValidationResult(result: Record<string, unknown>): string {
+  const computed = num(result, "computed");
+  if (computed > 0) {
+    return `算出${computed.toLocaleString()}件`;
+  }
+  const tooRecent = num(result, "too_recent");
+  if (tooRecent > 0) {
+    const oldest = typeof result.oldest_score_date === "string" ? result.oldest_score_date : null;
+    const matures = typeof result.first_horizon_matures_on === "string" ? result.first_horizon_matures_on : null;
+    if (oldest && matures) {
+      return `算出0件(未成熟${tooRecent.toLocaleString()}件・最古スコア${oldest}・成熟見込み${matures}〜)`;
+    }
+    return `算出0件(未成熟${tooRecent.toLocaleString()}件)`;
+  }
+  return `算出0件`;
+}
+
+/**
  * 工程1つの結果を、C節(工程一覧)の1行に出す文字列にする。
  * `succeeded` の行にのみ使う(`failed`/`skipped`/`running` は別の表示)。
  */
@@ -88,7 +115,8 @@ export function formatStageResult(stage: string, result: Record<string, unknown>
       return `スコア付与${num(result, "scored").toLocaleString()}件`;
     }
     case "forward_validation":
-      return `算出${num(result, "computed").toLocaleString()}件`;
+    case "forward_validation_v5":
+      return formatForwardValidationResult(result);
     default:
       return fallbackFormat(result);
   }

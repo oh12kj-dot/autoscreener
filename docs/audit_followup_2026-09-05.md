@@ -255,6 +255,126 @@ raises `objective_constant_term` exactly as before.
 - No writes were made to the dev `autoscreener` database; no Postgres
   roles/databases were created or dropped; `run-v5-shadow` was not run.
 
+---
+
+## Defect 4 — `forward_validation` reports all-zero indistinguishably from broken
+
+**Hazard.** Stage 13 (`forward_validation`, `src/autoscreener/scoring/
+forward_validation.py`) and its v5 analogue (stage 26,
+`run_forward_validation_v5`) have run daily, reported `status=succeeded`,
+and returned `{'computed': 0, 'not_matured': 0, 'missing_price': 0,
+'settled_delisted': 0}` every day since scoring history began. This is the
+promotion gate the whole model programme is blocked on
+(`docs/investment_decision_gap_2026-09-04.md` / audit §13.4 gate #1), so an
+operator staring at four zeros needs to know immediately whether the gate
+is stuck because the model is broken or because not enough calendar time
+has passed.
+
+**Root cause (verified, not changed).** Both functions filter to rows old
+enough for even the shortest horizon (1M = 30 days) *before* the
+per-horizon loop:
+
+```python
+cutoff = as_of_date - datetime.timedelta(days=_MIN_HORIZON_DAYS)
+scores = session.query(Score).filter(Score.score_date <= cutoff).all()
+```
+
+Confirmed against the real DB: the oldest `scores.score_date` is
+2026-08-23; for `as_of=2026-09-04` the cutoff is 2026-08-05. No row
+satisfies `score_date <= cutoff`, so the query returns zero rows and the
+per-horizon loop (the only place that increments `not_matured`) never
+runs. The four-zero result is not a bug in the returns computation — the
+shortest horizon (1M) first matures around 2026-09-22 — but the *reporting*
+made a healthy "nothing to do yet" state byte-for-byte identical to a
+broken stage. `run_forward_validation_v5` has the exact same shape against
+`ModelRun.as_of`/`ModelScore`.
+
+**Fix — report the boundary, don't just compute past it.** No change to
+`HORIZONS`, the cutoff arithmetic, the settlement logic, or how returns are
+computed — this is purely additive to both functions' return dicts:
+
+- `too_recent`: count of rows excluded by the cutoff (v4:
+  `Score.score_date > cutoff`; v5: succeeded `ModelRun.as_of > cutoff`,
+  scoped to `status == "succeeded"` so a failed/running run — which could
+  never become eligible regardless of age — doesn't get counted as "close
+  to the boundary").
+- `cutoff_date`: the cutoff actually used, ISO date string.
+- `oldest_score_date`: the oldest score/run date in the table (v5: among
+  succeeded runs only), or `null` if the table is empty.
+- `first_horizon_matures_on`: `oldest_score_date + 30 days` — the date the
+  first forward return can possibly appear, or `null` if there is no data
+  yet at all.
+
+These are plain dict keys, so they flow unchanged through
+`PipelineRecorder.stage()` into `pipeline_stage_runs.result` (a JSON
+column) with no schema change.
+
+**Frontend.** `frontend/src/pipelineStages.ts`: `forward_validation` (and
+`forward_validation_v5`, previously unlabeled and left to the raw
+`key: value` fallback) now route through a new
+`formatForwardValidationResult`. When `computed > 0` it still shows just
+the count (`算出N件`), unchanged from before. When `computed === 0` and
+`too_recent > 0`, it appends the boundary in one line: `算出0件(未成熟N件・
+最古スコア2026-08-23・成熟見込み2026-09-22〜)`. Any other zero-result shape
+(e.g. all `missing_price`) falls through to the plain `算出0件` — this fix
+targets specifically the cutoff-exclusion blind spot described above, not
+every possible zero-result cause. Also added a `forward_validation_v5`
+label ("前方検証(v5)") to `STAGE_LABELS`, which had none before (it fell
+back to the raw stage name).
+
+**Judgement call: `succeeded`, not a new status.** An all-zero-because-
+too-recent run is not an error — nothing failed, nothing is misconfigured,
+the pipeline did exactly what it should given the data it has. Inventing a
+distinct non-failing status (e.g. `pending`/`insufficient_history`) would
+mean teaching `monitoring.determine_run_status` and
+`frontend/src/pipelineStages.ts`'s `CORE_STAGES` handling a fifth state
+across the whole pipeline for one stage's one boundary condition, and
+`forward_validation` is a `CORE_STAGE` — a status other than
+`succeeded`/`failed` on a core stage risks being read as "the run is
+degraded" by every existing consumer of `pipeline_runs.status`, which is
+the exact false alarm this fix exists to prevent in the other direction.
+The right layer for "is this expected right now" is the `result` payload,
+which is what this fix adds — `status` answers "did the stage do what it
+was supposed to", and it did.
+
+**Verification performed.**
+- `tests/unit/test_forward_validation.py`:
+  `test_not_matured_before_shortest_horizon_is_skipped_entirely` extended
+  to assert `computed == 0`, `cutoff_date` matches the exact expected
+  value, `too_recent >= 1` (the fixture's own row is guaranteed to be
+  excluded), and `first_horizon_matures_on == oldest_score_date + 30d`
+  (self-consistency, since the shared test DB's global oldest-score-date
+  isn't a fixed value to hardcode against).
+  `test_matured_horizon_computes_realized_return` extended to assert
+  `computed >= 1` still holds unchanged and the new keys are present with
+  the right types alongside it.
+- `tests/unit/test_v5_phase7_backtest_infrastructure.py`: new
+  `test_forward_validation_v5_reports_too_recent_boundary` — inserts a
+  succeeded `ModelRun` deliberately too recent for the 1M horizon and
+  asserts the same four fields on the v5 path.
+- `TEST_DATABASE_URL=... uv run pytest tests/ -q` → **1209 passed, 0
+  failed** (baseline 1208 + 1 net new test function; two existing tests
+  were extended in place rather than duplicated).
+- Frontend: `npm run build` → clean. `npm test -- --run` → 3 files / 6
+  tests passed, unchanged (no test file targets `pipelineStages.ts`
+  directly). `npm run lint` → 17 warnings / 0 errors, unchanged.
+- Did not run `run-v5-shadow` or the daily pipeline (forbidden by this
+  task's constraints); did not write to the dev `autoscreener` database.
+
+**Left undone / out of scope.** The underlying fact — scoring history is
+9-12 days old against a 30-day minimum horizon — is not a bug and is not
+fixed here; per `docs/model-v5-phase-progress.md` this is the one thing
+still blocking promotion out of `CONTINUE_SHADOW`, and it resolves itself
+by calendar time (first maturity ≈2026-09-22), not by code. This defect
+was purely about making that fact visible without reading source.
+
+**Files:** `src/autoscreener/scoring/forward_validation.py`,
+`frontend/src/pipelineStages.ts`,
+`tests/unit/test_forward_validation.py`,
+`tests/unit/test_v5_phase7_backtest_infrastructure.py`.
+
+---
+
 ## Left undone / not verified
 
 - Did not re-run `run-v5-shadow` to confirm the diagnostic's live output

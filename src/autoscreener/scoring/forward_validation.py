@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime
 import logging
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from autoscreener.dates import utc_today
@@ -162,7 +163,7 @@ def _settle_delisted(
     return last_close / entry_price - 1
 
 
-def run_forward_validation(as_of_date: datetime.date | None = None) -> dict[str, int]:
+def run_forward_validation(as_of_date: datetime.date | None = None) -> dict[str, int | str | None]:
     as_of_date = as_of_date or utc_today()
     computed = 0
     settled_delisted = 0
@@ -173,6 +174,19 @@ def run_forward_validation(as_of_date: datetime.date | None = None) -> dict[str,
         # スコア確定から最短ホライズン(1M)にすら達していない行は対象外
         cutoff = as_of_date - datetime.timedelta(days=_MIN_HORIZON_DAYS)
         scores = session.query(Score).filter(Score.score_date <= cutoff).all()
+
+        # 観測可能性の境界(2026-09-05、docs/audit_followup_2026-09-05.md
+        # 追記分):`cutoff` で除外された行を無言で捨てると、「まだ何も熟して
+        # いない」正常状態と「工程が壊れている」異常状態が全カウンタ0という
+        # 同じ見た目になる。除外件数と、その除外がいつ解消するかの境界日を
+        # 結果に残すことで、オペレーターがソースを読まずに区別できるようにする。
+        too_recent = session.query(Score).filter(Score.score_date > cutoff).count()
+        oldest_score_date = session.query(func.min(Score.score_date)).scalar()
+        first_horizon_matures_on = (
+            oldest_score_date + datetime.timedelta(days=_MIN_HORIZON_DAYS)
+            if oldest_score_date is not None
+            else None
+        )
 
         tickers: dict[int, Ticker] = {}
         last_price_dates: dict[int, datetime.date | None] = {}
@@ -254,10 +268,16 @@ def run_forward_validation(as_of_date: datetime.date | None = None) -> dict[str,
         "settled_delisted": settled_delisted,
         "not_matured": not_matured,
         "missing_price": missing_price,
+        "too_recent": too_recent,
+        "cutoff_date": cutoff.isoformat(),
+        "oldest_score_date": oldest_score_date.isoformat() if oldest_score_date is not None else None,
+        "first_horizon_matures_on": (
+            first_horizon_matures_on.isoformat() if first_horizon_matures_on is not None else None
+        ),
     }
 
 
-def run_forward_validation_v5(as_of_date: datetime.date | None = None) -> dict[str, int]:
+def run_forward_validation_v5(as_of_date: datetime.date | None = None) -> dict[str, int | str | None]:
     """v5 analogue of ``run_forward_validation`` (Phase 7, Issue #3 section
     27). Reuses this module's entry/exit-price and delisted-settlement
     logic (``_entry_price``/``_exit_price``/``_is_delisted``/
@@ -282,6 +302,22 @@ def run_forward_validation_v5(as_of_date: datetime.date | None = None) -> dict[s
         runs = session.query(ModelRun).filter(
             ModelRun.status == "succeeded", ModelRun.as_of <= cutoff,
         ).all()
+
+        # v4と同じ境界情報(2026-09-05追記分)。母集団は「そもそも対象になり
+        # うるrun」である `status == "succeeded"` のものに揃える——failed/
+        # runningなrunは cutoff を満たしても永遠に対象にならないため、
+        # ここに混ぜると「境界に近い」という誤った印象を与える。
+        too_recent = session.query(ModelRun).filter(
+            ModelRun.status == "succeeded", ModelRun.as_of > cutoff,
+        ).count()
+        oldest_score_date = session.query(func.min(ModelRun.as_of)).filter(
+            ModelRun.status == "succeeded"
+        ).scalar()
+        first_horizon_matures_on = (
+            oldest_score_date + datetime.timedelta(days=_MIN_HORIZON_DAYS)
+            if oldest_score_date is not None
+            else None
+        )
 
         tickers: dict[int, Ticker] = {}
         last_price_dates: dict[int, datetime.date | None] = {}
@@ -360,4 +396,10 @@ def run_forward_validation_v5(as_of_date: datetime.date | None = None) -> dict[s
         "settled_delisted": settled_delisted,
         "not_matured": not_matured,
         "missing_price": missing_price,
+        "too_recent": too_recent,
+        "cutoff_date": cutoff.isoformat(),
+        "oldest_score_date": oldest_score_date.isoformat() if oldest_score_date is not None else None,
+        "first_horizon_matures_on": (
+            first_horizon_matures_on.isoformat() if first_horizon_matures_on is not None else None
+        ),
     }
