@@ -11,7 +11,12 @@ from unittest.mock import ANY, patch
 
 import pytest
 
-from autoscreener.batch.collect_filings import collect_filings, select_tracked_tickers
+from autoscreener.batch.collect_filings import (
+    POST_DELISTING_FILING_WINDOW_DAYS,
+    TRACKED_FORMS,
+    collect_filings,
+    select_tracked_tickers,
+)
 from autoscreener.collectors.edgar_client import FilingRecord
 from autoscreener.collectors.errors import EmptyResponseError, TransientFailure
 from autoscreener.config import EdgarConfig, EdgarRetryConfig
@@ -92,6 +97,162 @@ def test_select_tracked_tickers_falls_back_to_active_sec_mapped_universe(ticker_
             tickers = select_tracked_tickers(session, limit=300)
     assert tickers
     assert all(t.cik is not None for t in tickers)
+
+
+# --- 2026-09-05: post-delisting evidence window ----------------------------
+# docs/delisting_label_backfill_2026-09-04.md §3 / docs/post_delisting_evidence_collection_2026-09-05.md
+# Form 25/15, 8-K Item 1.03/2.01/3.01, DEFM14A and SC 13E-3 are filed at and
+# after `delisted_at`; the collector must keep pulling for a bounded window
+# instead of dropping the CIK the instant it delists.
+
+
+def test_tracked_forms_include_post_delisting_evidence_forms():
+    """These were entirely absent before 2026-09-05 (SC 13E3/DEFM14A) or only
+    partially covered (Form 25 bare form / 15-12G / foreign-issuer variants),
+    per docs/delisting_label_backfill_2026-09-04.md §3."""
+    for form in ("25", "15-12G", "15F-12B", "15F-12G", "SC 13E3", "SC 13E-3", "DEFM14A"):
+        assert form in TRACKED_FORMS, form
+    # Pre-existing forms must not have been dropped by the edit.
+    for form in ("8-K", "25-NSE", "15-12B", "DEF 14A"):
+        assert form in TRACKED_FORMS, form
+
+
+def _make_ticker(symbol: str, *, cik: str, delisted_days_ago: int | None = None) -> Ticker:
+    delisted_at = None
+    if delisted_days_ago is not None:
+        delisted_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=delisted_days_ago)
+    return Ticker(symbol=symbol, market="US", cik=cik, delisted_at=delisted_at)
+
+
+def _cleanup_symbols(symbols: list[str]) -> None:
+    with session_scope() as session:
+        tickers = session.query(Ticker).filter(Ticker.symbol.in_(symbols)).all()
+        ids = [t.id for t in tickers]
+        if ids:
+            session.query(Filing).filter(Filing.ticker_id.in_(ids)).delete(synchronize_session=False)
+            session.query(Score).filter(Score.ticker_id.in_(ids)).delete(synchronize_session=False)
+        for t in tickers:
+            session.delete(t)
+
+
+def test_select_tracked_tickers_includes_recently_delisted_within_window_and_excludes_outside_it():
+    """The window boundary: a ticker delisted just inside
+    POST_DELISTING_FILING_WINDOW_DAYS must be pulled in; one delisted well
+    before the window (e.g. one of the 94 stale events from before this fix)
+    must not be — it stays reliant on whatever `filings` it already has."""
+    always_tracked = "ZZDELWIN"  # kept via positions so the union branch (not the
+    # active/SEC-mapped bootstrap fallback) is exercised even if both delisted
+    # candidates below were excluded.
+    within_window = "ZZDELRECENT"
+    outside_window = "ZZDELOLD"
+    symbols = [always_tracked, within_window, outside_window]
+    _cleanup_symbols(symbols)
+    try:
+        with session_scope() as session:
+            session.add(_make_ticker(always_tracked, cik="0000900201"))
+            session.add(_make_ticker(within_window, cik="0000900202", delisted_days_ago=10))
+            session.add(_make_ticker(
+                outside_window, cik="0000900203",
+                delisted_days_ago=POST_DELISTING_FILING_WINDOW_DAYS + 30,
+            ))
+
+        with (
+            patch("autoscreener.batch.collect_filings.load_positions_config") as mock_positions,
+            patch("autoscreener.batch.collect_filings.load_all_notes", return_value={}),
+        ):
+            mock_positions.return_value.positions = [
+                type("P", (), {"ticker": always_tracked, "closed_on": None})()
+            ]
+            with session_scope() as session:
+                tickers = select_tracked_tickers(session, limit=300)
+
+        symbols_returned = {t.symbol for t in tickers}
+        assert always_tracked in symbols_returned
+        assert within_window in symbols_returned, "just-delisted ticker must still be collected"
+        assert outside_window not in symbols_returned, "a stale delisting must not reopen collection forever"
+    finally:
+        _cleanup_symbols(symbols)
+
+
+def test_select_tracked_tickers_excludes_delisted_ticker_sharing_cik_with_active_ticker():
+    """Regression for the CIK-collision trap (docs/delisting_label_backfill_2026-09-04.md
+    §2: active TDW and delisted TDGMW share one CIK). If a delisted ticker's CIK is
+    still held by an active ticker, `EdgarClient.fetch_filings(cik)` would return the
+    active ticker's ordinary ongoing filings — pulling those in under the delisted
+    ticker's own ticker_id would corrupt `filings`, not just confuse a downstream join."""
+    always_tracked = "ZZDELWIN2"
+    active_symbol = "ZZDELACTIVE"
+    shared_cik_symbol = "ZZDELSHARED"
+    shared_cik = "0000900210"
+    symbols = [always_tracked, active_symbol, shared_cik_symbol]
+    _cleanup_symbols(symbols)
+    try:
+        with session_scope() as session:
+            session.add(_make_ticker(always_tracked, cik="0000900211"))
+            session.add(_make_ticker(active_symbol, cik=shared_cik))  # delisted_at is None
+            session.add(_make_ticker(shared_cik_symbol, cik=shared_cik, delisted_days_ago=5))
+
+        with (
+            patch("autoscreener.batch.collect_filings.load_positions_config") as mock_positions,
+            patch("autoscreener.batch.collect_filings.load_all_notes", return_value={}),
+        ):
+            mock_positions.return_value.positions = [
+                type("P", (), {"ticker": always_tracked, "closed_on": None})()
+            ]
+            with session_scope() as session:
+                tickers = select_tracked_tickers(session, limit=300)
+
+        symbols_returned = {t.symbol for t in tickers}
+        assert shared_cik_symbol not in symbols_returned, (
+            "a delisted ticker sharing its CIK with an active ticker must not be "
+            "auto-tracked — fetch_filings(cik) would return the active ticker's own "
+            "filings and misattribute them under the delisted ticker's ticker_id"
+        )
+    finally:
+        _cleanup_symbols(symbols)
+
+
+def test_collect_filings_attributes_post_delisting_filings_to_the_delisted_tickers_own_ticker_id():
+    """A delisted ticker (e.g. selected via the window in
+    `select_tracked_tickers`) must have its newly-tracked forms (Form 25 here)
+    land under its own `ticker_id` — the same `_upsert_filings` path used for
+    any other tracked ticker, exercised with an explicit `symbols=[...]` call
+    so this test does not depend on (or pollute) the rest of the shared test DB
+    the way calling the default `select_tracked_tickers`-driven path would."""
+    symbol = "ZZDELE2E"
+    _cleanup_symbols([symbol])
+    try:
+        with session_scope() as session:
+            session.add(_make_ticker(symbol, cik="0000900220", delisted_days_ago=15))
+
+        record = FilingRecord(
+            accession_number="0000900220-26-000001",
+            form="25",
+            filed_date=datetime.date.today() - datetime.timedelta(days=15),
+            report_date=None,
+            items=[],
+            primary_document="form25.htm",
+            document_url="https://www.sec.gov/example/form25.htm",
+        )
+        with (
+            patch("autoscreener.batch.collect_filings.EdgarClient") as mock_client_cls,
+            patch("autoscreener.batch.collect_filings.get_settings") as mock_settings,
+            patch("autoscreener.batch.collect_filings.load_edgar_config", return_value=_edgar_config()),
+        ):
+            mock_settings.return_value.edgar_user_agent = "TENX research <test@example.com>"
+            mock_client_cls.return_value.fetch_filings.return_value = [record]
+
+            counts = collect_filings(symbols=[symbol])
+
+        assert counts["changed_symbols"] == [symbol]
+        mock_client_cls.return_value.fetch_filings.assert_called_once_with("0000900220", forms=TRACKED_FORMS)
+        with session_scope() as session:
+            ticker = session.query(Ticker).filter_by(symbol=symbol).one()
+            filing = session.query(Filing).filter_by(ticker_id=ticker.id).one()
+            assert filing.form == "25"
+            assert filing.accession_number == "0000900220-26-000001"
+    finally:
+        _cleanup_symbols([symbol])
 
 
 def test_collect_filings_inserts_new_and_skips_duplicates_on_rerun(ticker_with_cik):
